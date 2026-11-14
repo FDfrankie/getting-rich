@@ -1,13 +1,28 @@
 import os
 
-# 交易所設定 (支援 CCXT 支援的數十家主流交易所，如 binance, okx, bybit)
+# 交易所設定 (支援 CCXT 支援的數十家主流交易所，如 binance, bitunix, okx, bybit)
 EXCHANGE_NAME = "binance"
 API_KEY = os.getenv("CRYPTO_API_KEY", "")
 API_SECRET = os.getenv("CRYPTO_API_SECRET", "")
 
+# 幣安合約測試網專屬金鑰 (Binance Futures Testnet: dapi/fapi)
+BINANCE_TESTNET_API_KEY = os.getenv(
+    "BINANCE_TESTNET_API_KEY",
+    "Nu2FUJZkkF5tRf6Z4voVN9prrn3INIepnGUOhlT3ak9OXI7YCwWFgqqm4yL7M1DH"
+)
+BINANCE_TESTNET_API_SECRET = os.getenv(
+    "BINANCE_TESTNET_API_SECRET",
+    "aZlB61oH5nyvhWgBumzkeCY1ytjvLjD47lyPRMpiVqUxt5cTCyOwbQUunLYgS1by"
+)
+
+# Bitunix 實盤對接金鑰 (SHA256 HMAC 簽名，實盤零手續費/低手續費撮合首選)
+BITUNIX_API_KEY = os.getenv("BITUNIX_API_KEY", "")
+BITUNIX_API_SECRET = os.getenv("BITUNIX_API_SECRET", "")
+
 # 預設交易對與時間週期 (Timeframe)
 DEFAULT_SYMBOL = "BTC/USDT"
-DEFAULT_TIMEFRAME = "1h"  # 1m, 5m, 15m, 1h, 4h, 1d
+DEFAULT_SETTLEMENT_CURRENCY = "USDC"  # 實盤優先 USDC 永續合約 (0 費率優勢)，訓練採用 USDT
+DEFAULT_TIMEFRAME = "1h"  # 1m, 3m, 5m, 15m, 1h, 1d
 
 # 安全機制開關：預設開啟 Paper Trading (模擬交易模式，絕不使用真金白銀)
 PAPER_TRADING = True

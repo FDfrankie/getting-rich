@@ -177,13 +177,27 @@ class SoftRankICLoss(nn.Module):
 
 def numpy_rank_ic(predictions: np.ndarray, targets: np.ndarray) -> float:
     """NumPy evaluation of exact Spearman Rank Correlation (Rank IC)."""
-    from scipy.stats import spearmanr
     pred = np.asarray(predictions).flatten()
     tgt = np.asarray(targets).flatten()
     if len(pred) < 2:
         return 0.0
-    corr, _ = spearmanr(pred, tgt)
-    return float(corr) if not np.isnan(corr) else 0.0
+    try:
+        from scipy.stats import spearmanr
+        corr, _ = spearmanr(pred, tgt)
+        return float(corr) if not np.isnan(corr) else 0.0
+    except ImportError:
+        # Fallback ranking using numpy without scipy dependency
+        def get_ranks(arr):
+            order = np.argsort(arr)
+            ranks = np.empty_like(order, dtype=float)
+            ranks[order] = np.arange(len(arr))
+            return ranks
+        r_pred = get_ranks(pred)
+        r_tgt = get_ranks(tgt)
+        r_pred = (r_pred - np.mean(r_pred)) / (np.std(r_pred) + 1e-9)
+        r_tgt = (r_tgt - np.mean(r_tgt)) / (np.std(r_tgt) + 1e-9)
+        corr = np.mean(r_pred * r_tgt)
+        return float(corr) if not np.isnan(corr) else 0.0
 
 
 # ==============================================================================

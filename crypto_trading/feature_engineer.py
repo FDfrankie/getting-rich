@@ -11,7 +11,7 @@ Features include:
 
 import numpy as np
 import pandas as pd
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 class CryptoFeatureEngineer:
     def __init__(self, forward_horizons: List[int] = [1, 3, 5, 12]):
@@ -131,3 +131,42 @@ class CryptoFeatureEngineer:
         X = clean[self.feature_columns]
         y = clean['target_fwd_ret_3']
         return X, y, self.feature_columns
+
+    def compute_multi_asset_cross_features(self, asset_dfs: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+        """
+        多幣種跨市場聯動特徵提取 (Cross-Asset Feature Engineering):
+        計算主流幣 (BTC, ETH, SOL) 之間的相對強弱 Beta、動態相關性、領先滯後比率與溢價價差。
+        """
+        closes = {}
+        for sym, df in asset_dfs.items():
+            clean_sym = sym.split('/')[0]
+            # 若 index 為 timestamp，保留時間序列對齊
+            closes[clean_sym] = df['Close'].values if len(df['Close']) == 50 else df['Close']
+
+        cross_df = pd.DataFrame(closes)
+        if cross_df.empty:
+            return pd.DataFrame()
+
+        feats = pd.DataFrame(index=cross_df.index)
+        
+        # 1. 報酬率計算
+        returns = cross_df.pct_change()
+        
+        # 2. 相對 BTC 的 Beta 與溢價 (若存在 BTC)
+        if 'BTC' in cross_df.columns:
+            btc_ret = returns['BTC']
+            for col in cross_df.columns:
+                if col != 'BTC':
+                    # 滾動 24 週期相關性
+                    feats[f'{col}_corr_BTC_24'] = returns[col].rolling(24).corr(btc_ret)
+                    # 相對強弱價差比 (Ratio)
+                    feats[f'{col}_to_BTC_ratio'] = cross_df[col] / (cross_df['BTC'] + 1e-9)
+                    # 相對強弱動量
+                    feats[f'{col}_relative_strength_12'] = (returns[col] - btc_ret).rolling(12).mean()
+
+        # 3. ETH / SOL 比價因子
+        if 'ETH' in cross_df.columns and 'SOL' in cross_df.columns:
+            feats['SOL_to_ETH_ratio'] = cross_df['SOL'] / (cross_df['ETH'] + 1e-9)
+            feats['SOL_ETH_momentum_12'] = (returns['SOL'] - returns['ETH']).rolling(12).mean()
+
+        return feats

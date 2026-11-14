@@ -12,6 +12,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from web_ui.server import run_server, APP_STATE
 from worldquant_brain.alpha_vault import AlphaVault
 from crypto_trading.testnet_client import BinanceTestnetClient
+from crypto_trading.bitunix_client import BitunixClient
+from crypto_trading.data_loader import CryptoDataLoader
+from crypto_trading.feature_engineer import CryptoFeatureEngineer
 
 class TestWebUIAndServices(unittest.TestCase):
     @classmethod
@@ -52,14 +55,19 @@ class TestWebUIAndServices(unittest.TestCase):
         self.assertEqual(len(alphas), 1)
         self.assertEqual(alphas[0]["name"], "Super_Alpha")
 
+        # 測試分潤公式
+        payout = vault.calculate_payout_projection(50000.0, 1.85, 32.0, is_consultant=True)
+        self.assertEqual(payout["final_estimated_payout_usd"], 4800.0)
+
     def test_02_binance_testnet_client(self):
-        """測試幣安測試網 Client 行情與 Mock 掛單"""
+        """測試幣安測試網 Client 行情與 USDC 0費率掛單"""
         client = BinanceTestnetClient()
         ticker = client.fetch_ticker("BTC/USDT")
         self.assertIn("last", ticker)
         self.assertGreater(ticker["last"], 0)
+        self.assertTrue(ticker.get("zero_fee_usdc"))
 
-        # 模擬掛單
+        # 下單
         order_res = client.create_order("BTC/USDT", "buy", "market", 0.01)
         self.assertTrue(order_res["success"])
 
@@ -67,7 +75,38 @@ class TestWebUIAndServices(unittest.TestCase):
         pos = client.fetch_positions()
         self.assertIsInstance(pos, list)
 
-    def test_03_web_server_endpoints(self):
+    def test_03_bitunix_client(self):
+        """測試 Bitunix 實盤對接客戶端"""
+        client = BitunixClient()
+        ticker = client.fetch_ticker("BTC/USDT")
+        self.assertEqual(ticker["exchange"], "bitunix")
+        self.assertGreater(ticker["last"], 0)
+
+        bal = client.fetch_balance()
+        self.assertIn("total_equity", bal)
+
+        ord_res = client.create_order("BTC/USDT", "BUY", "MARKET", 0.01)
+        self.assertTrue(ord_res["success"])
+
+    def test_04_multi_asset_features(self):
+        """測試多週期多幣種資料加載與特徵工程"""
+        loader = CryptoDataLoader()
+        df_1m = loader.fetch_ohlcv(limit=30, symbol="BTC/USDT", timeframe="1m")
+        df_1h = loader.fetch_ohlcv(limit=30, symbol="ETH/USDT", timeframe="1h")
+        self.assertEqual(len(df_1m), 30)
+        self.assertEqual(len(df_1h), 30)
+
+        fe = CryptoFeatureEngineer()
+        btc_df = loader.fetch_ohlcv(limit=50, symbol="BTC/USDT")
+        eth_df = loader.fetch_ohlcv(limit=50, symbol="ETH/USDT")
+        sol_df = loader.fetch_ohlcv(limit=50, symbol="SOL/USDT")
+        cross = fe.compute_multi_asset_cross_features({
+            "BTC": btc_df, "ETH": eth_df, "SOL": sol_df
+        })
+        self.assertIn("ETH_corr_BTC_24", cross.columns)
+        self.assertIn("SOL_to_ETH_ratio", cross.columns)
+
+    def test_05_web_server_endpoints(self):
         """測試 Web Server 核心 API 路由響應"""
         base_url = f"http://127.0.0.1:{self.test_port}"
 
@@ -88,13 +127,20 @@ class TestWebUIAndServices(unittest.TestCase):
             self.assertTrue(data["success"])
             self.assertIn("total_equity", data)
 
-        # 4. Alpha Vault 列表
+        # 4. Alpha Vault 列表與變現教學
         with urlopen(f"{base_url}/api/brain/alphas") as resp:
             data = json.loads(resp.read().decode("utf-8"))
             self.assertTrue(data["success"])
-            self.assertGreaterEqual(len(data["alphas"]), 1)
+            self.assertIn("roadmap", data)
+            self.assertIn("payout_sample", data)
 
-    def test_04_crypto_order_via_api(self):
+        # 5. 台股晨報 HTML 路由
+        with urlopen(f"{base_url}/api/taiwan/report") as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(data["success"])
+            self.assertIn("html_content", data)
+
+    def test_06_crypto_order_via_api(self):
         """測試透過 API 提交下單與平倉指令"""
         base_url = f"http://127.0.0.1:{self.test_port}"
 

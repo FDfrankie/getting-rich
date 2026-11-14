@@ -26,7 +26,46 @@ from worldquant_brain.brain_client import BrainClient
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
-# 全域狀態管理者
+import os
+import json
+import time
+import sqlite3
+import threading
+from datetime import datetime
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+from typing import Dict, Any, List
+
+# 載入專案各子模組
+from taiwan_stock.market_analyzer import MarketAnalyzer
+from taiwan_stock.stock_screener import StockScreener
+from taiwan_stock.report_generator import ReportGenerator
+from taiwan_stock.ml_ranker import TaiwanStockMLRanker
+
+from crypto_trading.config import (
+    PAPER_TRADING,
+    INITIAL_BALANCE_USDT,
+    DEFAULT_SYMBOL,
+    DEFAULT_SETTLEMENT_CURRENCY,
+    BINANCE_TESTNET_API_KEY
+)
+from crypto_trading.testnet_client import BinanceTestnetClient
+from crypto_trading.bitunix_client import BitunixClient
+from crypto_trading.bot_runner import CryptoTradingBot
+from crypto_trading.strategies.momentum_breakout import MomentumBreakoutStrategy
+from crypto_trading.strategies.ml_strategy import MLAlphaStrategy
+from crypto_trading.strategies.rl_strategy import RLAlphaStrategy
+
+from worldquant_brain.alpha_vault import AlphaVault
+from worldquant_brain.brain_client import BrainClient
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+DATA_DIR = os.path.join(BASE_DIR, "data_persistence")
+os.makedirs(DATA_DIR, exist_ok=True)
+STATE_DB_PATH = os.path.join(DATA_DIR, "system_state.db")
+
+# 全域狀態管理者 (背景常駐 Background Worker)
 class QuantAppContext:
     def __init__(self):
         self.market_analyzer = MarketAnalyzer()
@@ -38,25 +77,97 @@ class QuantAppContext:
         self.alpha_vault.seed_initial_verified_alphas()
         self.brain_client = BrainClient()
 
-        self.testnet_client = BinanceTestnetClient()
+        self.testnet_client = BinanceTestnetClient(settlement="USDC")
+        self.bitunix_client = BitunixClient()
         self.active_bot = CryptoTradingBot(symbol=DEFAULT_SYMBOL)
-        self.bot_running = False
+        self.bot_running = True  # 雲端 OnRender 背景預設常駐開啟
         self.bot_thread = None
         self.bot_strategy_name = "momentum"
-        self.execution_mode = "PAPER_SANDBOX"  # PAPER_SANDBOX or BINANCE_TESTNET
+        self.execution_mode = "BINANCE_TESTNET"  # 預設連線幣安測試網 (USDC 0費率)
 
         # 緩存最新大盤與晨報
         self.last_taiwan_report = ""
+        self.last_taiwan_html = ""
         self.last_taiwan_market = {}
-        self.bot_logs = [
-            f"[{datetime.now().strftime('%H:%M:%S')}] 系統核心已初始化完畢，準備接受各項量化操作指示。"
-        ]
+        self.bot_logs = []
+
+        # 初始化持久化資料庫與加載歷史狀態
+        self._init_persistence()
+        self._load_persisted_state()
+
+        # 啟動常駐背景工作線程 (無論瀏覽器是否開啟均 24hr 運作)
+        self._start_background_worker()
+
+    def _init_persistence(self):
+        """初始化日誌與部位持久化資料庫"""
+        try:
+            conn = sqlite3.connect(STATE_DB_PATH)
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS bot_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    message TEXT NOT NULL
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS bot_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            """)
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[!] 初始化持久化資料庫異常: {e}")
+
+    def _load_persisted_state(self):
+        """從磁碟載入歷史日誌與最後狀態"""
+        try:
+            conn = sqlite3.connect(STATE_DB_PATH)
+            cur = conn.cursor()
+            cur.execute("SELECT timestamp, message FROM bot_logs ORDER BY id DESC LIMIT 50")
+            rows = cur.fetchall()
+            if rows:
+                self.bot_logs = [f"[{r[0]}] {r[1]}" for r in reversed(rows)]
+            else:
+                self.bot_logs = [f"[{datetime.now().strftime('%H:%M:%S')}] 系統常駐核心已就緒，雲端背景運算常駐啟動。"]
+
+            cur.execute("SELECT key, value FROM bot_state")
+            for k, v in cur.fetchall():
+                if k == "bot_strategy_name":
+                    self.bot_strategy_name = v
+                elif k == "execution_mode":
+                    self.execution_mode = v
+                elif k == "position":
+                    self.active_bot.position = float(v)
+                elif k == "balance_usdt":
+                    self.active_bot.balance_usdt = float(v)
+            conn.close()
+        except Exception as e:
+            print(f"[!] 載入持久化狀態失敗: {e}")
 
     def add_log(self, msg: str):
+        """寫入記憶體並同步持久化到 SQLite 磁碟"""
         ts = datetime.now().strftime("%H:%M:%S")
-        self.bot_logs.append(f"[{ts}] {msg}")
-        if len(self.bot_logs) > 50:
+        formatted = f"[{ts}] {msg}"
+        self.bot_logs.append(formatted)
+        if len(self.bot_logs) > 60:
             self.bot_logs.pop(0)
+
+        # 寫入磁碟 SQLite
+        try:
+            conn = sqlite3.connect(STATE_DB_PATH)
+            cur = conn.cursor()
+            cur.execute("INSERT INTO bot_logs (timestamp, message) VALUES (?, ?)", (ts, msg))
+            cur.execute("REPLACE INTO bot_state (key, value) VALUES ('bot_strategy_name', ?)", (self.bot_strategy_name,))
+            cur.execute("REPLACE INTO bot_state (key, value) VALUES ('execution_mode', ?)", (self.execution_mode,))
+            cur.execute("REPLACE INTO bot_state (key, value) VALUES ('position', ?)", (str(self.active_bot.position),))
+            cur.execute("REPLACE INTO bot_state (key, value) VALUES ('balance_usdt', ?)", (str(self.active_bot.balance_usdt),))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
     def switch_bot_strategy(self, strat_name: str):
         self.bot_strategy_name = strat_name
@@ -69,28 +180,41 @@ class QuantAppContext:
         self.active_bot = CryptoTradingBot(symbol=self.active_bot.symbol, strategy=strat)
         self.add_log(f"已切換操盤策略至: 【{strat_name.upper()} 策略】")
 
-    def run_bot_step_loop(self):
-        while self.bot_running:
+    def _background_worker_loop(self):
+        """24/7 背景獨立常駐執行緒，不依賴 HTTP 請求或前端瀏覽器"""
+        print("⚡ [Background Worker] 常駐執行緒啟動！無論瀏覽器是否關閉，AI 操盤引擎均在背景運作。")
+        self.add_log("常駐 Background Worker 已連線至雲端主機，24/7 自動監控盤勢。")
+        while True:
             try:
-                self.active_bot.step()
-                curr_price = self.active_bot.loader.fetch_ohlcv(limit=2)['Close'].iloc[-1]
-                equity = self.active_bot.balance_usdt + (self.active_bot.position * curr_price)
-                self.add_log(f"機器人心跳自檢: 淨值 {equity:.2f} USDT | 持倉: {self.active_bot.position:.4f} {self.active_bot.symbol}")
+                if self.bot_running:
+                    # 執行一次策略掃描
+                    self.active_bot.step()
+                    # 取得目前報價
+                    if self.execution_mode == "BITUNIX_LIVE":
+                        ticker = self.bitunix_client.fetch_ticker(self.active_bot.symbol)
+                    else:
+                        ticker = self.testnet_client.fetch_ticker(self.active_bot.symbol)
+                    curr_price = ticker.get("last", 68500.0)
+                    equity = self.active_bot.balance_usdt + (self.active_bot.position * curr_price)
+                    # 每 30 秒記錄一次常駐心跳
+                    if int(time.time()) % 30 < 5:
+                        self.add_log(f"常駐巡航心跳: 標的 {self.active_bot.symbol} @ {curr_price:.1f} | 淨值: {equity:.2f} | 模式: {self.execution_mode}")
             except Exception as e:
-                self.add_log(f"機器人執行例外: {str(e)}")
+                self.add_log(f"背景掃描異常 (已自動重試): {str(e)}")
             time.sleep(5)
 
-    def start_bot(self):
-        if not self.bot_running:
-            self.bot_running = True
-            self.bot_thread = threading.Thread(target=self.run_bot_step_loop, daemon=True)
+    def _start_background_worker(self):
+        if self.bot_thread is None or not self.bot_thread.is_alive():
+            self.bot_thread = threading.Thread(target=self._background_worker_loop, daemon=True)
             self.bot_thread.start()
-            self.add_log(f"自動操盤機器人已啟動運行！(監控: {self.active_bot.symbol}, 策略: {self.bot_strategy_name.upper()})")
+
+    def start_bot(self):
+        self.bot_running = True
+        self.add_log(f"自動操盤機器人已設定為【積極運轉】(策略: {self.bot_strategy_name.upper()})")
 
     def stop_bot(self):
-        if self.bot_running:
-            self.bot_running = False
-            self.add_log("自動操盤機器人已安全暫停。")
+        self.bot_running = False
+        self.add_log("自動操盤機器人已切換為【待命暫停】。")
 
 APP_STATE = QuantAppContext()
 
@@ -165,8 +289,9 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 return self._send_json_response({"success": False, "error": str(e)}, status=500)
 
-        # API: 台股晨報獲取
+        # API: 台股晨報獲取 (支援 Markdown 與 HTML 雙格式)
         if path == "/api/taiwan/report":
+            format_type = parse_qs(parsed.query).get("format", ["markdown"])[0]
             if not APP_STATE.last_taiwan_report:
                 # 檢查 reports 資料夾是否有現成報告
                 rep_dir = os.path.join(BASE_DIR, "taiwan_stock", "reports")
@@ -177,19 +302,63 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                         with open(os.path.join(rep_dir, files[0]), "r", encoding="utf-8") as f:
                             APP_STATE.last_taiwan_report = f.read()
 
+            if not APP_STATE.last_taiwan_html:
+                try:
+                    APP_STATE.last_taiwan_html = APP_STATE.report_gen.generate_html_report()
+                except Exception:
+                    pass
+
             return self._send_json_response({
                 "success": True,
-                "content": APP_STATE.last_taiwan_report or "尚無已生成晨報，請點擊「生成晨報」按鈕。"
+                "content": APP_STATE.last_taiwan_report or "尚無已生成晨報，請點擊「生成晨報」按鈕。",
+                "html_content": APP_STATE.last_taiwan_html or ""
             })
 
-        # API: 加密貨幣即時行情與帳戶狀態
+        # API: 加密貨幣即時行情與帳戶狀態 (支援 本地沙盒, 幣安合約測試網, Bitunix 實盤)
         if path == "/api/crypto/account":
             try:
                 mode = APP_STATE.execution_mode
-                ticker = APP_STATE.testnet_client.fetch_ticker(APP_STATE.active_bot.symbol)
-                curr_price = ticker.get("last", 68500.0)
-
-                if mode == "PAPER_SANDBOX":
+                if mode == "BITUNIX_LIVE":
+                    ticker = APP_STATE.bitunix_client.fetch_ticker(APP_STATE.active_bot.symbol)
+                    bal = APP_STATE.bitunix_client.fetch_balance()
+                    positions = APP_STATE.bitunix_client.fetch_positions()
+                    curr_price = ticker.get("last", 68500.0)
+                    return self._send_json_response({
+                        "success": True,
+                        "mode": "BITUNIX_LIVE",
+                        "exchange": "bitunix",
+                        "symbol": APP_STATE.active_bot.symbol,
+                        "current_price": curr_price,
+                        "total_equity": bal.get("total_equity", 20000.0),
+                        "free_balance": bal.get("free_balance", 17000.0),
+                        "positions": positions,
+                        "bot_running": APP_STATE.bot_running,
+                        "strategy": APP_STATE.bot_strategy_name,
+                        "logs": APP_STATE.bot_logs[-15:]
+                    })
+                elif mode == "BINANCE_TESTNET":
+                    ticker = APP_STATE.testnet_client.fetch_ticker(APP_STATE.active_bot.symbol)
+                    curr_price = ticker.get("last", 68500.0)
+                    bal = APP_STATE.testnet_client.fetch_balance()
+                    positions = APP_STATE.testnet_client.fetch_positions()
+                    return self._send_json_response({
+                        "success": True,
+                        "mode": "BINANCE_TESTNET",
+                        "exchange": "binance_futures",
+                        "symbol": APP_STATE.active_bot.symbol,
+                        "current_price": curr_price,
+                        "total_equity": bal.get("total_equity", 15000.0),
+                        "free_balance": bal.get("free_balance", 12000.0),
+                        "settlement_currency": bal.get("settlement_currency", "USDC"),
+                        "zero_fee_usdc": bal.get("zero_fee_usdc", True),
+                        "positions": positions,
+                        "bot_running": APP_STATE.bot_running,
+                        "strategy": APP_STATE.bot_strategy_name,
+                        "logs": APP_STATE.bot_logs[-15:]
+                    })
+                else: # PAPER_SANDBOX
+                    ticker = APP_STATE.testnet_client.fetch_ticker(APP_STATE.active_bot.symbol)
+                    curr_price = ticker.get("last", 68500.0)
                     bot = APP_STATE.active_bot
                     equity = bot.balance_usdt + (bot.position * curr_price)
                     return self._send_json_response({
@@ -204,32 +373,29 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                         "entry_price": bot.entry_price,
                         "bot_running": APP_STATE.bot_running,
                         "strategy": APP_STATE.bot_strategy_name,
-                        "logs": APP_STATE.bot_logs[-12:]
-                    })
-                else:
-                    # 幣安官方 Testnet
-                    bal = APP_STATE.testnet_client.fetch_balance()
-                    positions = APP_STATE.testnet_client.fetch_positions()
-                    return self._send_json_response({
-                        "success": True,
-                        "mode": "BINANCE_TESTNET",
-                        "symbol": APP_STATE.active_bot.symbol,
-                        "current_price": curr_price,
-                        "total_equity": bal.get("total_usdt", 15000.0),
-                        "free_usdt": bal.get("free_usdt", 12000.0),
-                        "positions": positions,
-                        "bot_running": APP_STATE.bot_running,
-                        "strategy": APP_STATE.bot_strategy_name,
-                        "logs": APP_STATE.bot_logs[-12:]
+                        "logs": APP_STATE.bot_logs[-15:]
                     })
             except Exception as e:
                 return self._send_json_response({"success": False, "error": str(e)}, status=500)
 
-        # API: WorldQuant BRAIN Alpha 倉庫列表
+        # API: WorldQuant BRAIN Alpha 倉庫列表與變現教學
         if path == "/api/brain/alphas":
             alphas = APP_STATE.alpha_vault.list_alphas()
             stats = APP_STATE.alpha_vault.get_stats()
-            return self._send_json_response({"success": True, "stats": stats, "alphas": alphas})
+            roadmap = APP_STATE.alpha_vault.get_brain_roadmap_guide()
+            payout_sample = APP_STATE.alpha_vault.calculate_payout_projection(
+                quarterly_pnl_usd=50000.0,
+                sharpe=1.85,
+                turnover_pct=32.0,
+                is_consultant=True
+            )
+            return self._send_json_response({
+                "success": True,
+                "stats": stats,
+                "alphas": alphas,
+                "roadmap": roadmap,
+                "payout_sample": payout_sample
+            })
 
         return super().do_GET()
 
@@ -248,14 +414,16 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
         if path == "/api/taiwan/generate_report":
             try:
                 rep = APP_STATE.report_gen.generate()
+                html_rep = APP_STATE.report_gen.generate_html_report()
                 APP_STATE.last_taiwan_report = rep
-                return self._send_json_response({"success": True, "content": rep})
+                APP_STATE.last_taiwan_html = html_rep
+                return self._send_json_response({"success": True, "content": rep, "html_content": html_rep})
             except Exception as e:
                 return self._send_json_response({"success": False, "error": str(e)}, status=500)
 
-        # 切換執行模式 (本地沙盒 vs 幣安 Testnet)
+        # 切換執行模式 (本地沙盒 vs 幣安合約 Testnet vs Bitunix 實盤)
         if path == "/api/crypto/switch_mode":
-            mode = post_data.get("mode", "PAPER_SANDBOX")
+            mode = post_data.get("mode", "BINANCE_TESTNET")
             APP_STATE.execution_mode = mode
             APP_STATE.add_log(f"已切換加密操盤模式為: 【{mode}】")
             return self._send_json_response({"success": True, "mode": mode})
@@ -284,30 +452,38 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             symbol = post_data.get("symbol", APP_STATE.active_bot.symbol)
             order_type = post_data.get("order_type", "market")
 
-            if APP_STATE.execution_mode == "PAPER_SANDBOX":
+            if APP_STATE.execution_mode == "BITUNIX_LIVE":
+                res = APP_STATE.bitunix_client.create_order(symbol=symbol, side=side, order_type=order_type, amount=amount)
+                APP_STATE.add_log(f"Bitunix 實盤下單回報: {res.get('message')}")
+                return self._send_json_response(res)
+            elif APP_STATE.execution_mode == "BINANCE_TESTNET":
+                res = APP_STATE.testnet_client.create_order(symbol=symbol, side=side, order_type=order_type, amount=amount)
+                APP_STATE.add_log(f"幣安合約 Testnet 下單回報: {res.get('message')}")
+                return self._send_json_response(res)
+            else: # PAPER_SANDBOX
                 ticker = APP_STATE.testnet_client.fetch_ticker(symbol)
                 price = ticker["last"]
                 APP_STATE.active_bot.execute_paper_order(side, amount, price, reason="Web UI 手動下單")
-                APP_STATE.add_log(f"UI 手動執行沙盒訂單: {side} {amount} {symbol} @ {price:.2f}")
+                APP_STATE.add_log(f"沙盒訂單成交: {side} {amount} {symbol} @ {price:.2f}")
                 return self._send_json_response({"success": True, "message": f"沙盒訂單已成交: {side} {amount} {symbol}"})
-            else:
-                res = APP_STATE.testnet_client.create_order(symbol=symbol, side=side, order_type=order_type, amount=amount)
-                APP_STATE.add_log(f"UI 幣安 Testnet 下單結果: {res.get('message')}")
-                return self._send_json_response(res)
 
         # 加密貨幣一鍵平倉
         if path == "/api/crypto/close_all":
-            if APP_STATE.execution_mode == "PAPER_SANDBOX":
+            if APP_STATE.execution_mode == "BITUNIX_LIVE":
+                res = APP_STATE.bitunix_client.close_all_positions()
+                APP_STATE.add_log(f"Bitunix 實盤一鍵全平倉完成")
+                return self._send_json_response(res)
+            elif APP_STATE.execution_mode == "BINANCE_TESTNET":
+                res = APP_STATE.testnet_client.close_all_positions()
+                APP_STATE.add_log(f"幣安合約 Testnet 一鍵平倉: {res.get('message')}")
+                return self._send_json_response(res)
+            else: # PAPER_SANDBOX
                 bot = APP_STATE.active_bot
                 if bot.position > 0:
                     ticker = APP_STATE.testnet_client.fetch_ticker(bot.symbol)
                     bot.execute_paper_order("SELL", bot.position, ticker["last"], reason="Web UI 一鍵全數平倉")
                 APP_STATE.add_log("UI 執行一鍵平倉完成 (沙盒部位結清)")
                 return self._send_json_response({"success": True, "message": "沙盒持倉已全部結清！"})
-            else:
-                res = APP_STATE.testnet_client.close_all_positions()
-                APP_STATE.add_log(f"UI 幣安 Testnet 一鍵平倉: {res.get('message')}")
-                return self._send_json_response(res)
 
         # WorldQuant BRAIN: 提交與儲存 Alpha
         if path == "/api/brain/submit_alpha":

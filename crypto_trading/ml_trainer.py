@@ -13,8 +13,15 @@ import joblib
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, List, Tuple, Optional
-import lightgbm as lgb
-import xgboost as xgb
+try:
+    import lightgbm as lgb
+except ImportError:
+    lgb = None
+
+try:
+    import xgboost as xgb
+except ImportError:
+    xgb = None
 from crypto_trading.feature_engineer import CryptoFeatureEngineer
 
 class CryptoMLTrainer:

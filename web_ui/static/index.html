@@ -124,8 +124,9 @@
           <div class="flex flex-wrap items-center gap-2">
             <!-- 模式切換 -->
             <select id="modeSelect" onchange="changeCryptoMode(this.value)" class="bg-slate-900 border border-slate-700 text-xs md:text-sm rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500">
+              <option value="BINANCE_TESTNET" selected>模式：【幣安官方合約 Testnet (USDC 零手續費)】</option>
+              <option value="BITUNIX_LIVE">模式：【Bitunix 實盤對接 (HMAC-SHA256)】</option>
               <option value="PAPER_SANDBOX">模式：【本地軟體沙盒模擬】</option>
-              <option value="BINANCE_TESTNET">模式：【幣安官方 Testnet 測試網】</option>
             </select>
 
             <!-- 策略選擇 -->
@@ -277,8 +278,21 @@
               <i class="fa-regular fa-newspaper text-indigo-400"></i>
               <span>早盤 08:00 量化決策晨報檢視</span>
             </h3>
+            <div class="flex items-center space-x-2">
+              <button onclick="toggleReportView('html')" id="btnReportHtml" class="px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-600 text-white shadow">
+                精美渲染視圖
+              </button>
+              <button onclick="toggleReportView('raw')" id="btnReportRaw" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-400 hover:text-white">
+                原始 Markdown
+              </button>
+            </div>
           </div>
-          <div id="taiwanReportView" class="flex-1 bg-slate-950/70 border border-slate-800 rounded-xl p-4 text-xs font-mono text-slate-300 whitespace-pre-wrap overflow-y-auto max-h-96 leading-relaxed">
+          <div id="taiwanReportHtmlContainer" class="flex-1 overflow-y-auto max-h-[500px]">
+            <div id="taiwanReportHtmlView" class="p-1">
+              載入晨報中...
+            </div>
+          </div>
+          <div id="taiwanReportView" class="hidden flex-1 bg-slate-950/70 border border-slate-800 rounded-xl p-4 text-xs font-mono text-slate-300 whitespace-pre-wrap overflow-y-auto max-h-[500px] leading-relaxed">
             載入晨報中...
           </div>
         </div>
@@ -318,6 +332,84 @@
           <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
             <p class="text-xs text-slate-400">平均換手率 (Turnover)</p>
             <p id="brainAvgTurnover" class="text-lg md:text-2xl font-black text-slate-200 mt-1">28.3%</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- WorldQuant BRAIN 變現數學與晉升教學指南 -->
+      <div class="glass-card rounded-2xl p-4 md:p-5 shadow-xl space-y-4">
+        <div class="flex items-center space-x-2">
+          <span class="text-xs font-semibold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">QUANT MONETIZATION</span>
+          <h3 class="text-base font-bold text-white">WorldQuant BRAIN 變現數學、季度分潤公式與提交標準</h3>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <!-- 步驟 1: 模擬回測 -->
+          <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-2">
+            <div class="flex items-center space-x-2 text-indigo-400 font-bold text-xs">
+              <span class="w-5 h-5 rounded-full bg-indigo-500/20 flex items-center justify-center text-[10px]">1</span>
+              <span>Simulation 模擬回測標準</span>
+            </div>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              表達式回測期間須達 5 年以上。<strong>夏普 Sharpe ≥ 1.25</strong>，<strong>Fitness ≥ 1.0</strong>，<strong>Turnover 1% ~ 70%</strong>，Margin > 10 bps，最大回撤 < 10%。
+            </p>
+            <div class="text-[10px] bg-slate-950 p-2 rounded text-indigo-300 font-mono">
+              通用配置: Universe=USA TOP3000, Delay=1, Decay=4~8, Neutralization=Subindustry
+            </div>
+          </div>
+
+          <!-- 步驟 2: 相關性與提交 -->
+          <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-2">
+            <div class="flex items-center space-x-2 text-amber-400 font-bold text-xs">
+              <span class="w-5 h-5 rounded-full bg-amber-500/20 flex items-center justify-center text-[10px]">2</span>
+              <span>相關性檢測與正式提交</span>
+            </div>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              點擊 <strong>Check Correlation</strong>，個人與全平台庫存 Self-Correlation 須 <strong>&lt; 0.70</strong>。無衝突即可點擊 <strong>Submit Alpha</strong> 入庫累積個人點數。
+            </p>
+            <div class="text-[10px] bg-slate-950 p-2 rounded text-amber-300 font-mono">
+              通過後自動獲得積分 (Points)，邁向 Gold / Platinum 等級
+            </div>
+          </div>
+
+          <!-- 步驟 3: 簽約分潤 -->
+          <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-4 space-y-2">
+            <div class="flex items-center space-x-2 text-emerald-400 font-bold text-xs">
+              <span class="w-5 h-5 rounded-full bg-emerald-500/20 flex items-center justify-center text-[10px]">3</span>
+              <span>簽署 Consultant 領取季度分潤</span>
+            </div>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              受邀簽署 <strong>Research Consultant</strong> 後，納入生產池之 Alpha 將獲得真實資金運作，每季按產生之超額 PnL 與 Sharpe 乘數結算美金分潤！
+            </p>
+            <div class="text-[10px] bg-slate-950 p-2 rounded text-emerald-300 font-mono">
+              分潤公式: PnL × 8% × Sharpe乘數(最高1.5x) - 高換手扣減
+            </div>
+          </div>
+        </div>
+
+        <!-- 試算範例展示 -->
+        <div class="bg-slate-950/80 border border-amber-500/30 rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-4">
+          <div>
+            <div class="text-xs font-bold text-amber-300">💡 季度分潤試算實例 (Consultant Tier)</div>
+            <p class="text-xs text-slate-400 mt-1">
+              若您的策略庫本季在 WorldQuant 真實池創造 <strong>$50,000 USD PnL</strong> (Sharpe=1.85, Turnover=32%):
+            </p>
+          </div>
+          <div class="flex items-center space-x-4 bg-slate-900 px-4 py-2 rounded-xl border border-slate-800">
+            <div>
+              <span class="text-[10px] text-slate-400">基礎分潤 (8%)</span>
+              <div class="text-sm font-bold text-white">$4,000</div>
+            </div>
+            <div class="text-slate-500 font-bold">×</div>
+            <div>
+              <span class="text-[10px] text-slate-400">夏普加成 (1.2x)</span>
+              <div class="text-sm font-bold text-indigo-400">+20%</div>
+            </div>
+            <div class="text-slate-500 font-bold">=</div>
+            <div>
+              <span class="text-[10px] text-amber-400 font-bold">預估季度美金獎金</span>
+              <div class="text-lg font-black text-emerald-400">$4,800 USD</div>
+            </div>
           </div>
         </div>
       </div>
@@ -404,13 +496,16 @@
           <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 space-y-3">
             <div class="flex items-center space-x-2 text-purple-400 font-bold text-sm">
               <i class="fa-solid fa-microchip"></i>
-              <span>2. Kaggle 雲端免費 GPU 算力</span>
+              <span>2. Kaggle 雲端免費 GPU 訓練步驟</span>
             </div>
             <p class="text-xs text-slate-400 leading-relaxed">
-              專案已在 <code>kaggle_notebooks/</code> 備妥兩個現成 Notebook。利用 Kaggle 的免費 P100/T4 GPU 進行大規模 ML 特徵工程與 RL 強化學習訓練。
+              Notebook 檔案位於本機 <code>kaggle_notebooks/01_crypto_feature_and_ml_training.ipynb</code> 與 <code>02_ppo_reinforcement_learning_agent.ipynb</code>。
             </p>
-            <div class="text-[11px] bg-slate-950 p-2.5 rounded-lg font-mono text-purple-300">
-              優點：完全不吃本機 CPU，每週提供 30 小時免費雙 GPU 算力！
+            <div class="text-[11px] bg-slate-950 p-2.5 rounded-lg space-y-1 font-mono text-purple-300">
+              <div>1. 瀏覽器開啟 <a href="https://www.kaggle.com" target="_blank" class="text-white underline">kaggle.com</a> 點擊 <strong>+ Create New Notebook</strong></div>
+              <div>2. 點選 <strong>File -&gt; Import Notebook</strong>，上傳上述 <code>.ipynb</code> 檔</div>
+              <div>3. 右側 Settings -&gt; <strong>Accelerator 選擇 GPU P100 / T4</strong></div>
+              <div>4. 點選 <strong>Run All</strong> 即刻享受雲端 30hr/週 免費極速訓練！</div>
             </div>
           </div>
 
@@ -418,13 +513,17 @@
           <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 space-y-3">
             <div class="flex items-center space-x-2 text-emerald-400 font-bold text-sm">
               <i class="fa-solid fa-mobile-screen-button"></i>
-              <span>3. Cloudflare Tunnel 免費公網穿透</span>
+              <span>3. Cloudflare Tunnel 免費公網穿透步驟</span>
             </div>
             <p class="text-xs text-slate-400 leading-relaxed">
-              若本機電腦開著，只需一行指令 <code>cloudflared tunnel --url http://localhost:8000</code>，立即產出一個安全的公網 URL，在外用 iPhone/Android 隨處可連！
+              想讓本機電腦跑策略，同時用手機在外面即時看盤操作，無需固定 IP 或路由器設定：
             </p>
-            <div class="text-[11px] bg-slate-950 p-2.5 rounded-lg font-mono text-emerald-300">
-              優點：零設定防火牆、零固定 IP 需求，極致安全無延遲。
+            <div class="text-[11px] bg-slate-950 p-2.5 rounded-lg space-y-1 font-mono text-emerald-300">
+              <div>1. 下載 Cloudflare 官方工具 <code>cloudflared-windows-amd64.exe</code></div>
+              <div>2. 開啟 PowerShell 執行指令：</div>
+              <div class="text-white bg-slate-900 p-1 rounded">.\cloudflared.exe tunnel --url http://localhost:8000</div>
+              <div>3. 終端機將立即輸出一個 <code>https://xxx.trycloudflare.com</code> 網址</div>
+              <div>4. 用手機開啟該網址，立即連回家中電腦操盤，極度安全！</div>
             </div>
           </div>
         </div>
@@ -682,12 +781,38 @@
       }
     }
 
+    let currentReportFormat = 'html';
+    function toggleReportView(fmt) {
+      currentReportFormat = fmt;
+      const htmlBtn = document.getElementById('btnReportHtml');
+      const rawBtn = document.getElementById('btnReportRaw');
+      const htmlContainer = document.getElementById('taiwanReportHtmlContainer');
+      const rawContainer = document.getElementById('taiwanReportView');
+
+      if (fmt === 'html') {
+        htmlBtn.className = "px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-600 text-white shadow";
+        rawBtn.className = "px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-400 hover:text-white";
+        htmlContainer.classList.remove('hidden');
+        rawContainer.classList.add('hidden');
+      } else {
+        rawBtn.className = "px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-600 text-white shadow";
+        htmlBtn.className = "px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-400 hover:text-white";
+        htmlContainer.classList.add('hidden');
+        rawContainer.classList.remove('hidden');
+      }
+    }
+
     async function fetchTaiwanReport() {
       try {
         const res = await fetch('/api/taiwan/report');
         const d = await res.json();
         if (d.success) {
           document.getElementById('taiwanReportView').innerText = d.content;
+          if (d.html_content) {
+            document.getElementById('taiwanReportHtmlView').innerHTML = d.html_content;
+          } else {
+            document.getElementById('taiwanReportHtmlView').innerText = d.content;
+          }
         }
       } catch (e) {
         console.error(e);
@@ -724,16 +849,22 @@
 
     async function triggerGenerateReport() {
       const view = document.getElementById('taiwanReportView');
+      const htmlView = document.getElementById('taiwanReportHtmlView');
       view.innerText = "⏳ 正在獲取最新加權指數與選股資料並生成晨報，請稍候約 5~10 秒...";
+      htmlView.innerHTML = "<div class='text-center py-10 text-indigo-400 font-bold'><i class='fa-solid fa-spinner animate-spin'></i> 正在由 AI 引擎運算生成渲染晨報...</div>";
       try {
         const res = await fetch('/api/taiwan/generate_report', { method: 'POST' });
         const d = await res.json();
         if (d.success) {
           view.innerText = d.content;
+          if (d.html_content) {
+            htmlView.innerHTML = d.html_content;
+          }
           fetchTaiwanMarket();
         }
       } catch (e) {
         view.innerText = "生成失敗，請檢視終端機記錄。";
+        htmlView.innerText = "生成失敗，請稍後重試。";
       }
     }
 

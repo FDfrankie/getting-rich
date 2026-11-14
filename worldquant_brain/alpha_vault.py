@@ -247,6 +247,91 @@ class AlphaVault:
                 notes=p["notes"]
             )
 
+    @staticmethod
+    def calculate_payout_projection(
+        quarterly_pnl_usd: float,
+        sharpe: float,
+        turnover_pct: float,
+        is_consultant: bool = True
+    ) -> Dict[str, Any]:
+        """
+        WorldQuant BRAIN 量化顧問季度分潤與獎金計算公式 (Quant PnL & Payouts Calculation):
+        公式原則：
+        1. Base Bonus Pool = PnL * 分潤比例 (Consultant 階級約 5% ~ 10%)
+        2. Sharpe 乘數加成 (Sharpe Multiplier):
+           - Sharpe < 1.25: 0 (未達標)
+           - 1.25 <= Sharpe < 1.5: 1.0x
+           - 1.5 <= Sharpe < 2.0: 1.2x
+           - Sharpe >= 2.0: 1.5x
+        3. Turnover 換手率懲罰 (Penalty):
+           - 若換手率 > 50%，每高出 10% 扣減 5% 獎金以反映真實滑價成本
+        """
+        if not is_consultant or sharpe < 1.25 or quarterly_pnl_usd <= 0:
+            return {
+                "quarterly_pnl_usd": quarterly_pnl_usd,
+                "sharpe": sharpe,
+                "payout_usd": 0.0,
+                "formula_notes": "未達 BRAIN 顧問資格或 Sharpe < 1.25，無季度提成。",
+                "status": "QUALIFIED" if sharpe >= 1.25 else "UNQUALIFIED"
+            }
+
+        # 基礎提成率 8%
+        base_rate = 0.08
+        base_payout = quarterly_pnl_usd * base_rate
+
+        # 夏普乘數
+        if sharpe >= 2.0:
+            sharpe_mult = 1.5
+        elif sharpe >= 1.5:
+            sharpe_mult = 1.2
+        else:
+            sharpe_mult = 1.0
+
+        # 換手率衰減
+        to_penalty = 1.0
+        if turnover_pct > 50.0:
+            excess = turnover_pct - 50.0
+            to_penalty = max(0.6, 1.0 - (excess / 10.0) * 0.05)
+
+        final_payout = base_payout * sharpe_mult * to_penalty
+
+        return {
+            "quarterly_pnl_usd": quarterly_pnl_usd,
+            "sharpe": sharpe,
+            "turnover_pct": turnover_pct,
+            "base_payout_usd": round(base_payout, 2),
+            "sharpe_multiplier": sharpe_mult,
+            "turnover_penalty": round(to_penalty, 3),
+            "final_estimated_payout_usd": round(final_payout, 2),
+            "status": "CONSULTANT_TIER_PAYOUT"
+        }
+
+    @staticmethod
+    def get_brain_roadmap_guide() -> List[Dict[str, Any]]:
+        """
+        WorldQuant BRAIN 變現與提交標準完整步驟 (從 Simulation 到 Submit 再到 Consultant):
+        """
+        return [
+            {
+                "step": 1,
+                "title": "Alpha 設計與模擬回測 (Simulation)",
+                "description": "於平台輸入表達式，設定 Universe (如 USA TOP3000), Delay=1, Decay=4~8, Neutralization=Subindustry。點擊 Simulate 跑出 5 年以上樣本內外 (In/Out Sample) 績效。",
+                "thresholds": "Sharpe >= 1.25, Fitness >= 1.0, Turnover 1% ~ 70%, Margin > 10 bps, Drawdown < 10%"
+            },
+            {
+                "step": 2,
+                "title": "相關性檢測與正式提交 (Check Correlation & Submit)",
+                "description": "點擊 Check Correlation，比對個人與全平台庫存的 Self-Correlation (須 < 0.70)。通過後點擊 Submit Alpha 進入官方評審庫，每通過一顆累積相應積分 (Points)。",
+                "thresholds": "Self Correlation < 0.70, Submissions limit: 依用戶等級每日 10~50 顆"
+            },
+            {
+                "step": 3,
+                "title": "晉升 Research Consultant (簽約與季度分潤)",
+                "description": "當積分達到 Gold 階級 (累積達標 Alphas 並穩定產出)，WorldQuant 官方將寄發合約邀請簽署成為 Research Consultant。提交被評選為 Verified / Prod 的 Alpha 將進入真實基金交易池，每季根據貢獻度與 PnL 結算美金分潤至國際外幣帳戶！",
+                "thresholds": "Gold / Platinum 階級, 簽署國際量化顧問保密合約"
+            }
+        ]
+
 if __name__ == "__main__":
     vault = AlphaVault()
     vault.seed_initial_verified_alphas()

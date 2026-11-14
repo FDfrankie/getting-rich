@@ -106,6 +106,125 @@ class ReportGenerator:
         print(f"[✓] 晨報已成功生成並存檔至: {report_path}")
         return report_content
 
+    def generate_html_report(self) -> str:
+        """
+        生成具備精緻視覺排版、色彩標籤、多空燈號與響應式表格的晨報 HTML 視圖
+        """
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        now_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        market_info = self.market_analyzer.analyze()
+        picks = self.stock_screener.run_screener()
+        score = market_info.get('score', 50)
+        regime = market_info.get('regime', '震盪整理')
+        
+        # 燈號顏色邏輯
+        if score >= 70:
+            badge_class = "bg-rose-500/20 text-rose-400 border border-rose-500/30"
+            light_icon = "🟢 多頭強勢格局"
+        elif score <= 40:
+            badge_class = "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+            light_icon = "🔴 空頭防守格局"
+        else:
+            badge_class = "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+            light_icon = "🟡 中性震盪盤整"
+
+        html = f"""
+        <div class="space-y-6 text-slate-100 font-sans">
+            <!-- 頂部 Header 卡片 -->
+            <div class="bg-gradient-to-r from-slate-900 to-indigo-950/80 border border-indigo-500/30 rounded-2xl p-5 shadow-2xl">
+                <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+                    <div>
+                        <div class="flex items-center space-x-2">
+                            <span class="px-2.5 py-0.5 rounded-full text-xs font-bold {badge_class}">{light_icon}</span>
+                            <span class="text-xs text-slate-400 font-mono">📅 {today_str} 早盤 08:00 發布</span>
+                        </div>
+                        <h2 class="text-2xl font-black mt-2 text-white tracking-wide">台股早盤量化決策晨報</h2>
+                        <p class="text-xs text-slate-400 mt-1">產出時間: {now_time_str} | Antigravity AI Quantitative Core</p>
+                    </div>
+                    <div class="text-right bg-slate-950/60 p-3 rounded-xl border border-slate-800">
+                        <span class="text-[11px] text-slate-400">大盤多空能量指數</span>
+                        <div class="text-2xl font-black text-rose-400">{score} <span class="text-xs text-slate-400">/ 100</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 大盤關鍵均線與操作方針 -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="bg-slate-900/90 border border-slate-800 p-4 rounded-xl">
+                    <span class="text-xs text-slate-400">加權指數最新點位</span>
+                    <div class="text-xl font-bold text-white mt-1">{market_info.get('latest_close', 'N/A')} <span class="text-xs {'text-rose-400' if market_info.get('change_pct',0)>=0 else 'text-emerald-400'}">({market_info.get('change_pct',0):+0.2f}%)</span></div>
+                    <div class="text-[11px] text-slate-500 mt-1">MA5: {market_info.get('ma5')} | MA20: {market_info.get('ma20')}</div>
+                </div>
+                <div class="bg-slate-900/90 border border-slate-800 p-4 rounded-xl">
+                    <span class="text-xs text-slate-400">市場狀態判定</span>
+                    <div class="text-xl font-bold text-amber-400 mt-1">【{regime}】</div>
+                    <div class="text-[11px] text-slate-500 mt-1">20日年化波動率: {market_info.get('volatility_20d', 0)}%</div>
+                </div>
+                <div class="bg-slate-900/90 border border-slate-800 p-4 rounded-xl">
+                    <span class="text-xs text-slate-400">今日操盤方針</span>
+                    <div class="text-xs text-slate-200 mt-1.5 leading-relaxed bg-slate-950 p-2 rounded border border-slate-800/80">{market_info.get('suggestion', '順勢而為，控制總部位風險。')}</div>
+                </div>
+            </div>
+
+            <!-- 主動精選強勢突破標的表格 -->
+            <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="font-bold text-sm text-slate-200 flex items-center space-x-2">
+                        <span class="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
+                        <span>🎯 今日主動量化強勢突破選股池</span>
+                    </h3>
+                    <span class="text-xs text-slate-400 font-mono">共掃描 {len(picks)} 檔強勢股</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="text-slate-400 border-b border-slate-800 bg-slate-950/50">
+                            <tr>
+                                <th class="py-2.5 px-3">股票代碼</th>
+                                <th class="py-2.5 px-3">最新價</th>
+                                <th class="py-2.5 px-3">漲跌幅</th>
+                                <th class="py-2.5 px-3">量化評分</th>
+                                <th class="py-2.5 px-3">觸發信號</th>
+                                <th class="py-2.5 px-3">防守停損</th>
+                                <th class="py-2.5 px-3">目標價位</th>
+                                <th class="py-2.5 px-3">風報比</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800/60 font-mono">
+        """
+
+        if not picks:
+            html += """
+                            <tr>
+                                <td colspan="8" class="text-center py-6 text-slate-500 font-sans">今日無標的完全符合突破門檻，建議持盈保泰、等待更佳風險報酬比。</td>
+                            </tr>
+            """
+        else:
+            for p in picks:
+                change_color = "text-rose-400 font-bold" if p['change_pct'] >= 0 else "text-emerald-400 font-bold"
+                sigs = " ".join([f"<span class='px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 text-[10px] mr-1'>{s}</span>" for s in p['signals']])
+                html += f"""
+                            <tr class="hover:bg-slate-800/40 transition">
+                                <td class="py-2.5 px-3 font-bold text-white font-sans">{p['symbol']}</td>
+                                <td class="py-2.5 px-3 text-slate-200">${p['close']}</td>
+                                <td class="py-2.5 px-3 {change_color}">{p['change_pct']:+0.2f}%</td>
+                                <td class="py-2.5 px-3"><span class="px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 font-bold">{p['score']}分</span></td>
+                                <td class="py-2.5 px-3 font-sans">{sigs}</td>
+                                <td class="py-2.5 px-3 text-emerald-400">${p['stop_loss']}</td>
+                                <td class="py-2.5 px-3 text-amber-300">${p['target_price']}</td>
+                                <td class="py-2.5 px-3 text-indigo-300 font-bold">{p['risk_reward_ratio']}</td>
+                            </tr>
+                """
+
+        html += """
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        """
+        return html
+
 if __name__ == "__main__":
     generator = ReportGenerator()
     content = generator.generate()
