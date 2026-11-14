@@ -4,6 +4,7 @@ from taiwan_stock.market_analyzer import MarketAnalyzer
 from taiwan_stock.stock_screener import StockScreener
 from taiwan_stock.ml_ranker import TaiwanStockMLRanker
 from taiwan_stock.config import REPORTS_DIR, DEFAULT_WATCHLIST
+from data_persistence.gdrive_sync import GDrivePersistenceSync
 import yfinance as yf
 
 class ReportGenerator:
@@ -15,6 +16,7 @@ class ReportGenerator:
         self.market_analyzer = MarketAnalyzer()
         self.stock_screener = StockScreener()
         self.ml_ranker = TaiwanStockMLRanker(model_type="lightgbm")
+        self.sync = GDrivePersistenceSync()
 
     def generate(self) -> str:
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -83,10 +85,27 @@ class ReportGenerator:
         except Exception as e:
             report_lines.append(f"\n> ℹ️ ML 多因子預測模型運行略過: {str(e)}")
 
+        # 區塊 4: 每日覆盤與虧損檢討 (Post-Mortem Analysis)
+        post_mortems = self.sync.get_recent_post_mortems(limit=5)
         report_lines.extend([
             "",
             "---",
-            "## 🛡️ 4. 紀律與風控指引",
+            "## 🔍 4. 每日自動化覆盤與虧損歸因檢討 (Daily Post-Mortem Loss Analysis)"
+        ])
+        if not post_mortems:
+            report_lines.append("> ✅ 最近期無觸發停損或重大虧損事件，系統執行紀律率 100%。")
+        else:
+            report_lines.append("| 日期 | 標的 | 進場價 | 出場價 | 虧損金額 | 虧損幅度 | 歸因分析與優化對策 |")
+            report_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+            for pm in post_mortems:
+                report_lines.append(
+                    f"| {pm['date']} | **{pm['symbol']}** | {pm['entry_price']} | {pm['exit_price']} | -${abs(pm['loss_amount']):.2f} | {pm['loss_pct']:+.2f}% | {pm['cause_analysis']} |"
+                )
+
+        report_lines.extend([
+            "",
+            "---",
+            "## 🛡️ 5. 紀律與風控指引",
             "1. **大盤濾網原則**：若大盤評分低於 40 分，嚴格控制總多單部位於 30% 以下，切勿重倉追高。",
             "2. **單筆風險限制**：任何單一標的承擔之損失金額不可超過總投資部位之 1.5%~2.0%。",
             "3. **嚴格執行停損**：跌破上述「建議防守停損」無條件離場，保本永遠是獲利的第一前提。",
@@ -216,6 +235,50 @@ class ReportGenerator:
                             </tr>
                 """
 
+        post_mortems = self.sync.get_recent_post_mortems(limit=5)
+        html += """
+            <!-- 覆盤與虧損檢討區塊 -->
+            <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="font-bold text-sm text-slate-200 flex items-center space-x-2">
+                        <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+                        <span>🔍 每日自動化覆盤與虧損歸因檢討 (Post-Mortem Loss Analysis)</span>
+                    </h3>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="text-slate-400 border-b border-slate-800 bg-slate-950/50">
+                            <tr>
+                                <th class="py-2.5 px-3">日期</th>
+                                <th class="py-2.5 px-3">標的</th>
+                                <th class="py-2.5 px-3">進場價</th>
+                                <th class="py-2.5 px-3">出場價</th>
+                                <th class="py-2.5 px-3">虧損金額</th>
+                                <th class="py-2.5 px-3">虧損幅度</th>
+                                <th class="py-2.5 px-3">歸因分析與優化對策</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800/60 font-mono">
+        """
+        if not post_mortems:
+            html += """
+                            <tr>
+                                <td colspan="7" class="text-center py-4 text-slate-500 font-sans">近期無停損或虧損事件，系統執行紀律良好。</td>
+                            </tr>
+            """
+        else:
+            for pm in post_mortems:
+                html += f"""
+                            <tr class="hover:bg-slate-800/40 transition">
+                                <td class="py-2.5 px-3 text-slate-300 font-sans">{pm['date']}</td>
+                                <td class="py-2.5 px-3 font-bold text-white font-sans">{pm['symbol']}</td>
+                                <td class="py-2.5 px-3 text-slate-200">${pm['entry_price']}</td>
+                                <td class="py-2.5 px-3 text-slate-200">${pm['exit_price']}</td>
+                                <td class="py-2.5 px-3 text-emerald-400 font-bold">-${abs(pm['loss_amount']):.2f}</td>
+                                <td class="py-2.5 px-3 text-emerald-400 font-bold">{pm['loss_pct']:+.2f}%</td>
+                                <td class="py-2.5 px-3 text-slate-300 font-sans">{pm['cause_analysis']}</td>
+                            </tr>
+                """
         html += """
                         </tbody>
                     </table>

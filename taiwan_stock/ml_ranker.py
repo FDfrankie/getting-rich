@@ -179,9 +179,18 @@ class TaiwanStockMLRanker:
     def predict_rankings(self, current_stock_dfs: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         """
         對當前觀察池的所有股票進行最新因子打分與多頭排序
+        支援 Kaggle 訓練產物自動載入，以及 Render 輕量化推論 (免重訓練，低記憶體消耗)
         """
+        # 若尚未載入模型，優先嘗試從磁碟預訓練權重載入 (Kaggle 訓練產物)
         if self.model is None:
-            raise ValueError("Model is not trained.")
+            default_weights = os.path.join(os.path.dirname(os.path.abspath(__file__)), "taiwan_stock_ranker.joblib")
+            if os.path.exists(default_weights):
+                try:
+                    loaded = TaiwanStockMLRanker.load_model(default_weights)
+                    self.model = loaded.model
+                    self.feature_cols = loaded.feature_cols
+                except Exception:
+                    pass
 
         results = []
         for symbol, df in current_stock_dfs.items():
@@ -189,6 +198,25 @@ class TaiwanStockMLRanker:
                 continue
             feats = self.extract_stock_features(df)
             latest = feats.iloc[-1:]
+            
+            # 若為 Render 輕量化推論模式或未訓練模型，使用經典截面多因子加權打分 (Rule-Based Factor Ranker)
+            if self.model is None or not self.feature_cols:
+                curr_price = float(df['Close'].iloc[-1])
+                vol = float(df['Volume'].iloc[-1])
+                mom = float(latest['mom_20d'].iloc[0]) if 'mom_20d' in latest else 0.0
+                bias = float(latest['bias_ma20'].iloc[0]) if 'bias_ma20' in latest else 0.0
+                rsi = float(latest['rsi_14'].iloc[0]) if 'rsi_14' in latest else 50.0
+                predicted_return = (mom * 0.4) + (bias * 0.3) + ((rsi - 50.0) / 100.0 * 0.3)
+                results.append({
+                    "symbol": symbol,
+                    "current_price": round(curr_price, 2),
+                    "predicted_fwd_5d_ret_pct": round(predicted_return * 100, 2),
+                    "volume": int(vol),
+                    "bias_ma20": round(bias * 100, 2),
+                    "rsi_14": round(rsi, 1)
+                })
+                continue
+
             if latest[self.feature_cols].isna().any().any():
                 continue
 

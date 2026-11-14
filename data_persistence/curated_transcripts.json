@@ -1,0 +1,5 @@
+{
+  "Cross_Sectional_Momentum": "By ranking assets based on multi-timeframe normalized returns and residual momentum, factor neutral portfolios achieve higher Sharpe ratios while minimizing market exposure.",
+  "Perpetual_Funding_Arbitrage": "Perpetual futures often trade at a premium or discount to spot prices. By delta hedging long spot USDC and short perpetual contracts during positive funding rates, one captures pure cash-and-carry yields.",
+  "Differentiable_Sharpe_Optimization": "Rather than optimizing Mean Squared Error in neural networks, directly optimizing the Differentiable Sharpe Ratio backpropagates gradients of expected returns and volatility directly into model parameters."
+}

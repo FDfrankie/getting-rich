@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: getting-rich
+    runtime: docker
+    plan: free
+    region: singapore
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: HOST
+        value: 0.0.0.0
+      - key: PAPER_TRADING
+        value: "True"
+      - key: DEFAULT_SETTLEMENT_CURRENCY
+        value: "USDC"
+      - key: RENDER_LIGHTWEIGHT_INFERENCE
+        value: "True"

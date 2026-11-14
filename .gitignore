@@ -75,4 +75,6 @@ data_cache/
 reports/*.html
 
 # Runtime persistence and state
-data_persistence/
+data_persistence/*.db
+data_persistence/*.sqlite3
+data_persistence/backups/

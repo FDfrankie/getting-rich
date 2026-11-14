@@ -7,6 +7,8 @@ from crypto_trading.strategies.momentum_breakout import MomentumBreakoutStrategy
 from crypto_trading.strategies.ml_strategy import MLAlphaStrategy
 from crypto_trading.strategies.rl_strategy import RLAlphaStrategy
 from crypto_trading.risk_manager import RiskManager
+from crypto_trading.regime_filter import HierarchicalRegimeFilter
+from data_persistence.gdrive_sync import GDrivePersistenceSync
 
 class CryptoTradingBot:
     """
@@ -23,6 +25,8 @@ class CryptoTradingBot:
         self.loader = CryptoDataLoader(symbol=symbol)
         self.strategy = strategy or MomentumBreakoutStrategy()
         self.risk_manager = RiskManager(initial_capital=INITIAL_BALANCE_USDT)
+        self.regime_filter = HierarchicalRegimeFilter(high_tf="1h", low_tf="1m")
+        self.sync = GDrivePersistenceSync()
 
         # 模擬帳戶狀態
         self.balance_usdt = INITIAL_BALANCE_USDT
@@ -49,20 +53,37 @@ class CryptoTradingBot:
             revenue = cost - fee
             self.balance_usdt += revenue
             pnl = (current_price - self.entry_price) * self.position if self.position_side == "LONG" else 0.0
+            pnl_pct = ((current_price - self.entry_price) / self.entry_price * 100.0) if self.entry_price > 0 else 0.0
             self.log(f"🔴 [模擬賣出/平倉] {self.position:.4f} {self.symbol} @ {current_price:.2f} | 損益 (PnL): {pnl:+.2f} USDT | 原因: {reason}")
+            
+            # 若發生實質虧損，自動記入 Post-Mortem 檢討資料庫
+            if pnl < 0:
+                self.sync.record_post_mortem(
+                    symbol=self.symbol,
+                    entry_price=self.entry_price,
+                    exit_price=current_price,
+                    loss_amount=pnl,
+                    loss_pct=pnl_pct,
+                    cause_analysis=f"平倉觸發原因: {reason}"
+                )
+            
             self.position = 0.0
             self.position_side = "FLAT"
             self.entry_price = 0.0
 
     def step(self):
-        """單次決策迴圈步進"""
+        """單次決策迴圈步進 (整合高階趨勢濾網 Hierarchical Regime Filter)"""
         # 1. 抓取最新 K 線與行情
         df = self.loader.fetch_ohlcv(limit=60)
         df_strat = self.strategy.generate_signals(df)
         curr = df_strat.iloc[-1]
         current_price = float(curr['Close'])
-        signal = int(curr['signal'])
+        raw_signal = int(curr['signal'])
         atr = float(curr.get('ATR', current_price * 0.02))
+
+        # 1.1 高階時框 (1h/1d) 市場狀態檢驗與信號濾波
+        regime_info = self.regime_filter.detect_regime(df)
+        signal = self.regime_filter.filter_micro_signal(raw_signal, regime_info)
 
         # 計算當前總資產淨值
         total_equity = self.balance_usdt + (self.position * current_price)

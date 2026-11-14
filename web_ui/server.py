@@ -184,6 +184,7 @@ class QuantAppContext:
         """24/7 背景獨立常駐執行緒，不依賴 HTTP 請求或前端瀏覽器"""
         print("⚡ [Background Worker] 常駐執行緒啟動！無論瀏覽器是否關閉，AI 操盤引擎均在背景運作。")
         self.add_log("常駐 Background Worker 已連線至雲端主機，24/7 自動監控盤勢。")
+        last_reconcile_time = 0
         while True:
             try:
                 if self.bot_running:
@@ -196,6 +197,22 @@ class QuantAppContext:
                         ticker = self.testnet_client.fetch_ticker(self.active_bot.symbol)
                     curr_price = ticker.get("last", 68500.0)
                     equity = self.active_bot.balance_usdt + (self.active_bot.position * curr_price)
+
+                    # 每 60 秒執行一次持倉同調對齊 (reconcile_with_exchange)
+                    now_ts = time.time()
+                    if now_ts - last_reconcile_time > 60:
+                        last_reconcile_time = now_ts
+                        if self.execution_mode == "BINANCE_TESTNET":
+                            rec = self.testnet_client.reconcile_with_exchange(self.active_bot.position, self.active_bot.symbol)
+                            if not rec["in_sync"]:
+                                self.add_log(f"🔄 交易所持倉同調: {rec['message']}")
+                                self.active_bot.position = rec["remote_position"]
+                        elif self.execution_mode == "BITUNIX_LIVE":
+                            rec = self.bitunix_client.reconcile_with_exchange(self.active_bot.position, self.active_bot.symbol)
+                            if not rec["in_sync"]:
+                                self.add_log(f"🔄 Bitunix 持倉同調: {rec['message']}")
+                                self.active_bot.position = rec["remote_position"]
+
                     # 每 30 秒記錄一次常駐心跳
                     if int(time.time()) % 30 < 5:
                         self.add_log(f"常駐巡航心跳: 標的 {self.active_bot.symbol} @ {curr_price:.1f} | 淨值: {equity:.2f} | 模式: {self.execution_mode}")
