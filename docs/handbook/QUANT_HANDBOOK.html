@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>量化金融與策略研發全方位核心講義 (Quant Handbook)</title>
+    <!-- KaTeX 数学公式渲染引擎 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js" 
+            onload="renderMathInElement(document.body, {delimiters: [
+                {left: '$$', right: '$$', display: true},
+                {left: '$', right: '$', display: false}
+            ]});"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #f8fafc;
+            color: #0f172a;
+            line-height: 1.8;
+            margin: 0;
+            padding: 2.5rem 1rem;
+        }
+        .handbook-wrapper {
+            max-width: 960px;
+            margin: 0 auto;
+            background: #ffffff;
+            padding: 3.5rem 3rem;
+            border-radius: 16px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+            border: 1px solid #e2e8f0;
+        }
+        .print-btn {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: #2563eb;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 9999px;
+            text-decoration: none;
+            font-weight: 600;
+            box-shadow: 0 4px 14px rgba(37, 99, 235, 0.39);
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            z-index: 100;
+        }
+        .print-btn:hover { background: #1d4ed8; transform: translateY(-2px); }
+        h1 {
+            font-size: 2.25rem;
+            color: #0f172a;
+            border-bottom: 3px solid #3b82f6;
+            padding-bottom: 0.75rem;
+            margin-bottom: 2rem;
+        }
+        h2 {
+            font-size: 1.65rem;
+            color: #1e3a8a;
+            border-bottom: 1px solid #cbd5e1;
+            padding-bottom: 0.5rem;
+            margin-top: 3rem;
+        }
+        h3 { font-size: 1.25rem; color: #1d4ed8; margin-top: 2rem; }
+        h4 { font-size: 1.1rem; color: #334155; margin-top: 1.5rem; }
+        code {
+            background: #f1f5f9;
+            color: #e11d48;
+            padding: 0.2rem 0.45rem;
+            border-radius: 6px;
+            font-size: 0.9em;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+        pre {
+            background: #0f172a;
+            color: #f8fafc;
+            padding: 1.25rem;
+            border-radius: 10px;
+            overflow-x: auto;
+            font-size: 0.9em;
+        }
+        pre code { background: transparent; color: inherit; padding: 0; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 2rem 0;
+            font-size: 0.95em;
+        }
+        th, td {
+            border: 1px solid #cbd5e1;
+            padding: 0.85rem 1.2rem;
+            text-align: left;
+        }
+        th { background-color: #f1f5f9; font-weight: 700; color: #1e293b; }
+        blockquote {
+            border-left: 5px solid #3b82f6;
+            margin: 1.75rem 0;
+            padding: 0.75rem 1.5rem;
+            background-color: #eff6ff;
+            color: #1e40af;
+            border-radius: 0 8px 8px 0;
+        }
+        a { color: #2563eb; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        @media (max-width: 768px) {
+            .handbook-wrapper { padding: 1.5rem 1.2rem; border-radius: 0; }
+            body { padding: 0; }
+        }
+        @media print {
+            body { background: white; padding: 0; }
+            .handbook-wrapper { box-shadow: none; border: none; max-width: 100%; padding: 0; }
+            .print-btn { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <button class="print-btn" onclick="window.print()">🖨️ 列印 / 另存為 PDF</button>
+    <div class="handbook-wrapper">
+        <h1 id="quantitative-finance-strategy-research-handbook">🎓 量化金融與策略研發全方位核心講義 (Quantitative Finance &amp; Strategy Research Handbook)</h1>
+<blockquote>
+<p><strong>編者按</strong>：本講義專為具備大學數理、統計或資工基礎之研究者與開發者撰寫。內容不談空泛心法，全面從<strong>數理統計理論</strong>、<strong>微觀市場結構</strong>、<strong>機器學習與強化學習推導</strong>，到<strong>實務工程實作</strong>進行深度剖析。</p>
+</blockquote>
+<hr />
+<h2 id="table-of-contents">📚 講義目錄 (Table of Contents)</h2>
+<ul>
+<li><a href="#第一章量化投資數學基礎與時間序列分析">第一章：量化投資數學基礎與時間序列分析</a></li>
+<li>1.1 資產收益率定義：簡單收益率 vs. 對數收益率</li>
+<li>1.2 平穩性檢驗 (Stationarity) 與差分 (ADF Test)</li>
+<li>1.3 均值回歸與共整合理論 (Cointegration &amp; Pairs Trading)</li>
+<li>1.4 金融時間序列特徵：厚尾分布 (Fat Tails) 與波動聚集 (Volatility Clustering)</li>
+<li><a href="#第二章台股市場微觀結構與大盤多空決策">第二章：台股市場微觀結構與大盤多空決策</a></li>
+<li>2.1 台灣證券交易所 (TWSE) 制度解析：逐筆撮合與融資融券</li>
+<li>2.2 外資三大法人期現貨籌碼與「看不見的手」</li>
+<li>2.3 技術指標數理推導：KD、RSI、MACD 與 Bollinger Bands</li>
+<li>2.4 多因子選股模型與 08:00 晨報決策邏輯</li>
+<li><a href="#第三章加密貨幣量化高頻微觀與自動操盤系統">第三章：加密貨幣量化、高頻微觀與自動操盤系統</a></li>
+<li>3.1 永續合約 (Perpetual Futures) 機制與資金費率 (Funding Rate) 套利</li>
+<li>3.2 幾何布朗運動 (GBM) 與市場波動度估計 (Garman-Klass Volatility)</li>
+<li>3.3 交易摩擦成本：滑價模型 (Slippage) 與訂單簿市場衝擊 (Market Impact)</li>
+<li>3.4 雙軌模擬盤架構：內部撮合引擎 vs 幣安官方 Testnet (CCXT)</li>
+<li><a href="#第四章現代機器學習-ml-在金融預測中的實務">第四章：現代機器學習 (ML) 在金融預測中的實務</a></li>
+<li>4.1 金融特徵工程 (Feature Engineering)：平穩化轉換與資訊流特徵</li>
+<li>4.2 LightGBM 樹模型於橫截面排序 (Cross-Sectional Ranking) 的應用</li>
+<li>4.3 量化避坑指南：未來函數 (Lookahead Bias) 與 Walk-Forward 滾動交叉驗證</li>
+<li>4.4 評估指標：資訊係數 (Rank IC, ICIR) 與定向準確率 (Directional Accuracy)</li>
+<li><a href="#第五章深度強化學習-rl-與自適應部位管理">第五章：深度強化學習 (RL) 與自適應部位管理</a></li>
+<li>5.1 馬可夫決策過程 (MDP) 於交易系統之形式化定義</li>
+<li>5.2 獎勵函數設計：為何傳統 PnL 會失效？微分夏普比率 (Differential Sharpe Ratio)</li>
+<li>5.3 策略梯度與連續動作空間 PPO (Actor-Critic) 演算法推導</li>
+<li>5.4 Gymnasium 交易環境實作與風控懲罰項 (Drawdown Penalty)</li>
+<li><a href="#第六章worldquant-brain-因子挖掘與顧問變現策略">第六章：WorldQuant BRAIN 因子挖掘與顧問變現策略</a></li>
+<li>6.1 BRAIN 平台商業本質與研究顧問 (Research Consultant) 分潤體系</li>
+<li>6.2 核心指標公式解析：Sharpe、Turnover、Fitness 與 Margin</li>
+<li>6.3 官方表達式算子 (Operators) 與中性化 (Neutralization) 數理本質</li>
+<li>6.4 降換手率 (Turnover Reduction) 與防過擬合實戰技巧</li>
+<li>6.5 經典高通過率 Alpha 原型剖析 (量價反轉、基本面質量、分析師預期)</li>
+<li><a href="#第七章量化資金管理風險控制與極端保護">第七章：量化資金管理、風險控制與極端保護</a></li>
+<li>7.1 凱利公式 (Kelly Criterion) 與分數凱利 (Fractional Kelly)</li>
+<li>7.2 ATR 動態頭寸縮放 (Volatility-Adjusted Position Sizing)</li>
+<li>7.3 風險價值 (VaR, Expected Shortfall) 與全域回撤熔斷 (Circuit Breaker)</li>
+<li><a href="#第八章實體交易所實戰雲端-247-託管與系統架構">第八章：實體交易所實戰、雲端 24/7 託管與系統架構</a></li>
+<li>8.1 實體虛擬貨幣交易所出入金安全與 API 權限管理</li>
+<li>8.2 容器化 (Docker) 與免本機雲端持續執行 (Render / Railway / Cloudflare)</li>
+<li>8.3 Web UI 響應式前後端通訊架構與自動化排程</li>
+</ul>
+<hr />
+<h2 id="_1">第一章：量化投資數學基礎與時間序列分析</h2>
+<h3 id="11-vs">1.1 資產收益率定義：簡單收益率 vs. 對數收益率</h3>
+<p>在量化金融中，資產價格 $P_t$ 本身並非平穩序列（Non-Stationary），直接對價格進行迴歸容易產生偽迴歸（Spurious Regression）。因此，量化分析的核心基礎在於<strong>收益率（Returns）</strong>。</p>
+<h4 id="1-simple-net-return">1. 簡單收益率 (Simple Net Return)</h4>
+<p>$$R_t = \frac{P_t - P_{t-1}}{P_{t-1}} = \frac{P_t}{P_{t-1}} - 1$$
+- <strong>優點</strong>：具備資產組合的橫向可加性。設投資組合包含 $N$ 檔資產，權重為 $w_i$（$\sum w_i = 1$），則整體組合收益為：
+  $$R_{p,t} = \sum_{i=1}^N w_i R_{i,t}$$
+- <strong>缺點</strong>：跨時間不具備加法複合性（Compound Multi-period）。</p>
+<h4 id="2-log-return-continuously-compounded-return">2. 對數收益率 (Log Return / Continuously Compounded Return)</h4>
+<p>$$r_t = \ln\left(\frac{P_t}{P_{t-1}}\right) = \ln(P_t) - \ln(P_{t-1})$$
+- <strong>優點</strong>：具備<strong>跨時間維度的加總性</strong>（Time-Additive）。若持有資產 $k$ 期，總對數收益率為：
+  $$r_{t,k} = \ln\left(\frac{P_t}{P_{t-k}}\right) = \sum_{j=0}^{k-1} r_{t-j}$$
+- <strong>數學近似</strong>：當 $|R_t| &lt; 15\%$ 時，由泰勒展開式 $\ln(1+x) \approx x$，對數收益率數值極度接近簡單收益率。
+- <strong>工程結論</strong>：在機器學習特徵工程中，一律使用<strong>對數收益率</strong>；在投資組合績效與會計損益結算時，使用<strong>簡單收益率</strong>。</p>
+<hr />
+<h3 id="12-stationarity-adf-test">1.2 平穩性檢驗 (Stationarity) 與差分 (ADF Test)</h3>
+<p>時間序列的<strong>弱平穩性（Weak Stationarity / Covariance Stationarity）</strong>要求：
+1. 均值常數性：$E[X_t] = \mu, \quad \forall t$
+2. 方差常數性：$\text{Var}(X_t) = \sigma^2 &lt; \infty, \quad \forall t$
+3. 自協方差僅依賴時間間隔 $k$：$\text{Cov}(X_t, X_{t-k}) = \gamma_k, \quad \forall t$</p>
+<h4 id="augmented-dickey-fuller-adf">Augmented Dickey-Fuller (ADF) 檢驗</h4>
+<p>用於檢驗時間序列中是否存在單位根（Unit Root, 即非平穩性）：
+$$\Delta y_t = \alpha + \beta t + \gamma y_{t-1} + \sum_{i=1}^p \delta_i \Delta y_{t-i} + \epsilon_t$$
+- <strong>虛無假說 $H_0$</strong>：$\gamma = 0$（存在單位根，序列非平穩）。
+- <strong>對立假說 $H_1$</strong>：$\gamma &lt; 0$（不存在單位根，序列平穩）。
+- <strong>判斷依據</strong>：若 $p$-value $&lt; 0.05$（或 t-statistic 小於臨界值），拒絕虛無假說，認定序列平穩。</p>
+<hr />
+<h3 id="13-cointegration-pairs-trading">1.3 均值回歸與共整合理論 (Cointegration &amp; Pairs Trading)</h3>
+<h4 id="_2">兩序列平穩的陷阱：偽相關</h4>
+<p>若兩個獨立隨機漫步序列 $X_t, Y_t \sim I(1)$，直接計算相關係數可能高達 0.9，但兩者毫無因果或長期均衡關係。</p>
+<h4 id="engle-granger-two-step">共整合定義 (Engle-Granger Two-Step)</h4>
+<p>若兩個 $I(1)$ 序列存在線性組合使得：
+$$Z_t = Y_t - \beta X_t \sim I(0)$$
+則稱 $X_t$ 與 $Y_t$ 具有<strong>共整合關係（Cointegration）</strong>，$\beta$ 為共整合係數，$Z_t$ 即為具有均值回歸特性的價差（Spread）。</p>
+<h4 id="z-score">Z-Score 標準化在交易中的應用</h4>
+<p>$$Z_t = \frac{Z_t - \mu_Z}{\sigma_Z}$$
+- 當 $Z_t &gt; +2.0$：價差處於極端高位，放空 $Y$ 並做多 $X$。
+- 當 $Z_t &lt; -2.0$：價差處於極端低位，做多 $Y$ 並放空 $X$。
+- 當 $|Z_t| \le 0.5$：價差收斂至統計中樞，全數平倉獲利。</p>
+<hr />
+<h3 id="14">1.4 金融時間序列特徵：厚尾分布與波動聚集</h3>
+<p>金融市場資產回報<strong>絕非正態分布（Gaussian Distribution）</strong>，具備兩大典型事實（Stylized Facts）：</p>
+<ol>
+<li><strong>尖峰厚尾 (Leptokurtosis &amp; Fat Tails)</strong>：</li>
+<li>峰度（Kurtosis）$&gt; 3$，偏度（Skewness）通常為負（崩盤往往快而劇烈）。</li>
+<li>黑天鵝事件（例如 5~6 個標準差的大幅波動）在常態分布下數百萬年才發生一次，但在金融市場中幾年就會出現一次。</li>
+<li><strong>波動聚集 (Volatility Clustering)</strong>：</li>
+<li>收益率自身可能無顯著線性自相關，但收益率的絕對值或平方（$|r_t|$ 或 $r_t^2$）展現極長期的自相關性（Mandelbrot: "Large changes tend to be followed by large changes"）。</li>
+<li>解決方案：採用 ARCH / GARCH 模型或 Garman-Klass 高低收極致波動度估計器。</li>
+</ol>
+<hr />
+<h2 id="_3">第二章：台股市場微觀結構與大盤多空決策</h2>
+<h3 id="21-twse">2.1 台灣證券交易所 (TWSE) 制度解析</h3>
+<ol>
+<li><strong>逐筆撮合機制 (Continuous Trading)</strong>：</li>
+<li>台股自 2020 年全面改為逐筆撮合，訂單類型包含限價（ROD, IOC, FOK）與市價。</li>
+<li>漲跌幅限制為前一日收盤價的 $\pm 10\%$。</li>
+<li><strong>融資融券微觀含義</strong>：</li>
+<li><strong>融資餘額 (Margin Balance)</strong>：散戶槓桿多方力量的指標。融資快速增加常代表散戶瘋狂進場（籌碼渙散）；大盤下跌若融資斷頭斷在低檔，反而是籌碼清洗乾淨的底部訊號。</li>
+<li><strong>融券餘額 (Short Balance)</strong>：空方融券賣出，若融券暴增且股價強勢上漲，容易引發「軋空行情（Short Squeeze）」。</li>
+</ol>
+<hr />
+<h3 id="22">2.2 外資三大法人期現貨籌碼</h3>
+<p>台股屬於典型的<strong>外資淺碟型市場</strong>（外資持股佔比超過 40%）：
+- <strong>台指期外資淨留倉 (Foreign Net Open Interest, OI)</strong>：
+  - 淨多單 $&gt; 10,000$ 口：強烈看多防護網。
+  - 淨空單 $&gt; 20,000$ 口：強烈避險或壓盤警訊。
+- <strong>期現貨聯動分析</strong>：
+  若外資在現貨大幅賣超台積電（2330），同時在期貨佈建巨額空單，大盤下跌概率超過 75%。本專案的大盤分析器（<code>market_analyzer.py</code>）正是將均線與多空指標融合，建構 0~100 分的環境量化分數。</p>
+<hr />
+<h3 id="23">2.3 技術指標數理推導</h3>
+<h4 id="1-kd-stochastic-oscillator-9-3-3">1. KD 指標 (Stochastic Oscillator 9, 3, 3)</h4>
+<p>衡量當前價格相對於過去 $N$ 天價格區間的位置：
+$$\text{RSV}<em>t = \frac{C_t - \min</em>{k=1..N}(L_{t-k+1})}{\max_{k=1..N}(H_{t-k+1}) - \min_{k=1..N}(L_{t-k+1})} \times 100$$
+$$K_t = \frac{2}{3} K_{t-1} + \frac{1}{3} \text{RSV}<em>t$$
+$$D_t = \frac{2}{3} D</em>{t-1} + \frac{1}{3} K_t$$
+- <strong>黃金交叉</strong>：$K$ 由下往上穿越 $D$；低檔（$&lt;20$）鈍化或黃金交叉為反轉買點；中檔（$50\sim 60$）交叉為動量延續。</p>
+<h4 id="2-bollinger-bands-20-2">2. 布林通道 (Bollinger Bands, 20, 2)</h4>
+<p>$$\text{Mid}_t = \text{SMA}(C, 20), \quad \sigma_t = \text{Std}(C, 20)$$
+$$\text{Upper}_t = \text{Mid}_t + 2 \sigma_t, \quad \text{Lower}_t = \text{Mid}_t - 2 \sigma_t$$
+- <strong>帶寬擠壓 (Bandwidth Squeeze)</strong>：$\frac{\text{Upper} - \text{Lower}}{\text{Mid}}$ 達到歷史低位時，代表波動度極度壓縮，即將迎來單邊暴漲或暴跌突破。</p>
+<hr />
+<h2 id="_4">第三章：加密貨幣量化、高頻微觀與自動操盤系統</h2>
+<h3 id="31-perpetual-futures">3.1 永續合約 (Perpetual Futures) 與資金費率</h3>
+<p>加密貨幣合約與傳統期貨最大的不同在於<strong>無到期日（No Expiration）</strong>。為了錨定合約價格與現貨指數價格，衍生出<strong>資金費率機制（Funding Rate）</strong>：
+- 資金每 8 小時（00:00, 08:00, 16:00 UTC）在多空雙方之間直接轉移。
+- 當合約價 $&gt;$ 現貨價（Funding Rate $&gt; 0$）：多頭支付空頭。
+- 當合約價 $&lt;$ 現貨價（Funding Rate $&lt; 0$）：空頭支付多頭。
+- <strong>無風險期現套利 (Cash &amp; Carry Arbitrage)</strong>：
+  買進現貨 BTC 同時做空 1x 永續合約 BTC，完全對沖價格波動風險，每 8 小時穩定收取資金費率（牛市時年化收益可達 $15\%\sim 40\%$）。</p>
+<hr />
+<h3 id="32-gbm">3.2 幾何布朗運動 (GBM) 與波動度估計</h3>
+<h4 id="1-geometric-brownian-motion">1. 幾何布朗運動 (Geometric Brownian Motion)</h4>
+<p>資產價格在連續時間下的經典隨機微分方程 (SDE)：
+$$dS_t = \mu S_t dt + \sigma S_t dW_t$$
+解析解（伊藤引理）：
+$$S_t = S_0 \exp\left(\left(\mu - \frac{1}{2}\sigma^2\right)t + \sigma W_t\right)$$
+本專案在 <code>data_loader.py</code> 與環境測試中，便是運用此數理模型生成逼真的合成行情以進行壓力測試。</p>
+<h4 id="2-garman-klass">2. Garman-Klass 極致波動度估計器</h4>
+<p>相較於僅使用收盤價（Close-to-Close），Garman-Klass 利用完整 High, Low, Open, Close 資訊，估計效率高出 8 倍：
+$$\sigma^2_{GK} = 0.5 \left(\ln\frac{H_t}{L_t}\right)^2 - (2\ln 2 - 1) \left(\ln\frac{C_t}{O_t}\right)^2$$</p>
+<hr />
+<h2 id="ml">第四章：現代機器學習 (ML) 在金融預測中的實務</h2>
+<h3 id="41">4.1 金融特徵工程</h3>
+<p>金融數據的信噪比（Signal-to-Noise Ratio, SNR）極低（通常 $&lt; 1\%$）。特徵工程的第一原則是<strong>去除趨勢非平穩性，保留純淨微觀動態</strong>：
+1. <strong>價格對數乖離 (VWAP Deviation)</strong>：$\frac{C_t - \text{VWAP}<em>t}{\text{VWAP}_t}$
+2. <strong>波動率調整後動量</strong>：$\frac{\text{Mean}(r, 20)}{\text{Std}(r, 20)}$
+3. <strong>相對強弱與動能加速度</strong>：$\Delta \text{RSI}</em>{5d}, \quad \text{MACD Histogram Slope}$</p>
+<hr />
+<h3 id="42-lightgbm-ranking">4.2 LightGBM 樹模型與截面排序 (Ranking)</h3>
+<p>金融預測中，「預測絕對漲跌幅」極其困難，但「<strong>在股票池中預測哪檔股票未來 5 天會漲得比別人多</strong>」（橫截面相對排序）具備極高的可預測性。</p>
+<ul>
+<li>採用梯度提升決策樹（GBDT, LightGBM）：</li>
+<li>自動處理特徵非線性關係與相互作用（Interaction）。</li>
+<li>對特徵單調轉換與異常極端值具有天然抗性。</li>
+<li>搭配直方圖加速演算法（Histogram-based），訓練速度比 XGBoost 快數倍。</li>
+</ul>
+<hr />
+<h3 id="43-walk-forward">4.3 量化避坑指南：未來函數與 Walk-Forward 交叉驗證</h3>
+<p>在量化機器學習中，最常見的「虛假繁榮」源於<strong>未來函數（Lookahead Bias / Data Leakage）</strong>：
+- <strong>絕對嚴禁使用</strong>：<code>k-Fold 隨機交叉驗證</code>（因為隨機抽取會用未來資料訓練模型去預測過去！）。
+- <strong>正確方法：Walk-Forward 滾動前向交叉驗證</strong>：
+  <code>text
+  [ --- Train Block 1 --- ][ Test 1 ]
+         [ --- Train Block 2 --- ][ Test 2 ]
+                [ --- Train Block 3 --- ][ Test 3 ]
+  -----------------------------------------------&gt; 時間軸</code>
+  模型永遠只能使用 $t$ 時刻以前的資訊訓練，並在 $t+1 \sim t+k$ 時刻的未知區間進行測試評估。</p>
+<hr />
+<h3 id="44-rank-ic-icir">4.4 核心評估指標：Rank IC 與 ICIR</h3>
+<ul>
+<li><strong>資訊係數 (Information Coefficient, IC)</strong>：
+  預測分數與真實未來收益之間的斯皮爾曼等級相關係數（Spearman Rank Correlation）：
+  $$\text{Rank IC} = \text{Corr}(\text{Rank}(\hat{y}), \text{Rank}(y))$$</li>
+<li>一般量化界中，$\text{Rank IC} &gt; 0.05$ 即屬優良因子，$&gt; 0.10$ 屬極強 Alpha。</li>
+<li><strong>ICIR (Information Ratio of IC)</strong>：
+  $$\text{ICIR} = \frac{\text{Mean}(\text{IC})}{\text{Std}(\text{IC})}$$
+  衡量因子預測能力的長期穩定度，通常要求 $\text{ICIR} &gt; 0.5$。</li>
+</ul>
+<hr />
+<h2 id="rl">第五章：深度強化學習 (RL) 與自適應部位管理</h2>
+<h3 id="51-mdp">5.1 馬可夫決策過程 (MDP) 交易形式化</h3>
+<p>強化學習將交易視為 Agent 與市場環境互動的動態優化過程：
+1. <strong>狀態空間 $\mathcal{S}$</strong>：包含宏觀技術特徵向量 $\mathbf{x}_t \in \mathbb{R}^{18}$、當前持倉部位比例 $w_t \in [-1, 1]$、未實現盈虧 $\text{uPnL}_t$ 與最大回撤 $\text{DD}_t$。狀態維度為 21 維。
+2. <strong>動作空間 $\mathcal{A}$</strong>：連續動作 $a_t \in [-1.0, 1.0]$，代表目標持倉比例（+1.0 代表 100% 多頭，-1.0 代表 100% 空頭，0 代表空倉）。
+3. <strong>狀態轉移 $\mathcal{P}$</strong>：市場下一根 K 線的生成由真實訂單流撮合決定。</p>
+<hr />
+<h3 id="52-differential-sharpe-ratio">5.2 獎勵函數設計：微分夏普比率 (Differential Sharpe Ratio)</h3>
+<p>傳統 RL 常以單步收益率 $R_t$ 作為獎勵，這會導致智能體在牛市盲目開滿槓桿，在震盪市因頻繁手續費耗盡本金。</p>
+<h4 id="moody-saffell-2001">微分夏普比率推導 (Moody &amp; Saffell, 2001)</h4>
+<p>夏普比率 $S_T = \frac{A_T}{\sqrt{B_T - A_T^2}}$，其中 $A_t$ 與 $B_t$ 為一階與二階動差的指數移動平均：
+$$A_t = A_{t-1} + \eta (R_t - A_{t-1})$$
+$$B_t = B_{t-1} + \eta (R_t^2 - B_{t-1})$$
+其對時間的微分獎勵（即當前決策對長期夏普比率的邊際貢獻）為：
+$$D_t = \frac{B_{t-1} \Delta A_t - \frac{1}{2} A_{t-1} \Delta B_t}{(B_{t-1} - A_{t-1}^2)^{3/2}} - \text{Cost}(|a_t - a_{t-1}|) - \lambda \cdot \text{Penalty}_{\text{Drawdown}}$$
+- <strong>物理含義</strong>：若某筆交易帶來高收益但大幅增加資產組合的波動度，獎勵會被懲罰扣除；天然驅使智能體追求<strong>平滑、低回撤的淨值曲線</strong>。</p>
+<hr />
+<h3 id="53-ppo-proximal-policy-optimization">5.3 PPO (Proximal Policy Optimization) 演算法架構</h3>
+<p>PPO 透過截斷代理目標（Clipped Surrogate Objective）保證策略更新步長穩定：
+$$L^{CLIP}(\theta) = \hat{\mathbb{E}}<em>t \left[ \min\left( r_t(\theta)\hat{A}_t, \, \text{clip}(r_t(\theta), 1-\epsilon, 1+\epsilon)\hat{A}_t \right) \right]$$
+其中機率比率 $r_t(\theta) = \frac{\pi</em>\theta(a_t|s_t)}{\pi_{\theta_{old}}(a_t|s_t)}$，$\hat{A}_t$ 為廣義優勢估計（GAE, Generalized Advantage Estimator）。</p>
+<hr />
+<h2 id="worldquant-brain">第六章：WorldQuant BRAIN 因子挖掘與顧問變現策略</h2>
+<h3 id="61-brain">6.1 BRAIN 平台商業機制</h3>
+<p>WorldQuant 是一家量化對沖基金，BRAIN 是其眾包（Crowdsourced）研究平台：
+- <strong>研究者角色</strong>：透過平台撰寫數學表達式預測股票未來超額報酬。
+- <strong>變現關鍵節點</strong>：
+  1. 累積積分晉升至 <strong>Master / Research Consultant</strong>。
+  2. 簽署顧問協議後，合格 Alpha 被納入基金實盤投資組合。
+  3. 依據 Alpha 在真實市場產生的 Sharpe 比率與收益貢獻，<strong>按季度發放美金分潤</strong>。</p>
+<hr />
+<h3 id="62">6.2 官方核心審核指標門檻</h3>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">指標</th>
+<th style="text-align: left;">門檻數值</th>
+<th style="text-align: left;">數理含義與考核重點</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Sharpe Ratio</strong></td>
+<td style="text-align: left;">$\mathbf{&gt; 1.25}$ (建議 $&gt; 1.58$)</td>
+<td style="text-align: left;">風險調整後收益，年化超額收益除以年化波動度</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Turnover (換手率)</strong></td>
+<td style="text-align: left;">$\mathbf{1\% \sim 70\%}$</td>
+<td style="text-align: left;">日均換手率。過低無信號，過高在實盤會被手續費吃光</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Fitness</strong></td>
+<td style="text-align: left;">$\mathbf{&gt; 1.0}$</td>
+<td style="text-align: left;">綜合性指標：$\text{Fitness} = \text{Sharpe} \times \sqrt{\frac{\text{Returns}}{\text{Turnover}}}$</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Margin</strong></td>
+<td style="text-align: left;">$\mathbf{&gt; 10\text{ bps}}$ (0.10%)</td>
+<td style="text-align: left;">每筆交易平均利潤空間，必須大於市場衝擊成本</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Sub-universe</strong></td>
+<td style="text-align: left;">全子集表現均勻</td>
+<td style="text-align: left;">在 TOP3000、TOP1000、TOP500 子池均不得出現斷崖下跌</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="63">6.3 降換手率與防過擬合實戰技巧</h3>
+<ol>
+<li><strong>時間衰減平滑運算子</strong>：
+   原始信號換手率過高時，包裹 <code>ts_decay_linear(alpha, d)</code>：
+   $$\text{ts_decay_linear}(x, d) = \frac{\sum_{i=0}^{d-1} (d-i) x_{t-i}}{\sum_{i=1}^d i}$$
+   能顯著平滑信號跳動，將換手率自 $80\%$ 壓低至 $25\%\sim 35\%$，同時提高 Sharpe 比率。</li>
+<li><strong>行業中性化運算子</strong>：
+   <code>group_neutralize(alpha, subindustry)</code>：
+   減去各子細分產業的截面均值，消除行業集中暴跌風險，回測淨值曲線大幅平滑。</li>
+</ol>
+<hr />
+<h2 id="_5">第七章：量化資金管理、風險控制與極端保護</h2>
+<h3 id="71-kelly-criterion">7.1 凱利公式 (Kelly Criterion)</h3>
+<p>在勝率為 $p$、盈虧比（損益比）為 $b$ 的情況下，使長期財富對數期望值最大化的最佳下單資金比例為：
+$$f^<em> = \frac{b \cdot p - (1 - p)}{b}$$
+- </em><em>工程實務：分數凱利 (Fractional Kelly)</em><em>：
+  理論凱利假設參數已知且不變，在極端行情下全倉凱利會導致巨大回撤。實務上量化機構一律採用 </em><em>Half-Kelly ($0.5 f^</em>$)<strong> 或 </strong>Quarter-Kelly ($0.25 f^<em>$)</em>*。</p>
+<hr />
+<h3 id="72-atr-volatility-adjusted-sizing">7.2 ATR 動態頭寸縮放 (Volatility-Adjusted Sizing)</h3>
+<p>傳統固定手數下單會讓高波動標的承擔不成比例的巨大風險。ATR 縮放法使每筆交易承擔的<strong>金錢風險完全恆定</strong>：
+$$\text{Position Size} = \frac{\text{帳戶總資金} \times \text{單筆最大風險比例 (e.g. 2\%)}}{\text{ATR} \times \text{停損乘數 (e.g. 2.0)}}$$
+- 若某股票波動劇烈（ATR 很大），下單股數自動變少。
+- 若某股票走勢溫和（ATR 很小），下單股數自適應增加。</p>
+<hr />
+<h2 id="247">第八章：實體交易所實戰、雲端 24/7 託管與系統架構</h2>
+<h3 id="81-api">8.1 實盤 API 安全與防禦性架構</h3>
+<ol>
+<li><strong>API Key 三原則</strong>：</li>
+<li>啟用「讀取」與「現貨/合約交易」。</li>
+<li><strong>永久關閉「提幣 (Withdrawals)」權限</strong>。</li>
+<li>綁定固定伺服器 IP 白名單。</li>
+<li><strong>斷網與異常處理</strong>：</li>
+<li>連線超時（Timeout）時，下單必須先執行訂單查詢（Query Order）驗證是否已撮合，切忌盲目重複送出下單請求。</li>
+</ol>
+<hr />
+<h3 id="82-247">8.2 雲端脫離本機 24/7 運行架構</h3>
+<pre><code class="language-text">       [ 使用者手機 / 電腦瀏覽器 ]
+                   │
+                   ▼ (HTTPS 訪問)
+       [ 雲端伺服器 (Render / Railway / Docker) ]
+                   │
+   ┌───────────────┼───────────────┐
+   ▼               ▼               ▼
+[Web UI 後端]  [排程守護 Scheduler] [量化操盤 Bot]
+   │               │               │
+(REST API)    (每日 08:00 晨報) (實時市場數據/Testnet撮合)
+</code></pre>
+<p>本專案透過 <code>Dockerfile</code> 與 <code>render.yaml</code> 實現了一鍵在線部署，無需本機開機即可 24 小時守護資產並發送決策報告。</p>
+    </div>
+</body>
+</html>
