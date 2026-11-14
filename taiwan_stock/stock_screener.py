@@ -61,8 +61,8 @@ class StockScreener:
 
         return df
 
-    def screen_stock(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """針對單一股票評估技術突破信號"""
+    def evaluate_stock(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """針對單一股票評估技術突破信號與分數 (不論是否達到門檻皆返回分析結果)"""
         try:
             ticker = yf.Ticker(symbol)
             df = ticker.history(period="6mo")
@@ -80,12 +80,18 @@ class StockScreener:
             if curr['MA5'] > curr['MA20'] > curr['MA60']:
                 signals.append("均線多頭排列 (MA5>MA20>MA60)")
                 score += 25
+            elif curr['MA5'] > curr['MA20']:
+                signals.append("短天期均線金叉 (MA5>MA20)")
+                score += 10
 
             # 條件 2: 成交量放大
             if curr['Volume'] > curr['VOL_MA5'] * PARAMS['volume_surge_multiplier']:
                 vol_ratio = round(curr['Volume'] / (curr['VOL_MA5'] + 1e-9), 2)
                 signals.append(f"爆量突破 (成交量為5日均量 {vol_ratio} 倍)")
                 score += 25
+            elif curr['Volume'] > curr['VOL_MA5']:
+                signals.append("成交量溫和增溫 (>5日均量)")
+                score += 10
 
             # 條件 3: 布林通道突破
             if curr['Close'] >= curr['BB_UPPER'] and prev['Close'] < prev['BB_UPPER']:
@@ -102,39 +108,106 @@ class StockScreener:
                 signals.append(f"KD強勢高檔鈍化 (K:{curr['K']:.1f})")
                 score += 15
 
-            # 若綜合評分達到門檻 (>= 50 分)，納入推薦選股池
-            if score >= 50:
-                atr = curr['ATR'] if not np.isnan(curr['ATR']) else (curr['Close'] * 0.03)
-                suggested_stop_loss = round(curr['Close'] - (atr * PARAMS['atr_stop_loss_multiplier']), 2)
-                suggested_target = round(curr['Close'] + (atr * PARAMS['atr_stop_loss_multiplier'] * 2), 2)
+            # 條件 5: 破線轉弱信號 (空方預警)
+            bearish_signals = []
+            if curr['Close'] < curr['MA20'] and prev['Close'] >= prev['MA20']:
+                bearish_signals.append("帶量跌破20日月線防守")
+            if curr['MA5'] < curr['MA20'] < curr['MA60']:
+                bearish_signals.append("均線完整空頭排列")
+            if curr['Close'] < curr['BB_LOWER']:
+                bearish_signals.append("跌破布林下軌 (超跌/弱勢主跌)")
 
-                return {
-                    "symbol": symbol,
-                    "close": round(curr['Close'], 2),
-                    "change_pct": round((curr['Close'] - prev['Close']) / prev['Close'] * 100, 2),
-                    "volume": int(curr['Volume']),
-                    "score": score,
-                    "signals": signals,
-                    "stop_loss": suggested_stop_loss,
-                    "target_price": suggested_target,
-                    "risk_reward_ratio": "1 : 2.0"
-                }
-            return None
+            atr = curr['ATR'] if not np.isnan(curr['ATR']) else (curr['Close'] * 0.03)
+            suggested_stop_loss = round(curr['Close'] - (atr * PARAMS['atr_stop_loss_multiplier']), 2)
+            suggested_target = round(curr['Close'] + (atr * PARAMS['atr_stop_loss_multiplier'] * 2), 2)
+
+            return {
+                "symbol": symbol,
+                "close": round(curr['Close'], 2),
+                "change_pct": round((curr['Close'] - prev['Close']) / prev['Close'] * 100, 2),
+                "volume": int(curr['Volume']),
+                "score": score,
+                "signals": signals if signals else ["盤整觀望中"],
+                "bearish_signals": bearish_signals,
+                "is_weak": len(bearish_signals) > 0 or (curr['MA5'] < curr['MA20']),
+                "meets_threshold": score >= 50,
+                "stop_loss": suggested_stop_loss,
+                "target_price": suggested_target,
+                "risk_reward_ratio": "1 : 2.0"
+            }
         except Exception as e:
             print(f"[篩選略過] {symbol} 處理失敗: {e}")
             return None
 
-    def run_screener(self) -> List[Dict[str, Any]]:
-        """批次掃描選股池"""
-        results = []
+    def screen_stock(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """針對單一股票評估技術突破信號 (相容舊版介面)"""
+        res = self.evaluate_stock(symbol)
+        if res and res["meets_threshold"]:
+            return res
+        return None
+
+    def run_screener_detailed(self) -> Dict[str, Any]:
+        """
+        執行完整選股掃描，提供選股透明度與空頭避險閉環：
+        返回包含:
+        - scanned_count: 總掃描檔數
+        - qualified_count: 符合門檻檔數
+        - picks: 符合門檻 (score >= 50) 之多方強勢推薦標的
+        - near_picks: 若 0 檔符合，自動列出前 3 檔最接近門檻標的
+        - defense_hedges: 空頭防禦標的 (如破線轉弱空方標的或反向ETF 00632R)
+        """
+        all_evals = []
+        defense_candidates = []
         print(f"[*] 開始掃描台股選股池，共 {len(self.watchlist)} 檔標的...")
-        for symbol in self.watchlist:
-            res = self.screen_stock(symbol)
+        
+        # 額外將反向避險 ETF 00632R.TW (元大台灣50反1) 加入掃描
+        scan_pool = list(self.watchlist)
+        if "00632R.TW" not in scan_pool:
+            scan_pool.append("00632R.TW")
+
+        for symbol in scan_pool:
+            res = self.evaluate_stock(symbol)
             if res:
-                results.append(res)
-        # 依照評分高低排序
-        results.sort(key=lambda x: x['score'], reverse=True)
-        return results
+                all_evals.append(res)
+                if res["symbol"] == "00632R.TW" or res["is_weak"]:
+                    defense_candidates.append(res)
+
+        qualified = [e for e in all_evals if e["meets_threshold"] and e["symbol"] != "00632R.TW"]
+        qualified.sort(key=lambda x: x['score'], reverse=True)
+
+        all_evals.sort(key=lambda x: x['score'], reverse=True)
+        near_picks = all_evals[:3] if len(qualified) == 0 else []
+
+        defense_hedges = []
+        # 優先放入反向 ETF
+        for d in defense_candidates:
+            if d["symbol"] == "00632R.TW":
+                defense_hedges.insert(0, {
+                    "symbol": "00632R.TW (元大台灣50反1)",
+                    "close": d["close"],
+                    "change_pct": d["change_pct"],
+                    "reason": "大盤空頭防禦反向避險工具 (對沖系統性回檔風險)"
+                })
+            elif len(defense_hedges) < 3 and d["bearish_signals"]:
+                defense_hedges.append({
+                    "symbol": d["symbol"],
+                    "close": d["close"],
+                    "change_pct": d["change_pct"],
+                    "reason": f"破線轉弱: {', '.join(d['bearish_signals'])}"
+                })
+
+        return {
+            "scanned_count": len(scan_pool),
+            "qualified_count": len(qualified),
+            "picks": qualified,
+            "near_picks": near_picks,
+            "defense_hedges": defense_hedges
+        }
+
+    def run_screener(self) -> List[Dict[str, Any]]:
+        """批次掃描選股池 (回傳符合門檻或最接近門檻標的)"""
+        detailed = self.run_screener_detailed()
+        return detailed["picks"]
 
 if __name__ == "__main__":
     screener = StockScreener()

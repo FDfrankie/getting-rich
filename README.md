@@ -2,8 +2,8 @@
 ### Automated Multi-Market Quant Trading & ML/RL Research Platform
 
 歡迎來到本專案！這是一個專為全自動化獲利與量化投資策略開發打造的綜合研發系統，涵蓋了三大核心金融市場與量化平台：
-1. **台股大盤分析、多因子 ML 預測排序與每日 08:00 晨報系統 (`taiwan_stock/`)**
-2. **加密貨幣自動操盤、LightGBM 預測與 PyTorch PPO 深度強化學習引擎 (`crypto_trading/`)**
+1. **台股大盤分析、多因子 ML 預測排序與每日雙時段 (08:00 盤前 / 16:30 盤後) 決策報告系統 (`taiwan_stock/`)**
+2. **加密貨幣自動操盤、TradingView Lightweight Charts 專業看盤與 PyTorch PPO 深度強化學習引擎 (`crypto_trading/`, `web_ui/`)**
 3. **WorldQuant BRAIN 量化 Alpha 研發、變現模式與高通過率策略庫 (`worldquant_brain/`)**
 4. **雲端訓練 Kaggle Notebooks 庫 (`kaggle_notebooks/`)**
 
@@ -71,6 +71,7 @@
 │
 ├── docs/                          # 📚 核心講義、學術研究庫與操作指南
 │   ├── USER_ACTION_GUIDE.md       # 👤 使用者實務操作指南 (每日例行/Kaggle訓練/實盤轉移)
+│   ├── FILE_CLEANUP_AND_MERGE_REPORT.md # 🧹 檔案整理合併與冗餘清理紀錄
 │   ├── handbook/
 │   │   ├── QUANT_HANDBOOK.md      # 量化金融核心講義 Markdown
 │   │   ├── QUANT_HANDBOOK.html    # 排版美化 HTML (支援 KaTeX 公式與 PDF 列印)

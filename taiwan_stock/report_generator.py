@@ -18,35 +18,55 @@ class ReportGenerator:
         self.ml_ranker = TaiwanStockMLRanker(model_type="lightgbm")
         self.sync = GDrivePersistenceSync()
 
-    def generate(self) -> str:
+    def generate(self, session_type: str = "盤前晨報", cached_market_info: dict = None) -> str:
         today_str = datetime.now().strftime("%Y-%m-%d")
         now_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         print("[*] 正在進行大盤多空診斷...")
-        market_info = self.market_analyzer.analyze()
+        market_info = cached_market_info if cached_market_info else self.market_analyzer.analyze()
 
         print("[*] 正在掃描潛力強勢標的...")
-        picks = self.stock_screener.run_screener()
+        screener_res = self.stock_screener.run_screener_detailed()
+        scanned_count = screener_res["scanned_count"]
+        qualified_count = screener_res["qualified_count"]
+        picks = screener_res["picks"]
+        near_picks = screener_res["near_picks"]
+        defense_hedges = screener_res["defense_hedges"]
+
+        last_trade_date = market_info.get("date", today_str)
 
         report_lines = [
-            f"# 📊 台股早盤量化決策晨報 ({today_str})",
-            f"*生成時間: {now_time_str} | 系統: Antigravity Automated Quant Agent*",
+            f"# 📊 台股量化決策報告【{session_type}】({today_str})",
+            f"*最後交易日: {last_trade_date} | 產出時間: {now_time_str} (Asia/Taipei) | 系統: Antigravity Automated Quant Agent*",
             "",
             "---",
             "## 🧭 1. 大盤環境與多空溫度診斷",
             f"- **加權指數最新收盤**: `{market_info.get('latest_close', 'N/A')}` ({market_info.get('change_pct', 0):+0.2f}%)",
             f"- **關鍵均線狀況**: MA5=`{market_info.get('ma5')}` | MA20(月線)=`{market_info.get('ma20')}` | MA60(季線)=`{market_info.get('ma60')}`",
+            f"- **均線型態判定**: `{market_info.get('ma_pattern', '多空判斷')}`",
             f"- **多空評分**: **{market_info.get('score', 50)} / 100**",
             f"- **市場狀態**: **【{market_info.get('regime', '觀望')}】**",
             f"- **20日年化波動率**: `{market_info.get('volatility_20d', 0)}%`",
+            f"- **市場量能狀態**: `{market_info.get('volume_status', '正常')}`",
             f"- **操作方針**: > {market_info.get('suggestion', '無')}",
             "",
             "---",
-            "## 🎯 2. 今日主動精選潛力投資標的",
+            "## 🎯 2. 技術選股透明度與推薦標的",
+            f"**選股掃描統計**：已掃描 `{scanned_count}` 檔標的，符合突破門檻 `{qualified_count}` 檔。",
+            ""
         ]
 
         if not picks:
-            report_lines.append("> ⚠️ 今日篩選池中無標的同時滿足嚴格突破條件，建議持盈保泰、等待更好風險報酬比之時機。")
+            report_lines.append("> ⚠️ 今日篩選池中無標的完全符合突破門檻 (分數 >= 50 分)，系統啟動防守保護機制！")
+            if near_picks:
+                report_lines.append("\n### 🔍 前 3 檔最接近門檻標的 (密切追蹤名單)：")
+                report_lines.append("| 股票代碼 | 收盤價 | 漲跌幅 | 目前評分 | 觀察信號 | 建議防守停損 | 目標價位 |")
+                report_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+                for p in near_picks:
+                    sigs = "<br>".join(p['signals'])
+                    report_lines.append(
+                        f"| **{p['symbol']}** | {p['close']} | {p['change_pct']:+0.2f}% | **{p['score']}** | {sigs} | {p['stop_loss']} | {p['target_price']} |"
+                    )
         else:
             report_lines.append("| 股票代碼 | 收盤價 | 漲跌幅 | 量化評分 | 觸發技術信號 | 建議防守停損 | 目標價位 | 風險報酬比 |")
             report_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
@@ -55,6 +75,17 @@ class ReportGenerator:
                 report_lines.append(
                     f"| **{p['symbol']}** | {p['close']} | {p['change_pct']:+0.2f}% | **{p['score']}** | {sigs} | {p['stop_loss']} | {p['target_price']} | {p['risk_reward_ratio']} |"
                 )
+
+        # 空頭避險閉環區塊
+        if market_info.get('score', 50) <= 50 or defense_hedges:
+            report_lines.extend([
+                "",
+                "### 🛡️ 空頭避險與轉弱標的監控清單 (Hedging & Defense)",
+                "| 避險/弱勢標的 | 最新收盤 | 漲跌幅 | 避險原因與破線警訊 |",
+                "| :--- | :--- | :--- | :--- |"
+            ])
+            for d in defense_hedges:
+                report_lines.append(f"| **{d['symbol']}** | {d['close']} | {d['change_pct']:+0.2f}% | {d['reason']} |")
 
         # 區塊 3: 機器學習多因子 Alpha 排名
         print("[*] 正在運行 ML 多因子預測排序模型...")
@@ -125,18 +156,27 @@ class ReportGenerator:
         print(f"[✓] 晨報已成功生成並存檔至: {report_path}")
         return report_content
 
-    def generate_html_report(self) -> str:
+    def generate_html_report(self, session_type: str = "盤前晨報", cached_market_info: dict = None) -> str:
         """
-        生成具備精緻視覺排版、色彩標籤、多空燈號與響應式表格的晨報 HTML 視圖
+        生成具備精緻視覺排版、色彩標籤、多空燈號與響應式表格的報告 HTML 視圖
+        支援渲染為 HTML/PDF 格式，顯示產出時間與最後交易日
         """
         today_str = datetime.now().strftime("%Y-%m-%d")
         now_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        market_info = self.market_analyzer.analyze()
-        picks = self.stock_screener.run_screener()
+        market_info = cached_market_info if cached_market_info else self.market_analyzer.analyze()
+        screener_res = self.stock_screener.run_screener_detailed()
+        scanned_count = screener_res["scanned_count"]
+        qualified_count = screener_res["qualified_count"]
+        picks = screener_res["picks"]
+        near_picks = screener_res["near_picks"]
+        defense_hedges = screener_res["defense_hedges"]
+
         score = market_info.get('score', 50)
         regime = market_info.get('regime', '震盪整理')
-        
+        last_trade_date = market_info.get("date", today_str)
+        ma_pattern = market_info.get("ma_pattern", "均線架構判斷中")
+
         # 燈號顏色邏輯
         if score >= 70:
             badge_class = "bg-rose-500/20 text-rose-400 border border-rose-500/30"
@@ -149,17 +189,17 @@ class ReportGenerator:
             light_icon = "🟡 中性震盪盤整"
 
         html = f"""
-        <div class="space-y-6 text-slate-100 font-sans">
+        <div class="space-y-6 text-slate-100 font-sans print:text-black">
             <!-- 頂部 Header 卡片 -->
             <div class="bg-gradient-to-r from-slate-900 to-indigo-950/80 border border-indigo-500/30 rounded-2xl p-5 shadow-2xl">
                 <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
                     <div>
                         <div class="flex items-center space-x-2">
                             <span class="px-2.5 py-0.5 rounded-full text-xs font-bold {badge_class}">{light_icon}</span>
-                            <span class="text-xs text-slate-400 font-mono">📅 {today_str} 早盤 08:00 發布</span>
+                            <span class="text-xs text-slate-400 font-mono">📅 最後交易日: {last_trade_date}</span>
                         </div>
-                        <h2 class="text-2xl font-black mt-2 text-white tracking-wide">台股早盤量化決策晨報</h2>
-                        <p class="text-xs text-slate-400 mt-1">產出時間: {now_time_str} | Antigravity AI Quantitative Core</p>
+                        <h2 class="text-2xl font-black mt-2 text-white tracking-wide">台股量化決策報告【{session_type}】</h2>
+                        <p class="text-xs text-slate-400 mt-1">產出時間: {now_time_str} (Asia/Taipei) | Antigravity AI Quantitative Core</p>
                     </div>
                     <div class="text-right bg-slate-950/60 p-3 rounded-xl border border-slate-800">
                         <span class="text-[11px] text-slate-400">大盤多空能量指數</span>
@@ -174,11 +214,13 @@ class ReportGenerator:
                     <span class="text-xs text-slate-400">加權指數最新點位</span>
                     <div class="text-xl font-bold text-white mt-1">{market_info.get('latest_close', 'N/A')} <span class="text-xs {'text-rose-400' if market_info.get('change_pct',0)>=0 else 'text-emerald-400'}">({market_info.get('change_pct',0):+0.2f}%)</span></div>
                     <div class="text-[11px] text-slate-500 mt-1">MA5: {market_info.get('ma5')} | MA20: {market_info.get('ma20')}</div>
+                    <div class="text-[11px] text-indigo-400 mt-0.5">{ma_pattern}</div>
                 </div>
                 <div class="bg-slate-900/90 border border-slate-800 p-4 rounded-xl">
                     <span class="text-xs text-slate-400">市場狀態判定</span>
                     <div class="text-xl font-bold text-amber-400 mt-1">【{regime}】</div>
                     <div class="text-[11px] text-slate-500 mt-1">20日年化波動率: {market_info.get('volatility_20d', 0)}%</div>
+                    <div class="text-[11px] text-emerald-400 mt-0.5">量能: {market_info.get('volume_status', '正常')}</div>
                 </div>
                 <div class="bg-slate-900/90 border border-slate-800 p-4 rounded-xl">
                     <span class="text-xs text-slate-400">今日操盤方針</span>
@@ -193,7 +235,7 @@ class ReportGenerator:
                         <span class="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
                         <span>🎯 今日主動量化強勢突破選股池</span>
                     </h3>
-                    <span class="text-xs text-slate-400 font-mono">共掃描 {len(picks)} 檔強勢股</span>
+                    <span class="text-xs text-slate-400 font-mono">已掃描 {scanned_count} 檔，符合門檻 {qualified_count} 檔</span>
                 </div>
                 <div class="overflow-x-auto">
                     <table class="w-full text-left text-xs">
@@ -213,11 +255,28 @@ class ReportGenerator:
         """
 
         if not picks:
-            html += """
+            html += f"""
                             <tr>
-                                <td colspan="8" class="text-center py-6 text-slate-500 font-sans">今日無標的完全符合突破門檻，建議持盈保泰、等待更佳風險報酬比。</td>
+                                <td colspan="8" class="text-center py-4 text-amber-400 font-sans bg-amber-950/20">
+                                    ⚠️ 今日篩選池中無標的完全符合突破門檻 (分數 &ge; 50 分)，系統啟動防守保護機制！以下為最接近門檻標的：
+                                </td>
                             </tr>
             """
+            for p in near_picks:
+                change_color = "text-rose-400 font-bold" if p['change_pct'] >= 0 else "text-emerald-400 font-bold"
+                sigs = " ".join([f"<span class='px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px] mr-1'>{s}</span>" for s in p['signals']])
+                html += f"""
+                            <tr class="hover:bg-slate-800/40 transition">
+                                <td class="py-2.5 px-3 font-bold text-white font-sans">{p['symbol']} <span class="text-[10px] text-amber-400">(觀察中)</span></td>
+                                <td class="py-2.5 px-3 text-slate-200">${p['close']}</td>
+                                <td class="py-2.5 px-3 {change_color}">{p['change_pct']:+0.2f}%</td>
+                                <td class="py-2.5 px-3"><span class="px-2 py-0.5 rounded-full bg-slate-800 text-amber-400 font-bold">{p['score']}分</span></td>
+                                <td class="py-2.5 px-3 font-sans">{sigs}</td>
+                                <td class="py-2.5 px-3 text-emerald-400">${p['stop_loss']}</td>
+                                <td class="py-2.5 px-3 text-amber-300">${p['target_price']}</td>
+                                <td class="py-2.5 px-3 text-slate-400 font-bold">{p['risk_reward_ratio']}</td>
+                            </tr>
+                """
         else:
             for p in picks:
                 change_color = "text-rose-400 font-bold" if p['change_pct'] >= 0 else "text-emerald-400 font-bold"
@@ -232,6 +291,44 @@ class ReportGenerator:
                                 <td class="py-2.5 px-3 text-emerald-400">${p['stop_loss']}</td>
                                 <td class="py-2.5 px-3 text-amber-300">${p['target_price']}</td>
                                 <td class="py-2.5 px-3 text-indigo-300 font-bold">{p['risk_reward_ratio']}</td>
+                            </tr>
+                """
+
+        # 空頭防禦避險標的表格
+        if defense_hedges:
+            html += f"""
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 空頭防禦與轉弱標的表格 -->
+            <div class="bg-slate-900/90 border border-rose-500/30 rounded-xl p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="font-bold text-sm text-rose-300 flex items-center space-x-2">
+                        <i class="fa-solid fa-shield-halved text-rose-400"></i>
+                        <span>🛡️ 空頭避險與破線轉弱標的監控清單 (Hedging & Defense)</span>
+                    </h3>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="text-slate-400 border-b border-slate-800 bg-slate-950/50">
+                            <tr>
+                                <th class="py-2.5 px-3">避險 / 弱勢標的</th>
+                                <th class="py-2.5 px-3">最新價</th>
+                                <th class="py-2.5 px-3">漲跌幅</th>
+                                <th class="py-2.5 px-3">避險原因與破線警訊</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800/60 font-mono">
+            """
+            for d in defense_hedges:
+                html += f"""
+                            <tr class="hover:bg-slate-800/40 transition">
+                                <td class="py-2.5 px-3 font-bold text-amber-300 font-sans">{d['symbol']}</td>
+                                <td class="py-2.5 px-3 text-slate-200">${d['close']}</td>
+                                <td class="py-2.5 px-3 {'text-rose-400' if d['change_pct']>=0 else 'text-emerald-400'} font-bold">{d['change_pct']:+0.2f}%</td>
+                                <td class="py-2.5 px-3 text-slate-300 font-sans">{d['reason']}</td>
                             </tr>
                 """
 

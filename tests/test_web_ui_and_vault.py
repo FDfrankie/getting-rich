@@ -140,6 +140,20 @@ class TestWebUIAndServices(unittest.TestCase):
             self.assertTrue(data["success"])
             self.assertIn("html_content", data)
 
+        # 6. TradingView Lightweight Charts K 線即時行情 API (支援加密與台股)
+        with urlopen(f"{base_url}/api/crypto/klines?symbol=BTC/USDT&interval=1m") as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(data["success"])
+            self.assertIn("candles", data)
+            self.assertIn("overlay", data)
+            self.assertIn("markers", data)
+            self.assertGreater(len(data["candles"]), 0)
+
+        with urlopen(f"{base_url}/api/crypto/klines?symbol=2330.TW&interval=1d") as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            self.assertTrue(data["success"])
+            self.assertIn("candles", data)
+
     def test_06_crypto_order_via_api(self):
         """測試透過 API 提交下單與平倉指令"""
         base_url = f"http://127.0.0.1:{self.test_port}"

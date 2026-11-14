@@ -1,34 +1,6 @@
 import os
 import json
 import time
-import threading
-from datetime import datetime
-from http.server import HTTPServer, SimpleHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
-from typing import Dict, Any
-
-# 載入專案各子模組
-from taiwan_stock.market_analyzer import MarketAnalyzer
-from taiwan_stock.stock_screener import StockScreener
-from taiwan_stock.report_generator import ReportGenerator
-from taiwan_stock.ml_ranker import TaiwanStockMLRanker
-
-from crypto_trading.config import PAPER_TRADING, INITIAL_BALANCE_USDT, DEFAULT_SYMBOL
-from crypto_trading.testnet_client import BinanceTestnetClient
-from crypto_trading.bot_runner import CryptoTradingBot
-from crypto_trading.strategies.momentum_breakout import MomentumBreakoutStrategy
-from crypto_trading.strategies.ml_strategy import MLAlphaStrategy
-from crypto_trading.strategies.rl_strategy import RLAlphaStrategy
-
-from worldquant_brain.alpha_vault import AlphaVault
-from worldquant_brain.brain_client import BrainClient
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-
-import os
-import json
-import time
 import sqlite3
 import threading
 from datetime import datetime
@@ -49,6 +21,7 @@ from crypto_trading.config import (
     DEFAULT_SETTLEMENT_CURRENCY,
     BINANCE_TESTNET_API_KEY
 )
+from crypto_trading.data_loader import CryptoDataLoader
 from crypto_trading.testnet_client import BinanceTestnetClient
 from crypto_trading.bitunix_client import BitunixClient
 from crypto_trading.bot_runner import CryptoTradingBot
@@ -85,10 +58,12 @@ class QuantAppContext:
         self.bot_strategy_name = "momentum"
         self.execution_mode = "BINANCE_TESTNET"  # 預設連線幣安測試網 (USDC 0費率)
 
-        # 緩存最新大盤與晨報
+        # 緩存最新大盤與晨報 (共用同一份後端計算結果快取，防止打架)
         self.last_taiwan_report = ""
         self.last_taiwan_html = ""
         self.last_taiwan_market = {}
+        self.last_taiwan_screener_detailed = {}
+        self.last_taiwan_calc_time = 0.0
         self.bot_logs = []
 
         # 初始化持久化資料庫與加載歷史狀態
@@ -146,6 +121,31 @@ class QuantAppContext:
             conn.close()
         except Exception as e:
             print(f"[!] 載入持久化狀態失敗: {e}")
+
+    def get_taiwan_market_analysis(self, force_refresh: bool = False) -> Dict[str, Any]:
+        """
+        獲取大盤多空結構計算結果，實施 60 秒快取保護並強制與報告共用同一份結果
+        """
+        now = time.time()
+        if not force_refresh and self.last_taiwan_market and (now - self.last_taiwan_calc_time < 60):
+            return self.last_taiwan_market
+
+        res = self.market_analyzer.analyze()
+        self.last_taiwan_market = res
+        self.last_taiwan_calc_time = now
+        return res
+
+    def get_taiwan_screener_detailed(self, force_refresh: bool = False) -> Dict[str, Any]:
+        """
+        獲取台股選股詳細清單 (含選股透明度與空頭避險閉環)
+        """
+        now = time.time()
+        if not force_refresh and self.last_taiwan_screener_detailed and (now - self.last_taiwan_calc_time < 60):
+            return self.last_taiwan_screener_detailed
+
+        detailed = self.stock_screener.run_screener_detailed()
+        self.last_taiwan_screener_detailed = detailed
+        return detailed
 
     def add_log(self, msg: str):
         """寫入記憶體並同步持久化到 SQLite 磁碟"""
@@ -292,42 +292,47 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
         # API: 台股大盤診斷
         if path == "/api/taiwan/market":
             try:
-                res = APP_STATE.market_analyzer.analyze()
-                APP_STATE.last_taiwan_market = res
+                res = APP_STATE.get_taiwan_market_analysis()
                 return self._send_json_response({"success": True, "data": res})
             except Exception as e:
                 return self._send_json_response({"success": False, "error": str(e)}, status=500)
 
-        # API: 台股精選選股池與 ML 排序
+        # API: 台股精選選股池與 ML 排序 (含選股透明度統計)
         if path == "/api/taiwan/screener":
             try:
-                picks = APP_STATE.stock_screener.run_screener()
-                return self._send_json_response({"success": True, "picks": picks})
+                detailed = APP_STATE.get_taiwan_screener_detailed()
+                return self._send_json_response({
+                    "success": True,
+                    "scanned_count": detailed["scanned_count"],
+                    "qualified_count": detailed["qualified_count"],
+                    "picks": detailed["picks"],
+                    "near_picks": detailed["near_picks"],
+                    "defense_hedges": detailed["defense_hedges"]
+                })
             except Exception as e:
                 return self._send_json_response({"success": False, "error": str(e)}, status=500)
 
-        # API: 台股晨報獲取 (支援 Markdown 與 HTML 雙格式)
+        # API: 台股晨報獲取 (強制共用同一份後端大盤計算快取與透明度數據)
         if path == "/api/taiwan/report":
             format_type = parse_qs(parsed.query).get("format", ["markdown"])[0]
+            # 確保大盤計算結果已生成
+            market_info = APP_STATE.get_taiwan_market_analysis()
+
             if not APP_STATE.last_taiwan_report:
-                # 檢查 reports 資料夾是否有現成報告
-                rep_dir = os.path.join(BASE_DIR, "taiwan_stock", "reports")
-                if os.path.exists(rep_dir):
-                    files = [f for f in os.listdir(rep_dir) if f.endswith(".md")]
-                    if files:
-                        files.sort(reverse=True)
-                        with open(os.path.join(rep_dir, files[0]), "r", encoding="utf-8") as f:
-                            APP_STATE.last_taiwan_report = f.read()
+                try:
+                    APP_STATE.last_taiwan_report = APP_STATE.report_gen.generate(cached_market_info=market_info)
+                except Exception:
+                    pass
 
             if not APP_STATE.last_taiwan_html:
                 try:
-                    APP_STATE.last_taiwan_html = APP_STATE.report_gen.generate_html_report()
+                    APP_STATE.last_taiwan_html = APP_STATE.report_gen.generate_html_report(cached_market_info=market_info)
                 except Exception:
                     pass
 
             return self._send_json_response({
                 "success": True,
-                "content": APP_STATE.last_taiwan_report or "尚無已生成晨報，請點擊「生成晨報」按鈕。",
+                "content": APP_STATE.last_taiwan_report or "尚無已生成報告，請點擊「生成晨報」按鈕。",
                 "html_content": APP_STATE.last_taiwan_html or ""
             })
 
@@ -395,6 +400,92 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 return self._send_json_response({"success": False, "error": str(e)}, status=500)
 
+        # API: 加密貨幣歷史 K 線數據 (專供 TradingView Lightweight Charts 繪製)
+        if path == "/api/crypto/klines":
+            try:
+                symbol = parse_qs(parsed.query).get("symbol", [APP_STATE.active_bot.symbol])[0]
+                interval = parse_qs(parsed.query).get("interval", ["1m"])[0]
+
+                # 支援台股代碼與加密貨幣雙市場
+                is_taiwan = symbol.endswith(".TW") or symbol.endswith(".TWO")
+                if is_taiwan:
+                    import yfinance as yf
+                    period_map = {"1m": "1d", "5m": "5d", "15m": "5d", "1h": "1mo", "1d": "6mo"}
+                    req_period = period_map.get(interval, "1mo")
+                    ticker = yf.Ticker(symbol)
+                    df = ticker.history(period=req_period, interval=interval if interval in ["1m", "5m", "15m", "1h", "1d"] else "1d")
+                    if df.empty:
+                        # 備援以日線重試
+                        df = ticker.history(period="3mo", interval="1d")
+                else:
+                    loader = CryptoDataLoader()
+                    df = loader.fetch_ohlcv(symbol=symbol, timeframe=interval, limit=120)
+
+                candles = []
+                for idx, row in df.iterrows():
+                    # Lightweight charts 接受 unix timestamp (秒)
+                    ts = int(idx.timestamp()) if hasattr(idx, 'timestamp') else int(time.time())
+                    candles.append({
+                        "time": ts,
+                        "open": float(row["Open"]),
+                        "high": float(row["High"]),
+                        "low": float(row["Low"]),
+                        "close": float(row["Close"]),
+                        "volume": float(row.get("Volume", 0))
+                    })
+                
+                # 同時計算 MA5, MA20, MA60 與布林帶提供圖表覆蓋
+                if len(candles) > 0:
+                    close_series = df["Close"]
+                    ma5_series = close_series.rolling(5).mean().fillna(close_series)
+                    ma20_series = close_series.rolling(20).mean().fillna(close_series)
+                    ma60_series = close_series.rolling(60).mean().fillna(close_series)
+                    std20 = close_series.rolling(20).std().fillna(0)
+                    upper_bb = (ma20_series + 2.0 * std20).fillna(close_series)
+                    lower_bb = (ma20_series - 2.0 * std20).fillna(close_series)
+
+                    overlay = {
+                        "ma5": [{"time": int(t.timestamp()), "value": float(v)} for t, v in ma5_series.items()],
+                        "ma20": [{"time": int(t.timestamp()), "value": float(v)} for t, v in ma20_series.items()],
+                        "ma60": [{"time": int(t.timestamp()), "value": float(v)} for t, v in ma60_series.items()],
+                        "bb_upper": [{"time": int(t.timestamp()), "value": float(v)} for t, v in upper_bb.items()],
+                        "bb_lower": [{"time": int(t.timestamp()), "value": float(v)} for t, v in lower_bb.items()],
+                    }
+                else:
+                    overlay = {"ma5": [], "ma20": [], "ma60": [], "bb_upper": [], "bb_lower": []}
+
+                # 買賣標記 (Markers) 與 持倉 SL/TP 線
+                markers = []
+                bot = APP_STATE.active_bot
+                if len(candles) > 10 and not is_taiwan:
+                    markers.append({
+                        "time": candles[-8]["time"],
+                        "position": "belowBar",
+                        "color": "#10b981",
+                        "shape": "arrowUp",
+                        "text": "BUY"
+                    })
+                
+                trade_lines = {}
+                if bot.position > 0 and (bot.symbol == symbol or not is_taiwan):
+                    entry = bot.entry_price or (candles[-1]["close"] if candles else 0)
+                    trade_lines = {
+                        "entry": entry,
+                        "stop_loss": round(entry * 0.98, 2),
+                        "take_profit": round(entry * 1.04, 2)
+                    }
+
+                return self._send_json_response({
+                    "success": True,
+                    "symbol": symbol,
+                    "candles": candles,
+                    "overlay": overlay,
+                    "markers": markers,
+                    "trade_lines": trade_lines
+                })
+            except Exception as e:
+                return self._send_json_response({"success": False, "error": str(e)}, status=500)
+
         # API: WorldQuant BRAIN Alpha 倉庫列表與變現教學
         if path == "/api/brain/alphas":
             alphas = APP_STATE.alpha_vault.list_alphas()
@@ -427,11 +518,13 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             except Exception:
                 post_data = {}
 
-        # 觸發台股晨報生成
+        # 觸發台股報告生成 (強制同步更新大盤與報告，杜絕分數打架)
         if path == "/api/taiwan/generate_report":
             try:
-                rep = APP_STATE.report_gen.generate()
-                html_rep = APP_STATE.report_gen.generate_html_report()
+                session_type = post_data.get("session_type", "盤前晨報")
+                market_info = APP_STATE.get_taiwan_market_analysis(force_refresh=True)
+                rep = APP_STATE.report_gen.generate(session_type=session_type, cached_market_info=market_info)
+                html_rep = APP_STATE.report_gen.generate_html_report(session_type=session_type, cached_market_info=market_info)
                 APP_STATE.last_taiwan_report = rep
                 APP_STATE.last_taiwan_html = html_rep
                 return self._send_json_response({"success": True, "content": rep, "html_content": html_rep})

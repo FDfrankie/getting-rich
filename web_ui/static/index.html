@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Antigravity 全方位量化操盤平台</title>
+  <!-- TradingView Lightweight Charts (v4.x CDN) -->
+  <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- FontAwesome Icons -->
@@ -161,6 +163,80 @@
           <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
             <p class="text-xs text-slate-400 font-medium">未平倉損益 (PnL)</p>
             <p id="cryptoPnL" class="text-lg md:text-2xl font-black text-slate-400 mt-1">+0.00 <span class="text-xs font-normal text-slate-400">USDT</span></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- TradingView Lightweight Charts 深色操盤室專業 K 線圖卡片 -->
+      <div class="glass-card rounded-2xl p-4 md:p-5 shadow-xl space-y-3">
+        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+          <div class="flex items-center space-x-3">
+            <span class="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></span>
+            <div>
+              <h3 class="font-black text-base text-white tracking-wide flex items-center space-x-2">
+                <span id="chartSymbolTitle">BTC/USDT 永續</span>
+                <span id="chartTimeframeBadge" class="text-[11px] px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono">1m</span>
+              </h3>
+              <p class="text-[11px] text-slate-400">專業級 Lightweight Charts | 十字準線 OHLCV、MA5/20/60、布林通道與成交量</p>
+            </div>
+          </div>
+
+          <!-- 圖表標的與週期切換 -->
+          <div class="flex flex-wrap items-center gap-2">
+            <!-- 標的選擇 -->
+            <select id="chartSymbolSelect" onchange="switchChartSymbol(this.value)" class="bg-slate-900 border border-slate-700 text-xs rounded-xl px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-indigo-500 font-mono">
+              <option value="BTC/USDT" selected>BTC/USDT (比特幣)</option>
+              <option value="ETH/USDT">ETH/USDT (以太幣)</option>
+              <option value="SOL/USDT">SOL/USDT (索拉納)</option>
+              <option value="2330.TW">2330.TW (台積電)</option>
+              <option value="2454.TW">2454.TW (聯發科)</option>
+              <option value="2317.TW">2317.TW (鴻海)</option>
+              <option value="00632R.TW">00632R.TW (台灣50反1)</option>
+            </select>
+
+            <!-- 週期切換 -->
+            <div class="flex items-center bg-slate-900 rounded-xl p-1 border border-slate-800 text-xs font-mono">
+              <button onclick="setChartInterval('1m')" id="btn-int-1m" class="px-2 py-1 rounded-lg font-bold bg-indigo-600 text-white">1m</button>
+              <button onclick="setChartInterval('5m')" id="btn-int-5m" class="px-2 py-1 rounded-lg text-slate-400 hover:text-white">5m</button>
+              <button onclick="setChartInterval('15m')" id="btn-int-15m" class="px-2 py-1 rounded-lg text-slate-400 hover:text-white">15m</button>
+              <button onclick="setChartInterval('1h')" id="btn-int-1h" class="px-2 py-1 rounded-lg text-slate-400 hover:text-white">1h</button>
+              <button onclick="setChartInterval('1d')" id="btn-int-1d" class="px-2 py-1 rounded-lg text-slate-400 hover:text-white">1d</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- OHLC 浮動即時報價條 (十字準線連動) -->
+        <div id="chartLegend" class="flex flex-wrap items-center gap-3 text-xs font-mono bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
+          <span class="text-slate-400">開盤: <strong id="legendOpen" class="text-white">--</strong></span>
+          <span class="text-slate-400">最高: <strong id="legendHigh" class="text-emerald-400">--</strong></span>
+          <span class="text-slate-400">最低: <strong id="legendLow" class="text-rose-400">--</strong></span>
+          <span class="text-slate-400">收盤: <strong id="legendClose" class="text-white">--</strong></span>
+          <span class="text-slate-400">成交量: <strong id="legendVolume" class="text-indigo-300">--</strong></span>
+          <span class="hidden sm:inline text-slate-600">|</span>
+          <span class="text-yellow-400">MA5: <strong id="legendMA5">--</strong></span>
+          <span class="text-blue-400">MA20: <strong id="legendMA20">--</strong></span>
+          <span class="text-purple-400">MA60: <strong id="legendMA60">--</strong></span>
+        </div>
+
+        <!-- K 線圖 DOM 容器 (高度 400px) -->
+        <div id="tvChartContainer" class="w-full h-[400px] rounded-xl overflow-hidden bg-slate-950 relative border border-slate-900">
+          <div id="chartLoading" class="absolute inset-0 flex items-center justify-center bg-slate-950/80 z-10 text-indigo-400 text-xs font-bold">
+            <i class="fa-solid fa-spinner animate-spin mr-2"></i> 正在加載 Lightweight Charts 即時行情...
+          </div>
+        </div>
+
+        <!-- 圖例說明條 -->
+        <div class="flex flex-wrap items-center justify-between text-[11px] text-slate-400 pt-1">
+          <div class="flex items-center space-x-4">
+            <span class="flex items-center"><span class="w-2.5 h-0.5 bg-yellow-400 mr-1.5"></span>MA5 短期均線</span>
+            <span class="flex items-center"><span class="w-2.5 h-0.5 bg-blue-400 mr-1.5"></span>MA20 月線</span>
+            <span class="flex items-center"><span class="w-2.5 h-0.5 bg-purple-400 mr-1.5"></span>MA60 季線</span>
+            <span class="flex items-center"><span class="w-2.5 h-0.5 bg-indigo-500/50 mr-1.5"></span>布林上下軌</span>
+          </div>
+          <div class="flex items-center space-x-3 text-emerald-400">
+            <span>▲ 綠箭頭: 買進信號 (Marker)</span>
+            <span class="text-rose-400">▼ 紅虛線: 防守停損線 (SL)</span>
+            <span class="text-amber-400">★ 藍虛線: 目標價線 (TP)</span>
           </div>
         </div>
       </div>
@@ -640,6 +716,249 @@
     let isBotRunning = false;
 
     // 分頁切換
+    // 1. TradingView Lightweight Charts 全域實例與圖表引擎
+    let tvChart = null;
+    let candleSeries = null;
+    let volumeSeries = null;
+    let ma5Line = null;
+    let ma20Line = null;
+    let ma60Line = null;
+    let bbUpperLine = null;
+    let bbLowerLine = null;
+    let currentChartSymbol = 'BTC/USDT';
+    let currentChartInterval = '1m';
+    let chartPollingTimer = null;
+    let activePriceLines = [];
+
+    function initLightweightChart() {
+      const container = document.getElementById('tvChartContainer');
+      if (!container || !window.LightweightCharts) return;
+
+      if (tvChart) {
+        tvChart.remove();
+        tvChart = null;
+      }
+
+      tvChart = LightweightCharts.createChart(container, {
+        width: container.clientWidth,
+        height: 400,
+        layout: {
+          background: { color: '#090d16' },
+          textColor: '#94a3b8',
+          fontSize: 11,
+          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+        },
+        grid: {
+          vertLines: { color: 'rgba(51, 65, 85, 0.25)' },
+          horzLines: { color: 'rgba(51, 65, 85, 0.25)' }
+        },
+        crosshair: {
+          mode: LightweightCharts.CrosshairMode.Normal,
+          vertLine: { color: '#6366f1', width: 1, style: 2, labelBackgroundColor: '#4f46e5' },
+          horzLine: { color: '#6366f1', width: 1, style: 2, labelBackgroundColor: '#4f46e5' }
+        },
+        rightPriceScale: {
+          borderColor: '#1e293b',
+          scaleMargins: { top: 0.1, bottom: 0.2 }
+        },
+        timeScale: {
+          borderColor: '#1e293b',
+          timeVisible: true,
+          secondsVisible: false
+        }
+      });
+
+      // K 線圖主體
+      candleSeries = tvChart.addCandlestickSeries({
+        upColor: '#10b981',
+        downColor: '#f43f5e',
+        borderVisible: false,
+        wickUpColor: '#10b981',
+        wickDownColor: '#f43f5e'
+      });
+
+      // 成交量柱狀圖 (獨立比例尺)
+      volumeSeries = tvChart.addHistogramSeries({
+        color: '#3b82f6',
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'volume_scale'
+      });
+      tvChart.priceScale('volume_scale').applyOptions({
+        scaleMargins: { top: 0.8, bottom: 0 },
+      });
+
+      // 疊加技術指標: MA5 (黃), MA20 (藍), MA60 (紫), BB 上下軌
+      ma5Line = tvChart.addLineSeries({ color: '#facc15', lineWidth: 1, title: 'MA5' });
+      ma20Line = tvChart.addLineSeries({ color: '#38bdf8', lineWidth: 1.5, title: 'MA20' });
+      ma60Line = tvChart.addLineSeries({ color: '#c084fc', lineWidth: 1, title: 'MA60' });
+      bbUpperLine = tvChart.addLineSeries({ color: 'rgba(99, 102, 241, 0.4)', lineWidth: 1, lineStyle: 2, title: 'BB Upper' });
+      bbLowerLine = tvChart.addLineSeries({ color: 'rgba(99, 102, 241, 0.4)', lineWidth: 1, lineStyle: 2, title: 'BB Lower' });
+
+      // 十字準線數值連動更新 Legend
+      tvChart.subscribeCrosshairMove(param => {
+        if (!param || !param.time || !param.seriesData) return;
+        const candle = param.seriesData.get(candleSeries);
+        const vol = param.seriesData.get(volumeSeries);
+        const ma5Val = param.seriesData.get(ma5Line);
+        const ma20Val = param.seriesData.get(ma20Line);
+        const ma60Val = param.seriesData.get(ma60Line);
+
+        if (candle) {
+          document.getElementById('legendOpen').innerText = candle.open.toFixed(2);
+          document.getElementById('legendHigh').innerText = candle.high.toFixed(2);
+          document.getElementById('legendLow').innerText = candle.low.toFixed(2);
+          document.getElementById('legendClose').innerText = candle.close.toFixed(2);
+        }
+        if (vol) {
+          document.getElementById('legendVolume').innerText = vol.value.toLocaleString();
+        }
+        if (ma5Val) document.getElementById('legendMA5').innerText = ma5Val.value.toFixed(2);
+        if (ma20Val) document.getElementById('legendMA20').innerText = ma20Val.value.toFixed(2);
+        if (ma60Val) document.getElementById('legendMA60').innerText = ma60Val.value.toFixed(2);
+      });
+
+      window.addEventListener('resize', () => {
+        if (tvChart && container) {
+          tvChart.applyOptions({ width: container.clientWidth });
+        }
+      });
+    }
+
+    async function loadChartData() {
+      const loading = document.getElementById('chartLoading');
+      if (loading) loading.classList.remove('hidden');
+
+      try {
+        const res = await fetch(`/api/crypto/klines?symbol=${encodeURIComponent(currentChartSymbol)}&interval=${currentChartInterval}`);
+        const d = await res.json();
+        if (d.success && d.candles && d.candles.length > 0) {
+          if (!tvChart) initLightweightChart();
+
+          // 填入 K 線
+          candleSeries.setData(d.candles.map(c => ({
+            time: c.time,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close
+          })));
+
+          // 填入成交量
+          volumeSeries.setData(d.candles.map(c => ({
+            time: c.time,
+            value: c.volume,
+            color: c.close >= c.open ? 'rgba(16, 185, 129, 0.4)' : 'rgba(244, 63, 94, 0.4)'
+          })));
+
+          // 填入指標線
+          if (d.overlay) {
+            if (d.overlay.ma5) ma5Line.setData(d.overlay.ma5);
+            if (d.overlay.ma20) ma20Line.setData(d.overlay.ma20);
+            if (d.overlay.ma60) ma60Line.setData(d.overlay.ma60);
+            if (d.overlay.bb_upper) bbUpperLine.setData(d.overlay.bb_upper);
+            if (d.overlay.bb_lower) bbLowerLine.setData(d.overlay.bb_lower);
+          }
+
+          // 填入 Markers (買賣箭頭標記)
+          if (d.markers && d.markers.length > 0) {
+            candleSeries.setMarkers(d.markers);
+          }
+
+          // 填入持倉線 (成本線、防守停損 SL、目標價 TP)
+          // 先清理舊價格線，防止每 5 秒重複累加
+          if (activePriceLines && activePriceLines.length > 0) {
+            activePriceLines.forEach(pl => {
+              try { candleSeries.removePriceLine(pl); } catch (e) {}
+            });
+            activePriceLines = [];
+          }
+          if (d.trade_lines && d.trade_lines.entry) {
+            const entryLine = candleSeries.createPriceLine({
+              price: d.trade_lines.entry,
+              color: '#38bdf8',
+              lineWidth: 1.5,
+              lineStyle: 0,
+              axisLabelVisible: true,
+              title: 'ENTRY 成本'
+            });
+            const slLine = candleSeries.createPriceLine({
+              price: d.trade_lines.stop_loss,
+              color: '#f43f5e',
+              lineWidth: 1.5,
+              lineStyle: 2,
+              axisLabelVisible: true,
+              title: 'SL 停損'
+            });
+            const tpLine = candleSeries.createPriceLine({
+              price: d.trade_lines.take_profit,
+              color: '#34d399',
+              lineWidth: 1.5,
+              lineStyle: 2,
+              axisLabelVisible: true,
+              title: 'TP 目標'
+            });
+            activePriceLines.push(entryLine, slLine, tpLine);
+          }
+
+          // 填入最新收盤資訊至 Legend
+          const lastCandle = d.candles[d.candles.length - 1];
+          document.getElementById('legendOpen').innerText = lastCandle.open.toFixed(2);
+          document.getElementById('legendHigh').innerText = lastCandle.high.toFixed(2);
+          document.getElementById('legendLow').innerText = lastCandle.low.toFixed(2);
+          document.getElementById('legendClose').innerText = lastCandle.close.toFixed(2);
+          document.getElementById('legendVolume').innerText = lastCandle.volume.toLocaleString();
+
+          document.getElementById('chartSymbolTitle').innerText = `${currentChartSymbol} 即時走勢`;
+        }
+      } catch (err) {
+        console.error("載入 K 線圖表異常:", err);
+      } finally {
+        if (loading) loading.classList.add('hidden');
+      }
+    }
+
+    function switchChartSymbol(sym) {
+      currentChartSymbol = sym;
+      const select = document.getElementById('chartSymbolSelect');
+      if (select) select.value = sym;
+      loadChartData();
+    }
+
+    function setChartInterval(intv) {
+      currentChartInterval = intv;
+      ['1m', '5m', '15m', '1h', '1d'].forEach(i => {
+        const btn = document.getElementById(`btn-int-${i}`);
+        if (btn) {
+          if (i === intv) {
+            btn.className = "px-2 py-1 rounded-lg font-bold bg-indigo-600 text-white";
+          } else {
+            btn.className = "px-2 py-1 rounded-lg text-slate-400 hover:text-white";
+          }
+        }
+      });
+      document.getElementById('chartTimeframeBadge').innerText = intv;
+      loadChartData();
+    }
+
+    function startChartPolling() {
+      if (chartPollingTimer) clearInterval(chartPollingTimer);
+      loadChartData();
+      // 連線隔離：僅在加密分頁可見時每 5 秒輪詢圖表，絕不阻礙 24/7 背景 Bot
+      chartPollingTimer = setInterval(() => {
+        if (currentTab === 'crypto') {
+          loadChartData();
+        }
+      }, 5000);
+    }
+
+    function stopChartPolling() {
+      if (chartPollingTimer) {
+        clearInterval(chartPollingTimer);
+        chartPollingTimer = null;
+      }
+    }
+
+    // 2. 切換分頁控制器 (分頁切換時優雅釋放/暫停前端輪巡資源)
     function switchTab(tabId) {
       currentTab = tabId;
       const tabs = ['crypto', 'taiwan', 'brain', 'cloud', 'guide', 'handbook'];
@@ -666,6 +985,12 @@
           }
         }
       });
+
+      if (tabId === 'crypto') {
+        startChartPolling();
+      } else {
+        stopChartPolling();
+      }
 
       refreshCurrentTab();
     }
@@ -825,20 +1150,83 @@
       try {
         const res = await fetch('/api/taiwan/screener');
         const d = await res.json();
-        if (d.success && d.picks && d.picks.length > 0) {
-          list.innerHTML = d.picks.map(p => `
-            <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
-              <div>
-                <span class="font-bold text-sm text-white">${p.symbol}</span>
-                <span class="text-xs text-slate-400 ml-2">$${p.close} (${p.change_pct > 0 ? '+' : ''}${p.change_pct}%)</span>
-                <div class="text-[10px] text-slate-400 mt-1">${p.reasons ? p.reasons.join(', ') : '突破均線支撐'}</div>
-              </div>
-              <div class="text-right">
-                <span class="text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">評分 ${p.score}</span>
-                <div class="text-[10px] text-slate-400 mt-1">目標: $${p.target_price} | 停損: $${p.stop_loss}</div>
-              </div>
+        if (d.success) {
+          let html = '';
+          html += `
+            <div class="flex items-center justify-between text-[11px] text-slate-400 bg-slate-950 p-2 rounded-lg border border-slate-800 mb-2">
+              <span>已掃描 <strong class="text-white">${d.scanned_count || 15}</strong> 檔</span>
+              <span>符合突破門檻: <strong class="${d.qualified_count > 0 ? 'text-emerald-400' : 'text-amber-400'}">${d.qualified_count || 0}</strong> 檔</span>
             </div>
-          `).join('');
+          `;
+
+          if (d.picks && d.picks.length > 0) {
+            html += d.picks.map(p => `
+              <div onclick="switchTab('crypto'); switchChartSymbol('${p.symbol}')" class="cursor-pointer hover:border-indigo-500/50 transition bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+                <div>
+                  <div class="flex items-center space-x-1.5">
+                    <span class="font-bold text-sm text-white">${p.symbol}</span>
+                    <span class="text-[10px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300">📈 點擊即時看盤</span>
+                  </div>
+                  <span class="text-xs text-slate-400">$${p.close} (${p.change_pct > 0 ? '+' : ''}${p.change_pct}%)</span>
+                  <div class="text-[10px] text-slate-400 mt-1">${p.signals ? p.signals.join(', ') : '突破均線'}</div>
+                </div>
+                <div class="text-right">
+                  <span class="text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">評分 ${p.score}</span>
+                  <div class="text-[10px] text-slate-400 mt-1">目標: $${p.target_price} | 停損: $${p.stop_loss}</div>
+                </div>
+              </div>
+            `).join('');
+          } else {
+            html += `
+              <div class="text-xs text-amber-400 bg-amber-950/20 p-2.5 rounded-xl border border-amber-500/30 text-center mb-2">
+                ⚠️ 今日無標的完全符合門檻 (分數 &ge; 50)，顯示前 3 檔最接近門檻標的：
+              </div>
+            `;
+            if (d.near_picks && d.near_picks.length > 0) {
+              html += d.near_picks.map(p => `
+                <div onclick="switchTab('crypto'); switchChartSymbol('${p.symbol}')" class="cursor-pointer hover:border-amber-500/50 transition bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+                  <div>
+                    <div class="flex items-center space-x-1.5">
+                      <span class="font-bold text-sm text-slate-200">${p.symbol}</span>
+                      <span class="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300">觀察名單</span>
+                    </div>
+                    <span class="text-xs text-slate-400">$${p.close} (${p.change_pct > 0 ? '+' : ''}${p.change_pct}%)</span>
+                    <div class="text-[10px] text-slate-400 mt-1">${p.signals ? p.signals.join(', ') : '盤整中'}</div>
+                  </div>
+                  <div class="text-right">
+                    <span class="text-xs font-bold px-2 py-0.5 rounded bg-slate-800 text-amber-400">評分 ${p.score}</span>
+                    <div class="text-[10px] text-slate-400 mt-1">防守: $${p.stop_loss}</div>
+                  </div>
+                </div>
+              `).join('');
+            }
+          }
+
+          // 空頭避險專區標的
+          if (d.defense_hedges && d.defense_hedges.length > 0) {
+            html += `
+              <div class="mt-3 pt-3 border-t border-slate-800">
+                <div class="text-xs font-bold text-rose-400 flex items-center space-x-1.5 mb-2">
+                  <i class="fa-solid fa-shield-halved"></i>
+                  <span>🛡️ 空頭避險與轉弱監控 (點擊看盤)</span>
+                </div>
+                ${d.defense_hedges.map(h => `
+                  <div onclick="switchTab('crypto'); switchChartSymbol('${h.symbol.split(' ')[0]}')" class="cursor-pointer hover:border-rose-500/50 transition bg-slate-950 border border-slate-800/80 rounded-xl p-2.5 flex items-center justify-between text-xs mb-1.5">
+                    <div>
+                      <span class="font-bold text-amber-300">${h.symbol}</span>
+                      <div class="text-[10px] text-slate-400 mt-0.5">${h.reason}</div>
+                    </div>
+                    <div class="text-right">
+                      <span class="text-white font-mono">$${h.close}</span>
+                      <span class="text-[10px] ml-1.5 ${h.change_pct >= 0 ? 'text-rose-400' : 'text-emerald-400'} font-bold">(${h.change_pct > 0 ? '+' : ''}${h.change_pct}%)</span>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            `;
+          }
+
+          list.innerHTML = html;
         } else {
           list.innerHTML = '<div class="text-xs text-slate-400 py-4 text-center">今日篩選池中無標的符合突破條件，建議保守觀望。</div>';
         }
@@ -927,6 +1315,7 @@
     // 初始載入
     window.onload = () => {
       fetchCryptoData();
+      startChartPolling();
       fetchTaiwanMarket();
       fetchTaiwanReport();
       fetchAlphas();
