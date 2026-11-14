@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Antigravity 全方位量化操盤平台</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+            },
+            dark: {
+              bg: '#0f172a',
+              card: '#1e293b',
+              border: '#334155'
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* iOS / Android 彈性滾動優化 */
+    body {
+      -webkit-tap-highlight-color: transparent;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    .scrollbar-none::-webkit-scrollbar { display: none; }
+    .glass-card {
+      background: rgba(30, 41, 59, 0.85);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col antialiased selection:bg-indigo-500 selection:text-white pb-20 md:pb-6">
+
+  <!-- 頂部導航列 (Mobile & Desktop) -->
+  <header class="sticky top-0 z-50 glass-card border-b border-slate-800 px-4 py-3">
+    <div class="max-w-7xl mx-auto flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+          <i class="fa-solid fa-chart-line text-white text-base"></i>
+        </div>
+        <div>
+          <h1 class="font-bold text-base md:text-lg tracking-tight bg-gradient-to-r from-white via-indigo-100 to-indigo-400 bg-clip-text text-transparent">
+            Antigravity Quant
+          </h1>
+          <p class="text-[10px] text-slate-400 hidden sm:block">跨市場智慧量化決策平台</p>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-2">
+        <!-- 執行狀態指示燈 -->
+        <div class="flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span id="headerStatus" class="font-medium">系統在線</span>
+        </div>
+        <button onclick="refreshCurrentTab()" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition">
+          <i class="fa-solid fa-rotate text-sm"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 桌機版水平分頁列 (桌面端顯現) -->
+  <nav class="hidden md:flex max-w-7xl mx-auto w-full px-4 pt-4 space-x-3">
+    <button onclick="switchTab('crypto')" id="desk-tab-crypto" class="tab-btn active px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center space-x-2 bg-indigo-600 text-white shadow-lg shadow-indigo-600/30">
+      <i class="fa-brands fa-bitcoin"></i>
+      <span>加密貨幣操盤</span>
+    </button>
+    <button onclick="switchTab('taiwan')" id="desk-tab-taiwan" class="tab-btn px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center space-x-2 bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800">
+      <i class="fa-solid fa-arrow-trend-up"></i>
+      <span>台股多空選股</span>
+    </button>
+    <button onclick="switchTab('brain')" id="desk-tab-brain" class="tab-btn px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center space-x-2 bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800">
+      <i class="fa-solid fa-vault"></i>
+      <span>BRAIN Alpha 倉庫</span>
+    </button>
+    <button onclick="switchTab('cloud')" id="desk-tab-cloud" class="tab-btn px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center space-x-2 bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800">
+      <i class="fa-solid fa-cloud-arrow-up"></i>
+      <span>雲端部署與脫機</span>
+    </button>
+    <button onclick="switchTab('guide')" id="desk-tab-guide" class="tab-btn px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center space-x-2 bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800">
+      <i class="fa-solid fa-book-open"></i>
+      <span>實盤交易所教學</span>
+    </button>
+  </nav>
+
+  <!-- 主要內容區 -->
+  <main class="flex-1 max-w-7xl mx-auto w-full p-4 space-y-4">
+
+    <!-- TAB 1: 加密貨幣操盤專區 -->
+    <section id="tab-content-crypto" class="space-y-4">
+      <!-- 操盤控制列：沙盒/測試網切換 + 機器人狀態 -->
+      <div class="glass-card rounded-2xl p-4 md:p-5 shadow-xl">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div class="flex items-center space-x-2">
+              <span class="text-xs font-semibold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300">TRADING COCKPIT</span>
+              <span id="cryptoModeBadge" class="text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">本地沙盒模擬 (零門檻)</span>
+            </div>
+            <h2 class="text-xl font-bold mt-1">BTC / USDT 永續合約智能操盤台</h2>
+          </div>
+
+          <!-- 模式與開關控制群 -->
+          <div class="flex flex-wrap items-center gap-2">
+            <!-- 模式切換 -->
+            <select id="modeSelect" onchange="changeCryptoMode(this.value)" class="bg-slate-900 border border-slate-700 text-xs md:text-sm rounded-xl px-3 py-2 text-slate-200 focus:outline-none focus:border-indigo-500">
+              <option value="PAPER_SANDBOX">模式：【本地軟體沙盒模擬】</option>
+              <option value="BINANCE_TESTNET">模式：【幣安官方 Testnet 測試網】</option>
+            </select>
+
+            <!-- 策略選擇 -->
+            <select id="strategySelect" class="bg-slate-900 border border-slate-700 text-xs md:text-sm rounded-xl px-3 py-2 text-slate-200 focus:outline-none">
+              <option value="momentum">策略：布林帶突破動量 (Momentum)</option>
+              <option value="ml">策略：LightGBM ML 多因子預測</option>
+              <option value="rl">策略：PyTorch PPO 強化學習</option>
+            </select>
+
+            <!-- Bot 啟動開關 -->
+            <button id="btnToggleBot" onclick="toggleBotState()" class="px-4 py-2 rounded-xl text-xs md:text-sm font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg transition flex items-center space-x-2">
+              <i class="fa-solid fa-play"></i>
+              <span>啟動操盤 Bot</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 即時儀表板：4 大指標卡片 -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+            <p class="text-xs text-slate-400 font-medium">總資產淨值 (Equity)</p>
+            <p id="cryptoEquity" class="text-lg md:text-2xl font-black text-white mt-1">10,000.00 <span class="text-xs font-normal text-slate-400">USDT</span></p>
+          </div>
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+            <p class="text-xs text-slate-400 font-medium">BTC 實時價格</p>
+            <p id="cryptoPrice" class="text-lg md:text-2xl font-black text-emerald-400 mt-1">--.-- <span class="text-xs font-normal text-slate-400">USDT</span></p>
+          </div>
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+            <p class="text-xs text-slate-400 font-medium">當前持倉狀態</p>
+            <p id="cryptoPosition" class="text-lg md:text-2xl font-black text-slate-200 mt-1">FLAT <span class="text-xs font-normal text-slate-400">(0.0000)</span></p>
+          </div>
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+            <p class="text-xs text-slate-400 font-medium">未平倉損益 (PnL)</p>
+            <p id="cryptoPnL" class="text-lg md:text-2xl font-black text-slate-400 mt-1">+0.00 <span class="text-xs font-normal text-slate-400">USDT</span></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 快速交易面板與活動日誌 -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <!-- 手動下單盤面 -->
+        <div class="glass-card rounded-2xl p-4 md:p-5 lg:col-span-1 space-y-4">
+          <h3 class="font-bold text-sm text-slate-200 flex items-center space-x-2">
+            <i class="fa-solid fa-gamepad text-indigo-400"></i>
+            <span>手動閃電下單</span>
+          </h3>
+
+          <div class="space-y-3">
+            <div>
+              <label class="text-xs text-slate-400">下單數量 (BTC)</label>
+              <div class="flex items-center space-x-2 mt-1">
+                <input type="number" id="orderAmount" step="0.01" value="0.02" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
+                <span class="text-xs text-slate-400 font-bold">BTC</span>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 pt-2">
+              <button onclick="executeOrder('BUY')" class="w-full py-2.5 rounded-xl font-bold text-xs md:text-sm bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/30 transition flex items-center justify-center space-x-1">
+                <i class="fa-solid fa-arrow-trend-up"></i>
+                <span>市價買進/做多</span>
+              </button>
+              <button onclick="executeOrder('SELL')" class="w-full py-2.5 rounded-xl font-bold text-xs md:text-sm bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30 transition flex items-center justify-center space-x-1">
+                <i class="fa-solid fa-arrow-trend-down"></i>
+                <span>市價賣出/平倉</span>
+              </button>
+            </div>
+
+            <button onclick="closeAllPositions()" class="w-full py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-400/20 transition flex items-center justify-center space-x-1">
+              <i class="fa-solid fa-hand"></i>
+              <span>🚨 一鍵全數平倉清空部位</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 機器人即時決策與撮合日誌 -->
+        <div class="glass-card rounded-2xl p-4 md:p-5 lg:col-span-2 flex flex-col h-72">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="font-bold text-sm text-slate-200 flex items-center space-x-2">
+              <i class="fa-solid fa-terminal text-emerald-400"></i>
+              <span>操盤機器人心跳與成交即時日誌</span>
+            </h3>
+            <span class="text-[10px] text-slate-400">自動即時更新</span>
+          </div>
+          <div id="cryptoLogs" class="flex-1 overflow-y-auto bg-slate-950/70 border border-slate-800 rounded-xl p-3 font-mono text-xs text-slate-300 space-y-1 scrollbar-none">
+            <div class="text-slate-500">正在連線至撮合核心...</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: 台股分析專區 -->
+    <section id="tab-content-taiwan" class="hidden space-y-4">
+      <div class="glass-card rounded-2xl p-4 md:p-5 shadow-xl">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div class="flex items-center space-x-2">
+              <span class="text-xs font-semibold px-2 py-0.5 rounded bg-rose-500/20 text-rose-300">TAIWAN EQUITIES</span>
+              <span id="marketRegimeBadge" class="text-xs font-bold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300">多空運算中</span>
+            </div>
+            <h2 class="text-xl font-bold mt-1">台股加權指數多空儀表板 & 晨報系統</h2>
+          </div>
+          <button onclick="triggerGenerateReport()" class="px-4 py-2 rounded-xl text-xs md:text-sm font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-lg transition flex items-center space-x-2">
+            <i class="fa-solid fa-file-pen"></i>
+            <span>立即手動生成最新晨報</span>
+          </button>
+        </div>
+
+        <!-- 大盤溫度計 -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+            <p class="text-xs text-slate-400">加權指數最新點位</p>
+            <p id="twClose" class="text-lg md:text-2xl font-black text-white mt-1">--.--</p>
+          </div>
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+            <p class="text-xs text-slate-400">多空綜合評分</p>
+            <p id="twScore" class="text-lg md:text-2xl font-black text-rose-400 mt-1">-- / 100</p>
+          </div>
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+            <p class="text-xs text-slate-400">關鍵月線 (MA20)</p>
+            <p id="twMA20" class="text-lg md:text-2xl font-black text-slate-200 mt-1">--.--</p>
+          </div>
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+            <p class="text-xs text-slate-400">20 日年化波動度</p>
+            <p id="twVol" class="text-lg md:text-2xl font-black text-slate-200 mt-1">--%</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 選股池與晨報文字檢視 -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <!-- 今日主動選股清單 -->
+        <div class="glass-card rounded-2xl p-4 md:p-5 flex flex-col">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-bold text-sm text-slate-200 flex items-center space-x-2">
+              <i class="fa-solid fa-filter text-rose-400"></i>
+              <span>量化突破選股推薦</span>
+            </h3>
+            <button onclick="fetchTaiwanScreener()" class="text-xs text-indigo-400 hover:text-indigo-300">重新掃描</button>
+          </div>
+          <div id="screenerList" class="space-y-2 overflow-y-auto max-h-96 pr-1">
+            <div class="text-slate-500 text-xs text-center py-8">點擊重新掃描獲取最新標的...</div>
+          </div>
+        </div>
+
+        <!-- 每日晨報閱讀器 -->
+        <div class="glass-card rounded-2xl p-4 md:p-5 flex flex-col">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-bold text-sm text-slate-200 flex items-center space-x-2">
+              <i class="fa-regular fa-newspaper text-indigo-400"></i>
+              <span>早盤 08:00 量化決策晨報檢視</span>
+            </h3>
+          </div>
+          <div id="taiwanReportView" class="flex-1 bg-slate-950/70 border border-slate-800 rounded-xl p-4 text-xs font-mono text-slate-300 whitespace-pre-wrap overflow-y-auto max-h-96 leading-relaxed">
+            載入晨報中...
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: WorldQuant BRAIN 專區 -->
+    <section id="tab-content-brain" class="hidden space-y-4">
+      <!-- 官方審核標準與統計標題 -->
+      <div class="glass-card rounded-2xl p-4 md:p-5 shadow-xl">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div class="flex items-center space-x-2">
+              <span class="text-xs font-semibold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">WORLDQUANT BRAIN</span>
+              <span class="text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">Alpha Vault 策略倉庫</span>
+            </div>
+            <h2 class="text-xl font-bold mt-1">經過驗證的獲利 Alpha 儲備庫 (先存後提)</h2>
+            <p class="text-xs text-slate-400 mt-1">
+              遵循 BRAIN 官方審核門檻：Sharpe ≥ 1.25 | Fitness ≥ 1.00 | Turnover 1% ~ 70%。存入達標因子作為未來晉升與分潤的策略基石。
+            </p>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+            <p class="text-xs text-slate-400">已驗證 Alpha 總數</p>
+            <p id="brainTotalAlphas" class="text-lg md:text-2xl font-black text-amber-400 mt-1">3 <span class="text-xs font-normal text-slate-400">組</span></p>
+          </div>
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+            <p class="text-xs text-slate-400">平均 Sharpe Ratio</p>
+            <p id="brainAvgSharpe" class="text-lg md:text-2xl font-black text-emerald-400 mt-1">1.83</p>
+          </div>
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+            <p class="text-xs text-slate-400">平均 Fitness 指標</p>
+            <p id="brainAvgFitness" class="text-lg md:text-2xl font-black text-indigo-400 mt-1">1.71</p>
+          </div>
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+            <p class="text-xs text-slate-400">平均換手率 (Turnover)</p>
+            <p id="brainAvgTurnover" class="text-lg md:text-2xl font-black text-slate-200 mt-1">28.3%</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 快速測試並存入新 Alpha & 已保存清單 -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <!-- 登錄 / 驗證新 Alpha 表單 -->
+        <div class="glass-card rounded-2xl p-4 md:p-5 space-y-3 lg:col-span-1">
+          <h3 class="font-bold text-sm text-slate-200 flex items-center space-x-2">
+            <i class="fa-solid fa-file-circle-plus text-amber-400"></i>
+            <span>驗證並存入新 Alpha</span>
+          </h3>
+          <div>
+            <label class="text-xs text-slate-400">Alpha 名稱</label>
+            <input type="text" id="alphaName" value="Adaptive_Volume_Breakout" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none">
+          </div>
+          <div>
+            <label class="text-xs text-slate-400">表達式 (Expression)</label>
+            <textarea id="alphaExpr" rows="3" class="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 font-mono text-xs text-emerald-300 focus:outline-none">rank(close - open) / (ts_decay_linear(volume, 5) + 1)</textarea>
+          </div>
+          <div class="grid grid-cols-3 gap-2">
+            <div>
+              <label class="text-[10px] text-slate-400">Sharpe</label>
+              <input type="number" step="0.05" id="alphaSharpe" value="1.45" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white">
+            </div>
+            <div>
+              <label class="text-[10px] text-slate-400">Fitness</label>
+              <input type="number" step="0.05" id="alphaFitness" value="1.30" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white">
+            </div>
+            <div>
+              <label class="text-[10px] text-slate-400">Turnover %</label>
+              <input type="number" step="1" id="alphaTurnover" value="32" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white">
+            </div>
+          </div>
+          <button onclick="submitNewAlpha()" class="w-full py-2.5 rounded-xl font-bold text-xs bg-amber-600 hover:bg-amber-500 text-white shadow-lg transition flex items-center justify-center space-x-1">
+            <i class="fa-solid fa-floppy-disk"></i>
+            <span>驗證門檻並存入倉庫</span>
+          </button>
+        </div>
+
+        <!-- 倉庫清單 -->
+        <div class="glass-card rounded-2xl p-4 md:p-5 lg:col-span-2 flex flex-col">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="font-bold text-sm text-slate-200 flex items-center space-x-2">
+              <i class="fa-solid fa-boxes-stacked text-indigo-400"></i>
+              <span>已存庫的優質 Alpha 清單</span>
+            </h3>
+            <button onclick="fetchAlphas()" class="text-xs text-indigo-400 hover:text-indigo-300">重新整理</button>
+          </div>
+          <div id="alphaList" class="space-y-2 overflow-y-auto max-h-96 pr-1">
+            <!-- 動態插入 -->
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: 雲端部署與脫離本機指南 -->
+    <section id="tab-content-cloud" class="hidden space-y-4">
+      <div class="glass-card rounded-2xl p-5 shadow-xl space-y-4">
+        <div>
+          <span class="text-xs font-semibold px-2 py-0.5 rounded bg-sky-500/20 text-sky-300">CLOUD RUNNING & MOBILITY</span>
+          <h2 class="text-xl font-bold mt-1">隨時隨地用手機操作：脫離本機全天候執行方案</h2>
+          <p class="text-xs text-slate-400 mt-1">
+            本專案已完整容器化 (Dockerized)，您有多種免費且免開電腦的雲端部署途徑，手機打開瀏覽器即可監控。
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+          <!-- 方案 1: Render / Railway 一鍵雲端託管 -->
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 space-y-3">
+            <div class="flex items-center space-x-2 text-sky-400 font-bold text-sm">
+              <i class="fa-solid fa-server"></i>
+              <span>1. 免費雲端伺服器 (Render / Railway)</span>
+            </div>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              將此專案推送到您的 GitHub 私人庫，在 <strong>Render.com</strong> 或 <strong>Railway.app</strong> 點選 New Web Service，它會自動識別專案內的 <code>Dockerfile</code> 部署上線！
+            </p>
+            <div class="text-[11px] bg-slate-950 p-2.5 rounded-lg font-mono text-sky-300">
+              優點：24 小時不間斷執行，提供免費 HTTPS 網址，手機可直接書籤加到主畫面。
+            </div>
+          </div>
+
+          <!-- 方案 2: Kaggle / Colab 免費強大算力 -->
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 space-y-3">
+            <div class="flex items-center space-x-2 text-purple-400 font-bold text-sm">
+              <i class="fa-solid fa-microchip"></i>
+              <span>2. Kaggle 雲端免費 GPU 算力</span>
+            </div>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              專案已在 <code>kaggle_notebooks/</code> 備妥兩個現成 Notebook。利用 Kaggle 的免費 P100/T4 GPU 進行大規模 ML 特徵工程與 RL 強化學習訓練。
+            </p>
+            <div class="text-[11px] bg-slate-950 p-2.5 rounded-lg font-mono text-purple-300">
+              優點：完全不吃本機 CPU，每週提供 30 小時免費雙 GPU 算力！
+            </div>
+          </div>
+
+          <!-- 方案 3: Cloudflare Tunnel / Ngrok 內網穿透 -->
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 space-y-3">
+            <div class="flex items-center space-x-2 text-emerald-400 font-bold text-sm">
+              <i class="fa-solid fa-mobile-screen-button"></i>
+              <span>3. Cloudflare Tunnel 免費公網穿透</span>
+            </div>
+            <p class="text-xs text-slate-400 leading-relaxed">
+              若本機電腦開著，只需一行指令 <code>cloudflared tunnel --url http://localhost:8000</code>，立即產出一個安全的公網 URL，在外用 iPhone/Android 隨處可連！
+            </p>
+            <div class="text-[11px] bg-slate-950 p-2.5 rounded-lg font-mono text-emerald-300">
+              優點：零設定防火牆、零固定 IP 需求，極致安全無延遲。
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 mt-4">
+          <h4 class="text-sm font-bold text-slate-200 mb-2">⚡ 快速部署檔案清單 (專案已全部內建)</h4>
+          <ul class="text-xs text-slate-400 space-y-1 font-mono">
+            <li>✅ <code>Dockerfile</code> - 輕量 Python 3.10 容器環境</li>
+            <li>✅ <code>docker-compose.yml</code> - 本地或 VPS 一鍵啟動指令</li>
+            <li>✅ <code>render.yaml</code> - Render.com 一鍵自動部署設定檔</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 5: 實盤交易所教學手冊 -->
+    <section id="tab-content-guide" class="hidden space-y-4">
+      <div class="glass-card rounded-2xl p-5 shadow-xl space-y-4">
+        <div>
+          <span class="text-xs font-semibold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">LIVE TRADING GUIDE</span>
+          <h2 class="text-xl font-bold mt-1">真實虛擬貨幣交易所實戰操作手冊</h2>
+          <p class="text-xs text-slate-400 mt-1">
+            從台幣出入金、KYC 實名、合約機制到 API 安全防護完整教學。詳細文檔亦存於 <code>crypto_trading/real_exchange_trading_guide.md</code>。
+          </p>
+        </div>
+
+        <div class="space-y-4 text-xs text-slate-300 leading-relaxed">
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4">
+            <h3 class="font-bold text-sm text-emerald-400 mb-2">一、台幣入金黃金路徑 (最合規且零手續費)</h3>
+            <p>1. 註冊台灣通過洗錢防制規範的本土交易所：<strong>MAX (MaiCoin)</strong> 或 <strong>BitoPro</strong>。</p>
+            <p>2. 完成 Lv.2 身分認證並綁定個人台幣銀行帳戶。</p>
+            <p>3. 網銀轉帳新台幣至 MAX 專屬帳號，並在交易大廳以現貨市價換取 <strong>USDT (泰達幣)</strong>。</p>
+            <p>4. 點選「提領 USDT」，透過 <strong>TRC20</strong> 或 <strong>Arbitrum</strong> 網絡將 USDT 轉入您的 <strong>幣安 (Binance)</strong> 帳戶。</p>
+          </div>
+
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4">
+            <h3 class="font-bold text-sm text-amber-400 mb-2">二、現貨 (Spot) vs 永續合約 (Futures) 核心區別</h3>
+            <p>• <strong>現貨</strong>：買入即真實持有，無爆倉歸零風險，但<strong>僅能做多</strong>（無法在空頭暴跌時獲利）。手續費通常約 0.08%。</p>
+            <p>• <strong>永續合約</strong>：以保證金交易，<strong>多空皆可雙向操作</strong>，支援 1x~50x 槓桿。量化程式常跑合約以獲取做空保護，但建議實盤槓桿壓低在 <strong>1x~2x</strong> 內避免黑天鵝極端行情穿倉。</p>
+          </div>
+
+          <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4">
+            <h3 class="font-bold text-sm text-rose-400 mb-2">三、API Key 軍規安全三大防線 (切記！)</h3>
+            <p>1. <strong>🚫 永遠不要勾選「提現 (Withdrawal)」權限</strong>：量化交易只需「行情讀取」與「現貨/合約交易」權限。只要關閉提現，任何人都偷不走您的錢！</p>
+            <p>2. <strong>🔒 綁定固定 IP 白名單</strong>：設定只有您部署的 VPS/伺服器 IP 可以呼叫下單。</p>
+            <p>3. <strong>🔑 絕不外洩 Secret Key</strong>：金鑰請放入 <code>.env</code> 本地檔案，切勿上傳至 GitHub 等公開場所。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 手機版底部導航欄 (Mobile Bottom Tab Bar) -->
+  <nav class="md:hidden fixed bottom-0 left-0 right-0 z-50 glass-card border-t border-slate-800 py-1.5 px-3 flex justify-around items-center">
+    <button onclick="switchTab('crypto')" id="mob-tab-crypto" class="flex flex-col items-center p-1 text-indigo-400">
+      <i class="fa-brands fa-bitcoin text-base"></i>
+      <span class="text-[10px] mt-0.5 font-medium">加密操盤</span>
+    </button>
+    <button onclick="switchTab('taiwan')" id="mob-tab-taiwan" class="flex flex-col items-center p-1 text-slate-400">
+      <i class="fa-solid fa-arrow-trend-up text-base"></i>
+      <span class="text-[10px] mt-0.5 font-medium">台股選股</span>
+    </button>
+    <button onclick="switchTab('brain')" id="mob-tab-brain" class="flex flex-col items-center p-1 text-slate-400">
+      <i class="fa-solid fa-vault text-base"></i>
+      <span class="text-[10px] mt-0.5 font-medium">Alpha庫</span>
+    </button>
+    <button onclick="switchTab('cloud')" id="mob-tab-cloud" class="flex flex-col items-center p-1 text-slate-400">
+      <i class="fa-solid fa-cloud-arrow-up text-base"></i>
+      <span class="text-[10px] mt-0.5 font-medium">脫機雲端</span>
+    </button>
+    <button onclick="switchTab('guide')" id="mob-tab-guide" class="flex flex-col items-center p-1 text-slate-400">
+      <i class="fa-solid fa-book-open text-base"></i>
+      <span class="text-[10px] mt-0.5 font-medium">實盤教學</span>
+    </button>
+  </nav>
+
+  <!-- 前端互動 JavaScript 邏輯 -->
+  <script>
+    let currentTab = 'crypto';
+    let isBotRunning = false;
+
+    // 分頁切換
+    function switchTab(tabId) {
+      currentTab = tabId;
+      const tabs = ['crypto', 'taiwan', 'brain', 'cloud', 'guide'];
+      tabs.forEach(t => {
+        const content = document.getElementById(`tab-content-${t}`);
+        const deskBtn = document.getElementById(`desk-tab-${t}`);
+        const mobBtn = document.getElementById(`mob-tab-${t}`);
+
+        if (t === tabId) {
+          content.classList.remove('hidden');
+          if (deskBtn) {
+            deskBtn.className = "tab-btn active px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center space-x-2 bg-indigo-600 text-white shadow-lg shadow-indigo-600/30";
+          }
+          if (mobBtn) {
+            mobBtn.className = "flex flex-col items-center p-1 text-indigo-400";
+          }
+        } else {
+          content.classList.add('hidden');
+          if (deskBtn) {
+            deskBtn.className = "tab-btn px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center space-x-2 bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800";
+          }
+          if (mobBtn) {
+            mobBtn.className = "flex flex-col items-center p-1 text-slate-400";
+          }
+        }
+      });
+
+      refreshCurrentTab();
+    }
+
+    function refreshCurrentTab() {
+      if (currentTab === 'crypto') fetchCryptoData();
+      if (currentTab === 'taiwan') { fetchTaiwanMarket(); fetchTaiwanReport(); }
+      if (currentTab === 'brain') fetchAlphas();
+    }
+
+    // 1. 加密貨幣數據與操作
+    async function fetchCryptoData() {
+      try {
+        const res = await fetch('/api/crypto/account');
+        const d = await res.json();
+        if (d.success) {
+          document.getElementById('cryptoEquity').innerHTML = `${d.total_equity.toLocaleString()} <span class="text-xs font-normal text-slate-400">USDT</span>`;
+          document.getElementById('cryptoPrice').innerHTML = `${d.current_price.toLocaleString()} <span class="text-xs font-normal text-slate-400">USDT</span>`;
+
+          const pBadge = document.getElementById('cryptoModeBadge');
+          if (d.mode === 'PAPER_SANDBOX') {
+            pBadge.className = "text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400";
+            pBadge.innerText = "本地沙盒模擬 (零門檻)";
+            document.getElementById('cryptoPosition').innerText = `${d.position_side} (${d.position_amount})`;
+          } else {
+            pBadge.className = "text-xs font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-400";
+            pBadge.innerText = "幣安官方 Testnet";
+            const posCount = d.positions ? d.positions.length : 0;
+            document.getElementById('cryptoPosition').innerText = posCount > 0 ? `${posCount} 筆合約持倉` : "FLAT (無持倉)";
+          }
+
+          // 更新 Bot 按鈕狀態
+          isBotRunning = d.bot_running;
+          const btnBot = document.getElementById('btnToggleBot');
+          if (isBotRunning) {
+            btnBot.className = "px-4 py-2 rounded-xl text-xs md:text-sm font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-lg transition flex items-center space-x-2";
+            btnBot.innerHTML = '<i class="fa-solid fa-stop"></i><span>暫停操盤 Bot</span>';
+          } else {
+            btnBot.className = "px-4 py-2 rounded-xl text-xs md:text-sm font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg transition flex items-center space-x-2";
+            btnBot.innerHTML = '<i class="fa-solid fa-play"></i><span>啟動操盤 Bot</span>';
+          }
+
+          // 日誌
+          if (d.logs && d.logs.length > 0) {
+            const logBox = document.getElementById('cryptoLogs');
+            logBox.innerHTML = d.logs.map(l => `<div>${l}</div>`).join('');
+            logBox.scrollTop = logBox.scrollHeight;
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function changeCryptoMode(mode) {
+      await fetch('/api/crypto/switch_mode', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ mode })
+      });
+      fetchCryptoData();
+    }
+
+    async function toggleBotState() {
+      const action = isBotRunning ? 'stop' : 'start';
+      const strategy = document.getElementById('strategySelect').value;
+      await fetch('/api/crypto/bot_control', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ action, strategy })
+      });
+      fetchCryptoData();
+    }
+
+    async function executeOrder(side) {
+      const amount = parseFloat(document.getElementById('orderAmount').value) || 0.01;
+      const res = await fetch('/api/crypto/order', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ side, amount, symbol: 'BTC/USDT' })
+      });
+      const d = await res.json();
+      alert(d.message || (d.success ? "下單成功！" : "下單失敗"));
+      fetchCryptoData();
+    }
+
+    async function closeAllPositions() {
+      if (!confirm("確定要一鍵全數平倉嗎？")) return;
+      const res = await fetch('/api/crypto/close_all', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'}
+      });
+      const d = await res.json();
+      alert(d.message || "平倉指令已送出！");
+      fetchCryptoData();
+    }
+
+    // 2. 台股模組
+    async function fetchTaiwanMarket() {
+      try {
+        const res = await fetch('/api/taiwan/market');
+        const d = await res.json();
+        if (d.success) {
+          const m = d.data;
+          document.getElementById('twClose').innerText = m.latest_close ? m.latest_close.toFixed(2) : 'N/A';
+          document.getElementById('twScore').innerText = `${m.score || 50} / 100`;
+          document.getElementById('twMA20').innerText = m.ma20 ? m.ma20.toFixed(2) : 'N/A';
+          document.getElementById('twVol').innerText = `${m.volatility_20d || 0}%`;
+          document.getElementById('marketRegimeBadge').innerText = m.regime || '觀望震盪';
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function fetchTaiwanReport() {
+      try {
+        const res = await fetch('/api/taiwan/report');
+        const d = await res.json();
+        if (d.success) {
+          document.getElementById('taiwanReportView').innerText = d.content;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function fetchTaiwanScreener() {
+      const list = document.getElementById('screenerList');
+      list.innerHTML = '<div class="text-xs text-indigo-400 py-4 text-center"><i class="fa-solid fa-spinner animate-spin"></i> 正在計算技術指標與 ML 排序...</div>';
+      try {
+        const res = await fetch('/api/taiwan/screener');
+        const d = await res.json();
+        if (d.success && d.picks && d.picks.length > 0) {
+          list.innerHTML = d.picks.map(p => `
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+              <div>
+                <span class="font-bold text-sm text-white">${p.symbol}</span>
+                <span class="text-xs text-slate-400 ml-2">$${p.close} (${p.change_pct > 0 ? '+' : ''}${p.change_pct}%)</span>
+                <div class="text-[10px] text-slate-400 mt-1">${p.reasons ? p.reasons.join(', ') : '突破均線支撐'}</div>
+              </div>
+              <div class="text-right">
+                <span class="text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400">評分 ${p.score}</span>
+                <div class="text-[10px] text-slate-400 mt-1">目標: $${p.target_price} | 停損: $${p.stop_loss}</div>
+              </div>
+            </div>
+          `).join('');
+        } else {
+          list.innerHTML = '<div class="text-xs text-slate-400 py-4 text-center">今日篩選池中無標的符合突破條件，建議保守觀望。</div>';
+        }
+      } catch (e) {
+        list.innerHTML = '<div class="text-xs text-rose-400 py-4 text-center">載入選股失敗，請稍後重試。</div>';
+      }
+    }
+
+    async function triggerGenerateReport() {
+      const view = document.getElementById('taiwanReportView');
+      view.innerText = "⏳ 正在獲取最新加權指數與選股資料並生成晨報，請稍候約 5~10 秒...";
+      try {
+        const res = await fetch('/api/taiwan/generate_report', { method: 'POST' });
+        const d = await res.json();
+        if (d.success) {
+          view.innerText = d.content;
+          fetchTaiwanMarket();
+        }
+      } catch (e) {
+        view.innerText = "生成失敗，請檢視終端機記錄。";
+      }
+    }
+
+    // 3. WorldQuant BRAIN Alpha 倉庫
+    async function fetchAlphas() {
+      try {
+        const res = await fetch('/api/brain/alphas');
+        const d = await res.json();
+        if (d.success) {
+          const s = d.stats;
+          document.getElementById('brainTotalAlphas').innerHTML = `${s.verified_count} <span class="text-xs font-normal text-slate-400">組</span>`;
+          document.getElementById('brainAvgSharpe').innerText = s.avg_sharpe;
+          document.getElementById('brainAvgFitness').innerText = s.avg_fitness;
+          document.getElementById('brainAvgTurnover').innerText = `${s.avg_turnover_pct}%`;
+
+          const list = document.getElementById('alphaList');
+          list.innerHTML = d.alphas.map(a => `
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-1.5">
+              <div class="flex items-center justify-between">
+                <span class="font-bold text-xs text-amber-300">${a.name}</span>
+                <span class="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">${a.status}</span>
+              </div>
+              <div class="font-mono text-[11px] text-slate-300 bg-slate-950 p-2 rounded">${a.expression}</div>
+              <div class="flex items-center space-x-3 text-[10px] text-slate-400">
+                <span>Sharpe: <strong class="text-emerald-400">${a.sharpe}</strong></span>
+                <span>Fitness: <strong class="text-indigo-400">${a.fitness}</strong></span>
+                <span>Turnover: <strong class="text-slate-200">${(a.turnover * 100).toFixed(1)}%</strong></span>
+                <span class="text-slate-500 ml-auto">${a.created_at}</span>
+              </div>
+            </div>
+          `).join('');
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function submitNewAlpha() {
+      const name = document.getElementById('alphaName').value;
+      const expression = document.getElementById('alphaExpr').value;
+      const sharpe = parseFloat(document.getElementById('alphaSharpe').value);
+      const fitness = parseFloat(document.getElementById('alphaFitness').value);
+      const turnover = parseFloat(document.getElementById('alphaTurnover').value);
+
+      const res = await fetch('/api/brain/submit_alpha', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ name, expression, sharpe, fitness, turnover })
+      });
+      const d = await res.json();
+      alert(d.message);
+      if (d.success) fetchAlphas();
+    }
+
+    // 定期輪巡
+    setInterval(() => {
+      if (currentTab === 'crypto') fetchCryptoData();
+    }, 4000);
+
+    // 初始載入
+    window.onload = () => {
+      fetchCryptoData();
+      fetchTaiwanMarket();
+      fetchTaiwanReport();
+      fetchAlphas();
+    };
+  </script>
+</body>
+</html>

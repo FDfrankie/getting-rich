@@ -1,0 +1,21 @@
+[
+  {
+    "id": 1,
+    "name": "Super_Alpha",
+    "expression": "rank(ts_argmax(high, 20))",
+    "category": "Momentum",
+    "universe": "TOP3000",
+    "decay": 4,
+    "delay": 1,
+    "sharpe": 1.65,
+    "fitness": 1.35,
+    "turnover": 0.22,
+    "returns": 0.0,
+    "drawdown": 0.0,
+    "margin": 0.0,
+    "status": "VERIFIED",
+    "tags": "",
+    "notes": "",
+    "created_at": "2026-11-14 05:40:00"
+  }
+]
