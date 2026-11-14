@@ -129,3 +129,23 @@ $$P(\text{Up}_{t+1} \mid I_t, \text{Regime}_t) = \frac{P(I_t \mid \text{Up}_{t+1
    - 必看重點：Backtest Overfitting (回測過擬合的陷阱) 與 Deflated Sharpe Ratio (DSR)。
 4. **QuantConnect Academic Webinars**:
    - 必看重點：Multi-Factor Cross-Sectional Alpha Generation 與手續費微觀滑價處理。
+
+### 5.1 精選核心學術論文 (ArXiv Key Papers 2024-2026)
+| 論文編號 | 論文主題 | 核心架構 / 貢獻 | 專案模組對應 |
+| :--- | :--- | :--- | :--- |
+| **arXiv:2607.09426** | Adaptive Market Making in Crypto Perpetual Swaps | Actor-Critic 強化學習動態資金費率對沖與庫存風控 | crypto_trading/strategies/rl_strategy.py |
+| **arXiv:2508.02356** | Cross-Asset Latent Representation Learning | VAE 多幣種特徵降維與潛在空間因子抽取 | crypto_trading/feature_engineer.py |
+| **arXiv:2510.07943** | Differentiable Sharpe and Sortino Loss Optimization | 可微夏普比率損失函數直接反向傳播 | crypto_trading/loss_functions.py |
+| **arXiv:2604.15973** | Deep Order Flow Imbalance in High-Frequency Crypto | L2/L3 委託簿微觀結構失衡與高頻 Alpha | crypto_trading/bitunix_client.py |
+| **arXiv:2406.02172** | Temporal Fusion Transformers for Multi-Horizon Asset Returns | 多時間尺度 (15s/1m/1h/1d) 波動狀態預測 | crypto_trading/data_loader.py |
+
+### 5.2 國外頂尖部落格與社群資源 (Flashbots, Paradigm & Quant Tech Stack)
+- **Flashbots Research (flashbots.net)**: 專注於區塊鏈 MEV、交易搶先執行、抗三明治套利與去中心化流動性深度分析。
+- **Paradigm Research (paradigm.xyz)**: 永續合約資金費率數學模型、集中流動性做市（Concentrated Liquidity AMM）之無常損失對沖。
+- **Crypto Quant Strategies 2026**: 截面動量多因子排序、統計套利與協整回歸配對交易。
+- **Recommended Tech Stack 2026**: 
+  - 核心運算：Python 3.10+, NumPy, Pandas, Scikit-learn, LightGBM, PyTorch
+  - API 對接：CCXT, Bitunix REST OpenAPI, Binance Futures Testnet
+  - 雲端算力：Kaggle GPU (P100/T4), Render.com 雲端容器
+  - 數據穿透：Cloudflare Tunnel 零防火牆穿透
+  - 自動化工具：scripts/collect_crypto_videos.py, scripts/fetch_top_transcripts.py

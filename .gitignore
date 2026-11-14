@@ -73,3 +73,6 @@ Thumbs.db
 # Data & cache
 data_cache/
 reports/*.html
+
+# Runtime persistence and state
+data_persistence/
