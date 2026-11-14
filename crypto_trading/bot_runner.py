@@ -1,6 +1,6 @@
 import time
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 from crypto_trading.config import PAPER_TRADING, DEFAULT_SYMBOL, INITIAL_BALANCE_USDT
 from crypto_trading.data_loader import CryptoDataLoader
 from crypto_trading.strategies.momentum_breakout import MomentumBreakoutStrategy, BaseStrategy
@@ -18,8 +18,9 @@ class CryptoTradingBot:
     2. 即時價格監聽與技術/ML/RL 指標計算
     3. 自動風險管控與動態停損停利更新
     4. 支援經典動量、LightGBM/XGBoost ML Alpha、以及 PyTorch PPO RL 策略無縫切換
+    5. 真實對接 Binance Demo Testnet API 與 Bitunix Adapter，自動獲取遠端真實 Order ID
     """
-    def __init__(self, symbol: str = DEFAULT_SYMBOL, strategy: Optional[BaseStrategy] = None):
+    def __init__(self, symbol: str = DEFAULT_SYMBOL, strategy: Optional[BaseStrategy] = None, exchange_adapter: Optional[Any] = None):
         self.symbol = symbol
         self.is_paper = PAPER_TRADING
         self.loader = CryptoDataLoader(symbol=symbol)
@@ -27,16 +28,65 @@ class CryptoTradingBot:
         self.risk_manager = RiskManager(initial_capital=INITIAL_BALANCE_USDT)
         self.regime_filter = HierarchicalRegimeFilter(high_tf="1h", low_tf="1m")
         self.sync = GDrivePersistenceSync()
+        self.exchange_adapter = exchange_adapter  # BinanceTestnetClient or BitunixClient
 
-        # 模擬帳戶狀態
+        # 帳戶狀態
         self.balance_usdt = INITIAL_BALANCE_USDT
         self.position = 0.0  # 持倉標的數量
         self.position_side = "FLAT"  # FLAT, LONG, SHORT
         self.entry_price = 0.0
         self.trade_logs = []
+        self.last_order_info = {}
 
     def log(self, msg: str):
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+
+    def execute_order(self, side: str, amount: float, current_price: float, reason: str):
+        """下單撮合：若有配置交易所 Adapter 則直接提交真實委託並取得遠端 Order ID，否則執行內部沙盒記帳"""
+        # 1. 若有對接真實 Testnet 或 Bitunix Adapter，且處於活動狀態
+        if self.exchange_adapter:
+            try:
+                order_side = "BUY" if side == "BUY" else "SELL"
+                res = self.exchange_adapter.create_order(
+                    symbol=self.symbol,
+                    side=order_side,
+                    order_type="market",
+                    amount=amount
+                )
+                if res.get("success", False):
+                    order_id = res.get("order_id", f"MOCK_{int(time.time()*1000)}")
+                    fill_price = res.get("price", current_price)
+                    self.last_order_info = res
+                    self.log(f"⚡ [交易所委託成交] {order_side} {amount:.4f} {self.symbol} @ {fill_price:.2f} | 遠端 OrderID: {order_id} | 原因: {reason}")
+                    
+                    if side == "BUY":
+                        self.position += amount
+                        self.position_side = "LONG"
+                        self.entry_price = fill_price
+                    else:
+                        pnl = (fill_price - self.entry_price) * self.position if self.position_side == "LONG" else 0.0
+                        pnl_pct = ((fill_price - self.entry_price) / self.entry_price * 100.0) if self.entry_price > 0 else 0.0
+                        self.log(f"🔴 [交易所部位平倉] {self.position:.4f} {self.symbol} @ {fill_price:.2f} | 損益: {pnl:+.2f} USDT | 原因: {reason}")
+                        if pnl < 0:
+                            self.sync.record_post_mortem(
+                                symbol=self.symbol,
+                                entry_price=self.entry_price,
+                                exit_price=fill_price,
+                                loss_amount=pnl,
+                                loss_pct=pnl_pct,
+                                cause_analysis=f"真實交易所平倉: {reason}"
+                            )
+                        self.position = 0.0
+                        self.position_side = "FLAT"
+                        self.entry_price = 0.0
+                    return
+                else:
+                    self.log(f"⚠️ [交易所下單未成交或被拒] 原因: {res.get('message', '未知錯誤')}，切換至沙盒記帳防護")
+            except Exception as e:
+                self.log(f"⚠️ [交易所下單異常] {e}，回退至安全沙盒記帳")
+
+        # 2. 回退內部沙盒 Paper Order 記帳
+        self.execute_paper_order(side, amount, current_price, reason)
 
     def execute_paper_order(self, side: str, amount: float, current_price: float, reason: str):
         """執行模擬訂單撮合"""
@@ -94,11 +144,11 @@ class CryptoTradingBot:
             pos_risk = self.risk_manager.calculate_position_size(self.entry_price, atr)
             # 觸發動態停損
             if current_price <= pos_risk['stop_loss_long']:
-                self.execute_paper_order("SELL", self.position, current_price, reason=f"觸發 ATR 移動停損 ({pos_risk['stop_loss_long']})")
+                self.execute_order("SELL", self.position, current_price, reason=f"觸發 ATR 移動停損 ({pos_risk['stop_loss_long']})")
                 return
             # 觸發目標停利
             elif current_price >= pos_risk['take_profit_long']:
-                self.execute_paper_order("SELL", self.position, current_price, reason=f"達到 1.5R 目標停利 ({pos_risk['take_profit_long']})")
+                self.execute_order("SELL", self.position, current_price, reason=f"達到 1.5R 目標停利 ({pos_risk['take_profit_long']})")
                 return
 
         # 3. 處理策略開平倉信號
@@ -106,10 +156,10 @@ class CryptoTradingBot:
             # 產生做多信號，計算部位並進場
             pos_plan = self.risk_manager.calculate_position_size(current_price, atr)
             if pos_plan['size'] > 0:
-                self.execute_paper_order("BUY", pos_plan['size'], current_price, reason="布林帶動量突破向上")
+                self.execute_order("BUY", pos_plan['size'], current_price, reason="布林帶動量突破向上")
         elif signal == 0 and self.position_side != "FLAT":
             # 產生離場信號
-            self.execute_paper_order("SELL", self.position, current_price, reason="策略均線中軸平倉信號")
+            self.execute_order("SELL", self.position, current_price, reason="策略均線中軸平倉信號")
 
     def run_loop(self, iterations: int = 5, sleep_sec: int = 2):
         """啟動監聽迴圈 (預設先進行 5 次測試步進)"""

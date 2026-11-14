@@ -1282,6 +1282,16 @@
                 <span>Turnover: <strong class="text-slate-200">${(a.turnover * 100).toFixed(1)}%</strong></span>
                 <span class="text-slate-500 ml-auto">${a.created_at}</span>
               </div>
+              <div class="flex items-center space-x-2 pt-1 border-t border-slate-800/80">
+                <button onclick="testAlpha('${a.id}', '${encodeURIComponent(a.expression)}', 'worldquant')" class="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold transition flex items-center space-x-1">
+                  <i class="fa-solid fa-paper-plane"></i>
+                  <span>🚀 送出至 WorldQuant 回測</span>
+                </button>
+                <button onclick="testAlpha('${a.id}', '${encodeURIComponent(a.expression)}', 'crypto_bot')" class="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold transition flex items-center space-x-1">
+                  <i class="fa-solid fa-bolt"></i>
+                  <span>⚡ 注入 Binance 模擬盤實戰</span>
+                </button>
+              </div>
             </div>
           `).join('');
         }
@@ -1305,6 +1315,22 @@
       const d = await res.json();
       alert(d.message);
       if (d.success) fetchAlphas();
+    }
+
+    async function testAlpha(alphaId, encodedExpr, targetEngine) {
+      const expr = decodeURIComponent(encodedExpr);
+      try {
+        const res = await fetch('/api/brain/test_alpha', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ alpha_id: alphaId, expression: expr, target_engine: targetEngine })
+        });
+        const d = await res.json();
+        alert(`[${d.target_engine}] ${d.message}`);
+        fetchCryptoData();
+      } catch (e) {
+        alert("送測連線異常: " + e);
+      }
     }
 
     // 定期輪巡

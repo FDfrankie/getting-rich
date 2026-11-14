@@ -6,14 +6,11 @@ API_KEY = os.getenv("CRYPTO_API_KEY", "")
 API_SECRET = os.getenv("CRYPTO_API_SECRET", "")
 
 # 幣安合約測試網專屬金鑰 (Binance Futures Testnet: dapi/fapi)
-BINANCE_TESTNET_API_KEY = os.getenv(
-    "BINANCE_TESTNET_API_KEY",
-    "Nu2FUJZkkF5tRf6Z4voVN9prrn3INIepnGUOhlT3ak9OXI7YCwWFgqqm4yL7M1DH"
-)
-BINANCE_TESTNET_API_SECRET = os.getenv(
-    "BINANCE_TESTNET_API_SECRET",
-    "aZlB61oH5nyvhWgBumzkeCY1ytjvLjD47lyPRMpiVqUxt5cTCyOwbQUunLYgS1by"
-)
+BINANCE_TESTNET_API_KEY = os.getenv("BINANCE_TESTNET_API_KEY", "")
+BINANCE_TESTNET_API_SECRET = os.getenv("BINANCE_TESTNET_API_SECRET", "")
+if not BINANCE_TESTNET_API_KEY or not BINANCE_TESTNET_API_SECRET:
+    # 提醒安全規範：未設置環境變數時自動安全降級
+    pass
 
 # Bitunix 實盤對接金鑰 (SHA256 HMAC 簽名，實盤零手續費/低手續費撮合首選)
 BITUNIX_API_KEY = os.getenv("BITUNIX_API_KEY", "")

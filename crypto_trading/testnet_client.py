@@ -234,16 +234,16 @@ class BinanceTestnetClient:
                         "leverage": int(p.get('leverage', 1)),
                         "zero_fee": "USDC" in sym
                     })
-            return positions if positions else self._mock_positions
+            return positions
         except Exception as e:
             print(f"[!] 獲取幣安持倉失敗: {e}")
-            return self._mock_positions
+            return []
 
-    def check_liquidity_guard(self, symbol: str, max_spread_pct: float = 0.15) -> Dict[str, Any]:
+    def check_liquidity_guard(self, symbol: str, max_spread_pct: float = 0.50) -> Dict[str, Any]:
         """
         USDC Liquidity Guard:
         在對 USDC 交易對執行市價單前，檢查盤口價差與前 5 檔深度。
-        價差大於 max_spread_pct (0.15%) 或深度不足時拒絕市價單，防止流動性滑價衝擊。
+        合約測試網環境盤口深度較薄，預設容許閥值為 0.50%，深度過薄或極端行情防禦拒絕市價單。
         """
         target_symbol = self.format_symbol(symbol)
         raw_symbol = self._to_raw_symbol(symbol)
