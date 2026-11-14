@@ -411,11 +411,12 @@ class BinanceTestnetClient:
                 "message": f"[幣安官方合約測試網] 訂單成功送出 (ID: {order.get('orderId')}, 狀態: {order.get('status')})"
             }
         except Exception as e:
-            # 降級執行備援撮合回報
+            # 真實遠端下單若拋出異常，應如實回傳 success: False，杜絕異常假成功
             return {
-                "success": True,
-                "mode": "BINANCE_TESTNET_SIMULATED",
-                "message": f"[幣安合約測試網撮合] 下單成功 (符號: {target_symbol}, 訊息: 測試網路由成功)",
+                "success": False,
+                "mode": "OFFICIAL_BINANCE_TESTNET_ERROR",
+                "message": f"[幣安官方合約測試網] 委託下單失敗: {str(e)}",
+                "error": str(e),
                 "details": str(e)
             }
 

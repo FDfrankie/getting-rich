@@ -41,7 +41,7 @@ class GDrivePersistenceSync:
                 CREATE TABLE IF NOT EXISTS bot_state (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
                 )
             """)
             cur.execute("""
@@ -330,12 +330,19 @@ class GDrivePersistenceSync:
             return ""
 
     def create_rolling_backup(self):
-        """建立時間戳 rolling backup"""
+        """建立時間戳 rolling backup，優先使用 sqlite3 在線備份 (sqlite3.backup()) 保證交易一致性"""
         try:
             if os.path.exists(self.db_path):
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup_file = os.path.join(BACKUP_DIR, f"state_backup_{ts}.db")
-                shutil.copy2(self.db_path, backup_file)
+                try:
+                    src_conn = sqlite3.connect(self.db_path)
+                    dst_conn = sqlite3.connect(backup_file)
+                    src_conn.backup(dst_conn)
+                    dst_conn.close()
+                    src_conn.close()
+                except Exception:
+                    shutil.copy2(self.db_path, backup_file)
                 # 維護備份數量不超過 10 個
                 existing = sorted([os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR) if f.endswith(".db")])
                 if len(existing) > 10:

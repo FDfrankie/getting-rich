@@ -99,7 +99,8 @@ class QuantAppContext:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS bot_state (
                     key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
                 )
             """)
             conn.commit()
@@ -168,13 +169,14 @@ class QuantAppContext:
 
         # 寫入磁碟 SQLite
         try:
+            now_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn = sqlite3.connect(STATE_DB_PATH)
             cur = conn.cursor()
             cur.execute("INSERT INTO bot_logs (timestamp, message) VALUES (?, ?)", (ts, msg))
-            cur.execute("REPLACE INTO bot_state (key, value) VALUES ('bot_strategy_name', ?)", (self.bot_strategy_name,))
-            cur.execute("REPLACE INTO bot_state (key, value) VALUES ('execution_mode', ?)", (self.execution_mode,))
-            cur.execute("REPLACE INTO bot_state (key, value) VALUES ('position', ?)", (str(self.active_bot.position),))
-            cur.execute("REPLACE INTO bot_state (key, value) VALUES ('balance_usdt', ?)", (str(self.active_bot.balance_usdt),))
+            cur.execute("REPLACE INTO bot_state (key, value, updated_at) VALUES ('bot_strategy_name', ?, ?)", (self.bot_strategy_name, now_dt))
+            cur.execute("REPLACE INTO bot_state (key, value, updated_at) VALUES ('execution_mode', ?, ?)", (self.execution_mode, now_dt))
+            cur.execute("REPLACE INTO bot_state (key, value, updated_at) VALUES ('position', ?, ?)", (str(self.active_bot.position), now_dt))
+            cur.execute("REPLACE INTO bot_state (key, value, updated_at) VALUES ('balance_usdt', ?, ?)", (str(self.active_bot.balance_usdt), now_dt))
             conn.commit()
             conn.close()
         except Exception:

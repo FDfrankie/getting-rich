@@ -54,7 +54,7 @@ class CryptoTradingEnv:
         self.current_step = 0
         self.balance = self.initial_balance
         self.position = 0.0
-        self.entry_price = self.df.loc[0, 'Close']
+        self.entry_price = 0.0
         self.peak_equity = self.initial_balance
         self.returns_history = []
         return self._get_observation()
@@ -111,7 +111,7 @@ class CryptoTradingEnv:
         # Update position
         if action != self.position:
             self.position = action
-            self.entry_price = next_price
+            self.entry_price = next_price if action != 0 else 0.0
 
         self.current_step = next_step
         done = (self.current_step >= self.max_steps) or (drawdown >= self.max_drawdown_limit)

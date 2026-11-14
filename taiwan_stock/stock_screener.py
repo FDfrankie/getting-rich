@@ -39,7 +39,9 @@ class StockScreener:
         # KD 指標 (Stochastic Oscillator 9,3,3)
         low9 = low.rolling(PARAMS['kd_period']).min()
         high9 = high.rolling(PARAMS['kd_period']).max()
-        rsv = (close - low9) / (high9 - low9 + 1e-9) * 100
+        # 嚴格使用 np.maximum 與 epsilon 防禦零分母，避免極端數值暴衝
+        kd_denom = np.maximum(high9 - low9, 1e-4)
+        rsv = ((close - low9) / kd_denom) * 100
         
         # 簡易計算 EMA 方式的 K 與 D
         k_list = [50.0]
@@ -85,8 +87,9 @@ class StockScreener:
                 score += 10
 
             # 條件 2: 成交量放大
+            vol_denom = max(float(curr['VOL_MA5']), 1.0)
             if curr['Volume'] > curr['VOL_MA5'] * PARAMS['volume_surge_multiplier']:
-                vol_ratio = round(curr['Volume'] / (curr['VOL_MA5'] + 1e-9), 2)
+                vol_ratio = round(float(curr['Volume']) / vol_denom, 2)
                 signals.append(f"爆量突破 (成交量為5日均量 {vol_ratio} 倍)")
                 score += 25
             elif curr['Volume'] > curr['VOL_MA5']:

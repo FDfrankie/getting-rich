@@ -203,7 +203,8 @@ class BitunixClient:
         side: str,  # 'buy' or 'sell'
         order_type: str,  # 'limit' or 'market'
         amount: float,
-        price: Optional[float] = None
+        price: Optional[float] = None,
+        reduce_only: bool = False
     ) -> Dict[str, Any]:
         """Bitunix 下單撮合"""
         side = side.upper()
@@ -221,6 +222,7 @@ class BitunixClient:
                 "side": side,
                 "price": exec_price,
                 "amount": amount,
+                "reduceOnly": reduce_only,
                 "status": "closed" if order_type == "MARKET" else "open",
                 "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
             }
@@ -253,7 +255,8 @@ class BitunixClient:
                 "symbol": clean_symbol,
                 "side": side,
                 "orderType": order_type,
-                "amount": str(amount)
+                "amount": str(amount),
+                "reduceOnly": reduce_only
             }
             if order_type == "LIMIT" and price:
                 payload["price"] = str(price)
@@ -277,7 +280,7 @@ class BitunixClient:
             }
 
     def close_all_positions(self) -> Dict[str, Any]:
-        """Bitunix 一鍵平倉所有持倉"""
+        """Bitunix 一鍵平倉所有持倉 (平倉委託必須附帶 reduceOnly=True 防反向開倉)"""
         count = len(self._simulated_positions)
         self._simulated_positions.clear()
         if self.is_live:
@@ -285,7 +288,7 @@ class BitunixClient:
                 positions = self.fetch_positions()
                 for p in positions:
                     side = "sell" if p["side"] == "LONG" else "buy"
-                    self.create_order(p["symbol"], side=side, order_type="market", amount=p["contracts"])
+                    self.create_order(p["symbol"], side=side, order_type="market", amount=p["contracts"], reduce_only=True)
             except Exception:
                 pass
 

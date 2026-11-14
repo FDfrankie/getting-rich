@@ -64,9 +64,22 @@ class AlphaVault:
         - Sharpe Ratio >= 1.25
         - Fitness >= 1.0
         - Turnover 在 1% ~ 70% 之間 (0.01 ~ 0.70)
+        修補：原始實作中若 turnover > 1.0 誤直接除以 100（例如 turnover=1.20 代表換手率 120% 嚴重超標，被誤除以 100 變 0.012 偽通過）。
+        區分方式：
+        1. 若 turnover > 70.0，無論是小數還是百分比皆嚴重超標，不可通過。
+        2. 若 0.70 < turnover <= 2.0，代表真實換手率小數值超標（如 0.85, 1.20 等，換手率 85%~200%），嚴禁誤除以 100 放行，直接不通過！
+        3. 若 2.0 < turnover <= 70.0，為整數級百分比輸入（如 22.0 代表 22%），正規化為小數（turnover / 100.0）。
+        4. 若 0.01 <= turnover <= 0.70，為標準小數換手率，直接通過。
         """
-        # 如果 turnover 以百分比 (例如 15%) 傳入，轉換為小數
-        norm_turnover = turnover / 100.0 if turnover > 1.0 else turnover
+        if turnover < 0:
+            return False
+        if 0.01 <= turnover <= 0.70:
+            norm_turnover = turnover
+        elif 2.0 < turnover <= 70.0:
+            norm_turnover = turnover / 100.0
+        else:
+            return False
+
         return (sharpe >= 1.25) and (fitness >= 1.0) and (0.01 <= norm_turnover <= 0.70)
 
     def save_alpha(
@@ -96,7 +109,10 @@ class AlphaVault:
                 "qualified": False
             }
 
-        norm_turnover = turnover / 100.0 if turnover > 1.0 else turnover
+        if 2.0 < turnover <= 70.0:
+            norm_turnover = turnover / 100.0
+        else:
+            norm_turnover = turnover
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         with self._get_connection() as conn:

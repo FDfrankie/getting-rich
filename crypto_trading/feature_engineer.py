@@ -53,8 +53,10 @@ class CryptoFeatureEngineer:
         out["vwap_deviation_24"]=c.div(rolling_vwap).sub(1); out["hl_location"]=(2*c-h-l).div((h-l).replace(0,np.nan))
         direction=np.sign(c.diff()).fillna(0); obv=(direction*v).cumsum(); out["obv_slope_10"]=obv.diff(10).div(v.rolling(10,min_periods=10).mean()*10)
         for horizon in self.forward_horizons:
-            out[f"target_fwd_ret_{horizon}"]=c.shift(-horizon).div(c).sub(1)
-            out[f"target_direction_{horizon}"]=(out[f"target_fwd_ret_{horizon}"]>0).astype("Int64")
+            fwd_ret = c.shift(-horizon).div(c).sub(1)
+            out[f"target_fwd_ret_{horizon}"] = fwd_ret
+            # 確保尾端未來收益為 NaN 時，target_direction 也保持為 NaN/None，避免誤標為 0 造成前瞻洩漏或偏差
+            out[f"target_direction_{horizon}"] = fwd_ret.map(lambda r: np.nan if pd.isna(r) else (1 if r > 0 else 0)).astype("Int64")
         raw={"Open","High","Low","Close","Volume"}; targets={c for c in out.columns if c.startswith("target_")}
         self.feature_columns=[x for x in out.columns if x not in raw|targets]
         return out.replace([np.inf,-np.inf],np.nan)
@@ -65,7 +67,8 @@ class CryptoFeatureEngineer:
         for sym, df in asset_dfs.items():
             norm_df = self._normalise(df)
             closes[sym] = norm_df["Close"]
-        close_df = pd.DataFrame(closes).ffill().bfill()
+        # 嚴格禁止 .bfill() 避免未來收盤價反向洩漏至歷史；僅採用 .ffill()
+        close_df = pd.DataFrame(closes).ffill()
         ret_df = close_df.pct_change()
         
         cross_df = pd.DataFrame(index=close_df.index)

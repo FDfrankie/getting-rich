@@ -110,7 +110,7 @@ class CryptoMLTrainer:
         features = self.feature_engineer.feature_columns
         self.feature_names = features
 
-        target_col = 'target_fwd_ret_3' if self.task == "regression" else 'target_binary'
+        target_col = 'target_fwd_ret_3' if self.task == "regression" else ('target_direction_3' if 'target_direction_3' in processed.columns else 'target_binary')
         X = processed[features].values
         y = processed[target_col].values
         returns = processed['target_fwd_ret_3'].values
@@ -135,20 +135,23 @@ class CryptoMLTrainer:
             model = self._init_model()
             model.fit(X_train, y_train)
 
+            # 3 期重疊收益之年化夏普比率修正因子：年週期為 8760 / 3，避免 3 期重疊持有將波動虛胖
+            annual_multiplier = np.sqrt(8760.0 / 3.0)
+
             if self.task == "regression":
                 preds = model.predict(X_test)
                 # Compute Rank IC (Spearman correlation between prediction & realization)
                 rank_ic = pd.Series(preds).corr(pd.Series(y_test), method='spearman')
                 # Strategy simulated returns based on sign of prediction
                 strat_ret = np.sign(preds) * test_ret
-                sharpe = (np.mean(strat_ret) / (np.std(strat_ret) + 1e-9)) * np.sqrt(8760)
+                sharpe = (np.mean(strat_ret) / (np.std(strat_ret) + 1e-9)) * annual_multiplier
                 accuracy = np.mean((preds > 0) == (y_test > 0))
             else:
                 prob = model.predict_proba(X_test)[:, 1]
                 preds = prob - 0.5
                 rank_ic = pd.Series(prob).corr(pd.Series(y_test), method='spearman')
                 strat_ret = np.sign(preds) * test_ret
-                sharpe = (np.mean(strat_ret) / (np.std(strat_ret) + 1e-9)) * np.sqrt(8760)
+                sharpe = (np.mean(strat_ret) / (np.std(strat_ret) + 1e-9)) * annual_multiplier
                 accuracy = np.mean((prob > 0.5) == (y_test == 1))
 
             oof_predictions[train_end:test_end] = preds

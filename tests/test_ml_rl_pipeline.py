@@ -61,6 +61,13 @@ class TestMLRLTradingInfrastructure(unittest.TestCase):
         self.assertIn("mean_sharpe", summary)
         self.assertGreater(len(summary["top_10_features"]), 0)
 
+        # 測試 classification 任務 Walk-Forward (驗證 target_direction_3 正常運作且無 KeyError)
+        trainer_clf = CryptoMLTrainer(model_type="lightgbm", task="classification")
+        summary_clf = trainer_clf.walk_forward_train(self.df, n_splits=3)
+        self.assertIn("mean_accuracy", summary_clf)
+        self.assertIn("mean_sharpe", summary_clf)
+        self.assertGreaterEqual(summary_clf["mean_accuracy"], 0.0)
+
         # Test Save & Load
         model_file = os.path.join(self.temp_dir, "test_lgbm.joblib")
         trainer.save_weights(model_file)
