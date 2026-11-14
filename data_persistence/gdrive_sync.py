@@ -57,6 +57,56 @@ class GDrivePersistenceSync:
                     created_at TEXT NOT NULL
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    exchange_order_id TEXT,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    order_type TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    amount REAL NOT NULL,
+                    cost REAL,
+                    fee REAL,
+                    status TEXT NOT NULL,
+                    reason TEXT,
+                    timestamp TEXT NOT NULL
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS positions (
+                    symbol TEXT PRIMARY KEY,
+                    side TEXT NOT NULL,
+                    contracts REAL NOT NULL,
+                    entry_price REAL NOT NULL,
+                    unrealized_pnl REAL,
+                    leverage INTEGER DEFAULT 1,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS trade_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    amount REAL NOT NULL,
+                    pnl REAL,
+                    pnl_pct REAL,
+                    reason TEXT,
+                    timestamp TEXT NOT NULL
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS account_equity (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    total_equity REAL NOT NULL,
+                    balance_usdt REAL NOT NULL,
+                    unrealized_pnl REAL NOT NULL,
+                    timestamp TEXT NOT NULL
+                )
+            """)
             conn.commit()
             conn.close()
         except Exception as e:
@@ -140,6 +190,118 @@ class GDrivePersistenceSync:
                     "created_at": r[7]
                 })
             return results
+        except Exception:
+            return []
+
+    def record_order(
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,
+        price: float,
+        amount: float,
+        status: str = "FILLED",
+        exchange_order_id: Optional[str] = None,
+        cost: Optional[float] = None,
+        fee: float = 0.0,
+        reason: str = ""
+    ):
+        """記錄訂單委託至 orders 資料表"""
+        try:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO orders (exchange_order_id, symbol, side, order_type, price, amount, cost, fee, status, reason, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (exchange_order_id, symbol, side, order_type, price, amount, cost or (price * amount), fee, status, reason, now_str))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[!] 記錄訂單失敗: {e}")
+
+    def update_position_record(
+        self,
+        symbol: str,
+        side: str,
+        contracts: float,
+        entry_price: float,
+        unrealized_pnl: float = 0.0,
+        leverage: int = 1
+    ):
+        """更新當前持倉狀態 (positions 表)"""
+        try:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            if contracts <= 1e-6:
+                cur.execute("DELETE FROM positions WHERE symbol = ?", (symbol,))
+            else:
+                cur.execute("""
+                    REPLACE INTO positions (symbol, side, contracts, entry_price, unrealized_pnl, leverage, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (symbol, side, contracts, entry_price, unrealized_pnl, leverage, now_str))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[!] 更新持倉紀錄失敗: {e}")
+
+    def record_trade_log(
+        self,
+        symbol: str,
+        action: str,
+        side: str,
+        price: float,
+        amount: float,
+        pnl: float = 0.0,
+        pnl_pct: float = 0.0,
+        reason: str = ""
+    ):
+        """記錄撮合成交歷史至 trade_logs 資料表"""
+        try:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO trade_logs (symbol, action, side, price, amount, pnl, pnl_pct, reason, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (symbol, action, side, price, amount, pnl, pnl_pct, reason, now_str))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[!] 記錄成交日誌失敗: {e}")
+
+    def record_account_equity(self, total_equity: float, balance_usdt: float, unrealized_pnl: float = 0.0):
+        """記錄帳戶淨值歷史至 account_equity 資料表"""
+        try:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO account_equity (total_equity, balance_usdt, unrealized_pnl, timestamp)
+                VALUES (?, ?, ?, ?)
+            """, (total_equity, balance_usdt, unrealized_pnl, now_str))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[!] 記錄帳戶淨值失敗: {e}")
+
+    def get_recent_orders(self, limit: int = 10) -> list:
+        """獲取最近訂單紀錄"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, exchange_order_id, symbol, side, order_type, price, amount, cost, fee, status, reason, timestamp
+                FROM orders ORDER BY id DESC LIMIT ?
+            """, (limit,))
+            rows = cur.fetchall()
+            conn.close()
+            return [{
+                "id": r[0], "exchange_order_id": r[1], "symbol": r[2], "side": r[3],
+                "order_type": r[4], "price": r[5], "amount": r[6], "cost": r[7],
+                "fee": r[8], "status": r[9], "reason": r[10], "timestamp": r[11]
+            } for r in rows]
         except Exception:
             return []
 

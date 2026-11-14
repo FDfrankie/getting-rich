@@ -18,15 +18,14 @@
 ├── README.md                      # [當前文件] 專案總覽、架構與 AI 協同開發協議
 ├── requirements.txt               # 全專案 Python 依賴清單
 ├── Dockerfile                     # 🐳 輕量雲端容器封裝檔 (支援 24h 免電腦常駐)
-├── docker-compose.yml             # 🐳 本地/VPS 一鍵啟動配置檔
 ├── render.yaml                    # ☁️ Render.com 一鍵自動部署設定
-├── Procfile                       # ☁️ Heroku / Railway 啟動進程定義
+├── GEMINI.md                      # 📜 量化操盤與工程開發規範指南
 │
 ├── web_ui/                        # 📱 一體化響應式 Web APP 控制台 (手機/電腦通用)
 │   ├── app.py                     # 服務啟動入口
-│   ├── server.py                  # 輕量高效後端 API Server
+│   ├── server.py                  # 多線程高效後端 API Server (ThreadingHTTPServer)
 │   └── static/
-│       └── index.html             # 現代質感 SPA 儀表板 (Tailwind + Chart.js)
+│       └── index.html             # 現代質感 SPA 儀表板 (Lightweight Charts + Tailwind)
 │
 ├── kaggle_notebooks/              # ☁️ 雲端 GPU/CPU 訓練與回測筆記本
 │   ├── README.md                  # Kaggle 筆記本使用說明
@@ -37,26 +36,29 @@
 ├── taiwan_stock/                  # 🇹🇼 1. 台股自動分析、ML 選股與晨報模組
 │   ├── README.md                  # 台股模組詳細運作邏輯與說明
 │   ├── config.py                  # 台股參數與 API/Webhook 設定
-│   ├── market_analyzer.py         # 大盤多空掌握 (均線趨勢、市場溫度評分)
-│   ├── stock_screener.py          # 智慧選股器 (量價突破、均線糾結發散、KD/布林)
-│   ├── ml_ranker.py               # 🤖 機器學習 (LightGBM/XGBoost) 多因子超額報酬排序器
+│   ├── market_analyzer.py         # 大盤多空掌握 (均線趨勢、市場溫度評分 0-100)
+│   ├── stock_screener.py          # 智慧選股器 (量價突破、均線糾結發散、選股透明度)
+│   ├── ml_ranker.py               # 🤖 機器學習 (LightGBM/XGBoost) 多因子超額報酬排序器 (5日隔離期)
 │   ├── report_generator.py        # 每日早報排版產出器 (含大盤診斷 + 技術突破 + ML 排行)
-│   ├── scheduler.py               # 每日 08:00 自動排程執行器
+│   ├── scheduler.py               # 每日雙時段 (08:00 盤前 / 16:30 盤後) 自動排程執行器
 │   └── reports/                   # 歷次自動產生的每日晨報存檔目錄
 │
 ├── crypto_trading/                # 🪙 2. 虛擬貨幣自動操盤與量化/RL 引擎
 │   ├── README.md                  # 加密貨幣模組使用指南與風控說明
 │   ├── real_exchange_trading_guide.md # 📖 實體交易所出入金、合約機制與 API 安全教學
-│   ├── testnet_client.py          # 🌐 幣安官方測試網 (Binance Testnet Spot & Futures) 串接模組
-│   ├── config.py                  # 交易所 API 設定 (CCXT / Binance 等)、風控閥值
+│   ├── testnet_client.py          # 🌐 幣安官方合約測試網 (Binance Futures Testnet / USDC 0手續費)
+│   ├── bitunix_client.py          # 🌐 Bitunix OpenAPI 實盤撮合串接模組
+│   ├── regime_filter.py           # 🛡️ 階層式宏觀時框趨勢濾網 (Hierarchical Regime Filter)
+│   ├── config.py                  # 交易所 API 設定、風控閥值與多時框設定
 │   ├── data_loader.py             # 歷史行情下載、快取與即時 K 線接收 (含離線擬真行情生成)
 │   ├── feature_engineer.py        # 🔬 平穩化特徵工程 (動量、Garman-Klass 波動度、委託流)
 │   ├── ml_trainer.py              # 📈 滾動式前向交叉驗證 (Walk-Forward CV) 機器學習訓練器
 │   ├── rl_env.py                  # 🎮 Gymnasium 相容之加密貨幣微分夏普比率交易環境
 │   ├── rl_agent.py                # 🧠 純 PyTorch Actor-Critic PPO 連續動作交易 Agent
+│   ├── loss_functions.py          # 📐 可微夏普比率與 Rank IC 損失函數 (Direct Sharpe Optimization)
 │   ├── backtest_engine.py         # 向量化與事件驅動回測引擎 (含手續費與滑價)
-│   ├── risk_manager.py            # 即時部位管理、動態停損/停利與最大回撤保護
-│   ├── bot_runner.py              # 自動操盤實盤/模擬盤 (Paper Trading) 主程式
+│   ├── risk_manager.py            # 即時部位管理、動態停損/停利與 8% 最大回撤熔斷保護
+│   ├── bot_runner.py              # 24/7 自動操盤實盤/模擬盤主程式 (支援 SQLite 訂單同步)
 │   └── strategies/                # 策略庫
 │       ├── __init__.py
 │       ├── ml_strategy.py         # 🤖 機器學習 Alpha 預測策略
@@ -64,12 +66,25 @@
 │       ├── momentum_breakout.py   # 動量與波動度突破策略 (Bollinger / Donchian Breakout)
 │       └── statistical_arbitrage.py# 統計學策略 (均值回歸、Z-Score 波動套利)
 │
-├── tests/                         # 🧪 單元測試與回歸測試套件
-│   ├── test_ml_rl_pipeline.py     # ML 特徵工程、Walk-forward、RL 環境、PPO Agent 整合測試
-│   ├── test_loss_functions.py     # 可微夏普比率、可微 Rank IC、貝葉斯 Focal Loss 單元測試
-│   └── test_web_ui_and_vault.py   # Web UI API 與 Alpha 倉庫讀寫單元測試
+├── data_persistence/              # 💾 持久化儲存與 Google Drive 雲端同步
+│   ├── system_state.db            # SQLite 狀態資料庫 (orders, positions, trade_logs, account_equity)
+│   ├── cloud_state_snapshot.json  # 雲端 JSON 狀態快照
+│   ├── gdrive_sync.py             # Google Drive API 雙向備份與 Rolling Backup 同步模組
+│   └── models/                    # 已訓練完成之量化 ML/RL 模型權重庫
+│       ├── crypto_lgbm_weights.joblib
+│       ├── crypto_ppo_agent.pt
+│       └── taiwan_stock_ranker.joblib
 │
-├── docs/                          # 📚 核心講義、學術研究庫與操作指南
+├── tests/                         # 🧪 單元測試與嚴格回歸審計套件 (28 Tests)
+│   ├── test_architectural_upgrades.py # 交易所持倉同調、熔斷、流動性守護測試
+│   ├── test_no_lookahead_audit.py     # 嚴格防未來函數檢驗、5日隔離期審計
+│   ├── test_taiwan_stock_scoring.py   # 台股標準化評分 (0-100) 與透明度測試
+│   ├── test_ml_rl_pipeline.py         # ML/RL 特徵工程、Walk-forward 訓練測試
+│   ├── test_loss_functions.py         # 可微夏普比率、可微 Rank IC 損失函數測試
+│   └── test_web_ui_and_vault.py       # Web UI API、Alpha 倉庫讀寫與心跳測試
+│
+├── docs/                          # 📚 核心講義、學術研究庫與驗收矩陣
+│   ├── BATCH_ACCEPTANCE_MATRIX.md # 38 項全維度驗收矩陣 (GOAL_COMPLETE)
 │   ├── USER_ACTION_GUIDE.md       # 👤 使用者實務操作指南 (每日例行/Kaggle訓練/實盤轉移)
 │   ├── FILE_CLEANUP_AND_MERGE_REPORT.md # 🧹 檔案整理合併與冗餘清理紀錄
 │   ├── handbook/
@@ -77,11 +92,14 @@
 │   │   ├── QUANT_HANDBOOK.html    # 排版美化 HTML (支援 KaTeX 公式與 PDF 列印)
 │   │   └── build_html.py          # HTML 自動生成腳本
 │   └── research/
-│       └── ADVANCED_QUANT_RESEARCH.md # 🔬 前沿量化研究與論文庫 (HMM、條件機率、時序大模型、LLM Weights 解讀)
+│       ├── ADVANCED_QUANT_RESEARCH.md # 🔬 前沿量化研究與論文庫
+│       └── papers/
+│           └── SELECTED_PAPERS_REVIEW.md # 精選學術論文解析 (arXiv 引用)
 │
 └── worldquant_brain/              # 🧠 3. WorldQuant BRAIN Alpha 研發與變現
     ├── README.md                  # BRAIN 獲利機制與顧問分潤詳解 (如何拿到美金報酬)
     ├── alpha_vault.py             # 🏛️ Alpha 策略倉庫 (驗證通過因子持久化保存與批量匯出)
+    ├── alpha_miner.py             # 🧬 ContinuousAlphaMiner 24/7 背景自主演算法挖掘
     ├── alpha_vault.db             # 🗄️ SQLite 策略資料庫
     ├── verified_alphas.json       # 📑 JSON 策略儲備同步備份
     ├── data_fields_guide.md       # BRAIN 數據庫分類與使用指南 (量價、基本面、分析師預期)

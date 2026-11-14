@@ -21,6 +21,10 @@
 | `taiwan_stock/stock_screener.py` | 函式擴充合併 | 將篩選門檻與個股詳細評估合併至 `evaluate_stock()` 與 `run_screener_detailed()`，並保留舊有 `run_screener()` 向後相容介面。 |
 | `taiwan_stock/scheduler.py` | 排程合併重構 | 原先僅支援單一時段 08:00，升級合併為 Asia/Taipei 雙時段排程：16:30 (盤後) 與 08:00 (盤前)。 |
 | `web_ui/static/index.html` (Lightweight Charts) | 視圖整合 | 引入 TradingView Lightweight Charts 4.1.1，將即時 K 線、MA、布林帶、買賣標記、持倉成本線與選股池點擊連動完整融入 SPA 操盤室中。 |
+| `docs/BATCH[1-5]_*.md` | 冗餘清理 | 刪除 Batch 1 至 Batch 5 過程性規格/提示暫存檔，成果統整歸納入 `docs/BATCH_ACCEPTANCE_MATRIX.md`。 |
+| `docs/*.gdoc` | 冗餘清理 | 刪除 Google Drive 同步殘留之 .gdoc 偽檔案（`TRAIN_CLI_THREE_MODELS_SPEC.md.gdoc`、`KAGGLE_ONE_SHOT_NOTEBOOK_SPEC.md.gdoc` 等 13 個暫存檔）。 |
+| `crypto_trading/bot_runner.py` | 架構升級 | 下單撮合引擎全生命週期串接 SQLite `orders`、`positions`、`trade_logs`、`account_equity`，並於虧損時自動觸發 `post_mortems`。 |
+| `web_ui/server.py` (買賣標記動態化) | 邏輯修復 | 徹底移除寫死假箭頭，改為動態自 SQLite orders 歷史提取成交時間點並注入圖表。 |
 
 ---
 

@@ -4,7 +4,7 @@ import time
 import sqlite3
 import threading
 from datetime import datetime
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from typing import Dict, Any, List
 
@@ -507,17 +507,29 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 else:
                     overlay = {"ma5": [], "ma20": [], "ma60": [], "bb_upper": [], "bb_lower": []}
 
-                # 買賣標記 (Markers) 與 持倉 SL/TP 線
+                # 買賣標記 (Markers) 與 持倉 SL/TP 線 (從持久化訂單與交易歷史真實獲取，杜絕寫死假點位)
                 markers = []
                 bot = APP_STATE.active_bot
-                if len(candles) > 10 and not is_taiwan:
-                    markers.append({
-                        "time": candles[-8]["time"],
-                        "position": "belowBar",
-                        "color": "#10b981",
-                        "shape": "arrowUp",
-                        "text": "BUY"
-                    })
+                if not is_taiwan and len(candles) > 0:
+                    earliest_chart_ts = candles[0]["time"]
+                    latest_chart_ts = candles[-1]["time"]
+                    recent_orders = bot.sync.get_recent_orders(limit=20)
+                    for ord_item in recent_orders:
+                        try:
+                            # 轉換 ISO/標準時間為 unix timestamp
+                            ord_ts = int(time.mktime(datetime.strptime(ord_item["timestamp"], "%Y-%m-%d %H:%M:%S").timetuple()))
+                            if earliest_chart_ts <= ord_ts <= latest_chart_ts + 300:
+                                side_upper = ord_item["side"].upper()
+                                is_buy = side_upper == "BUY"
+                                markers.append({
+                                    "time": ord_ts,
+                                    "position": "belowBar" if is_buy else "aboveBar",
+                                    "color": "#10b981" if is_buy else "#ef4444",
+                                    "shape": "arrowUp" if is_buy else "arrowDown",
+                                    "text": f"{side_upper} @ {ord_item['price']:.1f}"
+                                })
+                        except Exception:
+                            pass
                 
                 trade_lines = {}
                 if bot.position > 0 and (bot.symbol == symbol or not is_taiwan):
@@ -699,12 +711,10 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
 
         return self._send_json_response({"error": "Endpoint not found"}, status=404)
 
-        return self._send_json_response({"error": "Endpoint not found"}, status=404)
-
 def run_server(port: int = 8000, host: str = "0.0.0.0"):
     os.makedirs(STATIC_DIR, exist_ok=True)
     server_address = (host, port)
-    httpd = HTTPServer(server_address, AppAPIHandler)
+    httpd = ThreadingHTTPServer(server_address, AppAPIHandler)
     print(f"🚀 [Web UI Server] 服務已在 http://localhost:{port} 啟動！")
     print(f"📱 手機與局域網訪問可使用 http://[您的區域網路IP]:{port}")
     try:

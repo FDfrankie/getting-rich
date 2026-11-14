@@ -59,14 +59,51 @@ class CryptoTradingBot:
                     self.last_order_info = res
                     self.log(f"⚡ [交易所委託成交] {order_side} {amount:.4f} {self.symbol} @ {fill_price:.2f} | 遠端 OrderID: {order_id} | 原因: {reason}")
                     
+                    self.sync.record_order(
+                        symbol=self.symbol,
+                        side=order_side,
+                        order_type="MARKET",
+                        price=fill_price,
+                        amount=amount,
+                        status="FILLED",
+                        exchange_order_id=order_id,
+                        cost=fill_price * amount,
+                        fee=0.0 if "USDC" in self.symbol else (fill_price * amount * 0.0005),
+                        reason=reason
+                    )
+
                     if side == "BUY":
                         self.position += amount
                         self.position_side = "LONG"
                         self.entry_price = fill_price
+                        self.sync.update_position_record(
+                            symbol=self.symbol,
+                            side=self.position_side,
+                            contracts=self.position,
+                            entry_price=self.entry_price
+                        )
+                        self.sync.record_trade_log(
+                            symbol=self.symbol,
+                            action="OPEN",
+                            side="BUY",
+                            price=fill_price,
+                            amount=amount,
+                            reason=reason
+                        )
                     else:
                         pnl = (fill_price - self.entry_price) * self.position if self.position_side == "LONG" else 0.0
                         pnl_pct = ((fill_price - self.entry_price) / self.entry_price * 100.0) if self.entry_price > 0 else 0.0
                         self.log(f"🔴 [交易所部位平倉] {self.position:.4f} {self.symbol} @ {fill_price:.2f} | 損益: {pnl:+.2f} USDT | 原因: {reason}")
+                        self.sync.record_trade_log(
+                            symbol=self.symbol,
+                            action="CLOSE",
+                            side="SELL",
+                            price=fill_price,
+                            amount=self.position,
+                            pnl=pnl,
+                            pnl_pct=pnl_pct,
+                            reason=reason
+                        )
                         if pnl < 0:
                             self.sync.record_post_mortem(
                                 symbol=self.symbol,
@@ -79,6 +116,12 @@ class CryptoTradingBot:
                         self.position = 0.0
                         self.position_side = "FLAT"
                         self.entry_price = 0.0
+                        self.sync.update_position_record(
+                            symbol=self.symbol,
+                            side="FLAT",
+                            contracts=0.0,
+                            entry_price=0.0
+                        )
                     return
                 else:
                     self.log(f"⚠️ [交易所下單未成交或被拒] 原因: {res.get('message', '未知錯誤')}，切換至沙盒記帳防護")
@@ -99,6 +142,33 @@ class CryptoTradingBot:
             self.position_side = "LONG"
             self.entry_price = current_price
             self.log(f"🟢 [模擬買入] {amount:.4f} {self.symbol} @ {current_price:.2f} | 總花費: {cost:.2f} USDT (手續費: {fee:.2f}) | 原因: {reason}")
+            
+            self.sync.record_order(
+                symbol=self.symbol,
+                side="BUY",
+                order_type="MARKET",
+                price=current_price,
+                amount=amount,
+                status="FILLED",
+                exchange_order_id=f"PAPER_{int(time.time()*1000)}",
+                cost=cost,
+                fee=fee,
+                reason=reason
+            )
+            self.sync.update_position_record(
+                symbol=self.symbol,
+                side="LONG",
+                contracts=self.position,
+                entry_price=self.entry_price
+            )
+            self.sync.record_trade_log(
+                symbol=self.symbol,
+                action="OPEN",
+                side="BUY",
+                price=current_price,
+                amount=amount,
+                reason=reason
+            )
         elif side == "SELL":
             revenue = cost - fee
             self.balance_usdt += revenue
@@ -106,6 +176,29 @@ class CryptoTradingBot:
             pnl_pct = ((current_price - self.entry_price) / self.entry_price * 100.0) if self.entry_price > 0 else 0.0
             self.log(f"🔴 [模擬賣出/平倉] {self.position:.4f} {self.symbol} @ {current_price:.2f} | 損益 (PnL): {pnl:+.2f} USDT | 原因: {reason}")
             
+            self.sync.record_order(
+                symbol=self.symbol,
+                side="SELL",
+                order_type="MARKET",
+                price=current_price,
+                amount=self.position,
+                status="FILLED",
+                exchange_order_id=f"PAPER_{int(time.time()*1000)}",
+                cost=cost,
+                fee=fee,
+                reason=reason
+            )
+            self.sync.record_trade_log(
+                symbol=self.symbol,
+                action="CLOSE",
+                side="SELL",
+                price=current_price,
+                amount=self.position,
+                pnl=pnl,
+                pnl_pct=pnl_pct,
+                reason=reason
+            )
+
             # 若發生實質虧損，自動記入 Post-Mortem 檢討資料庫
             if pnl < 0:
                 self.sync.record_post_mortem(
@@ -120,6 +213,12 @@ class CryptoTradingBot:
             self.position = 0.0
             self.position_side = "FLAT"
             self.entry_price = 0.0
+            self.sync.update_position_record(
+                symbol=self.symbol,
+                side="FLAT",
+                contracts=0.0,
+                entry_price=0.0
+            )
 
     def step(self):
         """單次決策迴圈步進 (整合高階趨勢濾網 Hierarchical Regime Filter)"""
