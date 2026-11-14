@@ -45,6 +45,11 @@
   - 8.1 實體虛擬貨幣交易所出入金安全與 API 權限管理
   - 8.2 容器化 (Docker) 與免本機雲端持續執行 (Render / Railway / Cloudflare)
   - 8.3 Web UI 響應式前後端通訊架構與自動化排程
+- [第九章：前沿量化研究、統計學、條件機率與 LLM 潛在空間解讀](#第九章前沿量化研究統計學條件機率與-llm-潛在空間解讀)
+  - 9.1 隱藏馬可夫模型 (HMM) 與貝葉斯動態機率更新
+  - 9.2 可微金融損失函數 (Differentiable Sharpe & Soft Rank IC)
+  - 9.3 大型語言模型 (LLM) 對 Weights / Latent Space 的前沿解讀與微調
+  - 9.4 使用者全流程操作指南與例行維護流程
 
 ---
 
@@ -352,3 +357,40 @@ $$\text{Position Size} = \frac{\text{帳戶總資金} \times \text{單筆最大�
 ```
 
 本專案透過 `Dockerfile` 與 `render.yaml` 實現了一鍵在線部署，無需本機開機即可 24 小時守護資產並發送決策報告。
+
+---
+
+## 第九章：前沿量化研究、統計學、條件機率與 LLM 潛在空間解讀
+
+> 詳細論文清單、ArXiv 連結與 YouTube 頂級課程索引請參見獨立研究專卷：[ADVANCED_QUANT_RESEARCH.md](../research/ADVANCED_QUANT_RESEARCH.md)；使用者實戰操作請參見：[USER_ACTION_GUIDE.md](../USER_ACTION_GUIDE.md)。
+
+### 9.1 隱藏馬可夫模型 (HMM) 與貝葉斯動態機率更新
+1. **市場體制切換 (Regime Switching)**：
+   - 金融市場並非靜止或高斯常態，而是由「低波上漲」、「高波下跌」、「橫盤整理」等隱含狀態構成。
+   - 透過 Baum-Welch 演算法與 Viterbi 在線狀態解碼，交易系統能在暴跌初期自動下調槓桿，於橫盤時啟動網格統計套利。
+2. **條件機率更新**：
+   $$P(\text{Up}_{t+1} \mid I_t, \text{Regime}_t) = \frac{P(I_t \mid \text{Up}_{t+1}, \text{Regime}_t) P(\text{Up}_{t+1} \mid \text{Regime}_t)}{P(I_t \mid \text{Regime}_t)}$$
+   動態融合即時委託單失衡度 (Order Imbalance) 與成交量，大幅減少信號滯後。
+
+### 9.2 可微金融損失函數 (Differentiable Custom Loss Functions)
+專案核心模組 `crypto_trading/loss_functions.py` 實作了三大可微金融損失函數：
+1. **可微夏普比率 (Soft Sharpe Loss)**：
+   $$\mathcal{L}_{\text{Sharpe}} = - \frac{\mu_R}{\sqrt{\sigma_R^2 + \epsilon}} \times \sqrt{252}$$
+   直接將連續投資部位的年化夏普比率作為反向傳播的損失目標。
+2. **可微 Rank IC 損失 (Soft Spearman Loss)**：
+   利用 Sigmoid 平滑溫度計算橫截面排序，最大化模型預測值與標的未來收益率的截面排序相關度。
+3. **貝葉斯體制 Focal Loss**：
+   在極端高波動突發行情中動態加權，保護本金免於異常點干擾。
+
+### 9.3 大型語言模型 (LLM) 對 Weights / Latent Space 的前沿解讀與微調
+1. **時序基礎模型 (Foundation Models for Time Series)**：
+   - **Chronos (Amazon Research, 2024)**：將時間序列 Token 化，以 Next-Token 預測機制達成零樣本跨市場泛化。
+   - **Time-LLM (ICLR 2024)**：利用 Patch Reprogramming Layer 讓未微調之 LLaMA / Mistral 直接解讀金融 K 線並預測走勢。
+2. **權重空間與潛在空間理解 (Weights as Language)**：
+   - 2024–2026 前沿論文揭示，大型語言模型能夠觀察並分析神經網路的權重矩陣（Weights），評估其 Loss Landscape 幾何性質並指導低秩微調 (LoRA)。
+
+### 9.4 使用者全流程操作指南與例行維護流程
+- **每日 (2 分鐘)**：查看 08:00 晨報與加密貨幣機器人未實現盈虧。
+- **每週/每月 (10 分鐘)**：於 Kaggle 免費 GPU 執行一鍵訓練筆記本，下載最新權重檔覆蓋伺服器即可完成升級。
+- **實盤部署**：配置 Binance API Key 並關閉提幣權限，將 `PAPER_TRADING` 切換為 `False`。
+

@@ -65,7 +65,18 @@
 │       └── statistical_arbitrage.py# 統計學策略 (均值回歸、Z-Score 波動套利)
 │
 ├── tests/                         # 🧪 單元測試與回歸測試套件
-│   └── test_ml_rl_pipeline.py     # ML 特徵工程、Walk-forward、RL 環境、PPO Agent 整合測試
+│   ├── test_ml_rl_pipeline.py     # ML 特徵工程、Walk-forward、RL 環境、PPO Agent 整合測試
+│   ├── test_loss_functions.py     # 可微夏普比率、可微 Rank IC、貝葉斯 Focal Loss 單元測試
+│   └── test_web_ui_and_vault.py   # Web UI API 與 Alpha 倉庫讀寫單元測試
+│
+├── docs/                          # 📚 核心講義、學術研究庫與操作指南
+│   ├── USER_ACTION_GUIDE.md       # 👤 使用者實務操作指南 (每日例行/Kaggle訓練/實盤轉移)
+│   ├── handbook/
+│   │   ├── QUANT_HANDBOOK.md      # 量化金融核心講義 Markdown
+│   │   ├── QUANT_HANDBOOK.html    # 排版美化 HTML (支援 KaTeX 公式與 PDF 列印)
+│   │   └── build_html.py          # HTML 自動生成腳本
+│   └── research/
+│       └── ADVANCED_QUANT_RESEARCH.md # 🔬 前沿量化研究與論文庫 (HMM、條件機率、時序大模型、LLM Weights 解讀)
 │
 └── worldquant_brain/              # 🧠 3. WorldQuant BRAIN Alpha 研發與變現
     ├── README.md                  # BRAIN 獲利機制與顧問分潤詳解 (如何拿到美金報酬)
