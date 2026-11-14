@@ -19,8 +19,7 @@ beautifulsoup4>=4.11.0
 # Crypto Trading & Exchanges
 ccxt>=4.1.0
 
-# Technical Analysis & Reinforcement Learning
-pandas-ta>=0.3.14b0
+# Reinforcement Learning
 gymnasium>=0.29.0
 
 # Scheduling & Automation
