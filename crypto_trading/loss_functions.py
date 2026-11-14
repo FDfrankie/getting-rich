@@ -28,7 +28,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Union, Tuple
+from typing import Optional, Union, Tuple, Dict
 
 
 # ==============================================================================
@@ -46,11 +46,11 @@ class SoftSharpeLoss(nn.Module):
         Number of periods per year (e.g., 252 for daily, 252*24 for hourly, 252*24*4 for 15m).
         Default is 252.0.
     eps : float
-        Small constant for numerical stability in standard deviation. Default is 1e-6.
+        Small constant for numerical stability in standard deviation. Default is 1e-8.
     risk_free_rate : float
         Period risk-free benchmark return (default 0.0).
     """
-    def __init__(self, annualization_factor: float = 252.0, eps: float = 1e-6, risk_free_rate: float = 0.0):
+    def __init__(self, annualization_factor: float = 252.0, eps: float = 1e-8, risk_free_rate: float = 0.0):
         super(SoftSharpeLoss, self).__init__()
         self.annualization_factor = annualization_factor
         self.eps = eps
@@ -88,14 +88,15 @@ class SoftSharpeLoss(nn.Module):
 
 
 def numpy_sharpe_ratio(positions: np.ndarray, forward_returns: np.ndarray,
-                       annualization_factor: float = 252.0, eps: float = 1e-6) -> float:
+                       annualization_factor: float = 252.0, eps: float = 1e-8) -> float:
     """NumPy evaluation of Sharpe Ratio."""
     pos = np.asarray(positions).flatten()
     ret = np.asarray(forward_returns).flatten()
     p_ret = pos * ret
     mean_ret = np.mean(p_ret)
-    std_ret = np.std(p_ret, ddof=1)
-    return float((mean_ret / (std_ret + eps)) * np.sqrt(annualization_factor))
+    var_ret = np.var(p_ret, ddof=1)
+    std_ret = np.sqrt(var_ret + eps)
+    return float((mean_ret / std_ret) * np.sqrt(annualization_factor))
 
 
 # ==============================================================================
