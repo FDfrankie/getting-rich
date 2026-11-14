@@ -124,6 +124,20 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             self.path = "/index.html"
             return super().do_GET()
 
+        # 靜態文件映射：講義頁面
+        if path == "/handbook":
+            handbook_path = os.path.join(BASE_DIR, "docs", "handbook", "QUANT_HANDBOOK.html")
+            if os.path.exists(handbook_path):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                with open(handbook_path, "rb") as f:
+                    self.wfile.write(f.read())
+                return
+            else:
+                self.send_error(404, "Handbook not found")
+                return
+
         # API: 系統總覽與健康度
         if path == "/api/status":
             return self._send_json_response({

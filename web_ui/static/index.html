@@ -98,6 +98,10 @@
       <i class="fa-solid fa-book-open"></i>
       <span>實盤交易所教學</span>
     </button>
+    <button onclick="switchTab('handbook')" id="desk-tab-handbook" class="tab-btn px-4 py-2.5 rounded-xl text-sm font-semibold flex items-center space-x-2 bg-slate-900 hover:bg-slate-800 text-amber-400 border border-slate-800">
+      <i class="fa-solid fa-graduation-cap"></i>
+      <span>量化核心講義</span>
+    </button>
   </nav>
 
   <!-- 主要內容區 -->
@@ -471,6 +475,36 @@
         </div>
       </div>
     </section>
+
+    <!-- TAB 6: 量化核心講義專區 (可即時閱讀 / 列印 PDF) -->
+    <section id="tab-content-handbook" class="space-y-4 hidden">
+      <div class="glass-card rounded-2xl p-4 md:p-6 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 class="text-base md:text-lg font-bold text-amber-400 flex items-center space-x-2">
+            <i class="fa-solid fa-graduation-cap"></i>
+            <span>量化金融與策略研發全方位核心講義</span>
+          </h2>
+          <p class="text-xs text-slate-400 mt-1">
+            涵蓋時間序列數學基礎、微觀結構、機器學習 (LightGBM)、強化學習 (PPO 微分夏普)、WorldQuant 變現及資金風控
+          </p>
+        </div>
+        <div class="flex items-center space-x-2">
+          <a href="/handbook" target="_blank" class="px-4 py-2 rounded-xl text-xs md:text-sm font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg transition flex items-center space-x-1.5">
+            <i class="fa-solid fa-arrow-up-right-from-square"></i>
+            <span>新分頁全螢幕開啟</span>
+          </a>
+          <button onclick="document.getElementById('handbookIframe').contentWindow.print()" class="px-4 py-2 rounded-xl text-xs md:text-sm font-bold bg-amber-600 hover:bg-amber-500 text-white shadow-lg transition flex items-center space-x-1.5">
+            <i class="fa-solid fa-print"></i>
+            <span>匯出 / 列印 PDF</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="glass-card rounded-2xl p-2 md:p-3 shadow-xl h-[75vh]">
+        <iframe id="handbookIframe" src="/handbook" class="w-full h-full rounded-xl border border-slate-800 bg-white" title="量化講義閱讀器"></iframe>
+      </div>
+    </section>
+  </main>
   </main>
 
   <!-- 手機版底部導航欄 (Mobile Bottom Tab Bar) -->
@@ -495,6 +529,10 @@
       <i class="fa-solid fa-book-open text-base"></i>
       <span class="text-[10px] mt-0.5 font-medium">實盤教學</span>
     </button>
+    <button onclick="switchTab('handbook')" id="mob-tab-handbook" class="flex flex-col items-center p-1 text-amber-400">
+      <i class="fa-solid fa-graduation-cap text-base"></i>
+      <span class="text-[10px] mt-0.5 font-medium">量化講義</span>
+    </button>
   </nav>
 
   <!-- 前端互動 JavaScript 邏輯 -->
@@ -505,7 +543,7 @@
     // 分頁切換
     function switchTab(tabId) {
       currentTab = tabId;
-      const tabs = ['crypto', 'taiwan', 'brain', 'cloud', 'guide'];
+      const tabs = ['crypto', 'taiwan', 'brain', 'cloud', 'guide', 'handbook'];
       tabs.forEach(t => {
         const content = document.getElementById(`tab-content-${t}`);
         const deskBtn = document.getElementById(`desk-tab-${t}`);
