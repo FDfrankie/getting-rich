@@ -183,14 +183,17 @@ class QuantAppContext:
     def switch_bot_strategy(self, strat_name: str):
         self.bot_strategy_name = strat_name
         adapter = self.testnet_client if self.execution_mode == "BINANCE_TESTNET" else (self.bitunix_client if self.execution_mode == "BITUNIX_LIVE" else None)
+        lgbm_path = os.path.join(DATA_DIR, "models", "crypto_lgbm_weights.joblib")
+        ppo_path = os.path.join(DATA_DIR, "models", "crypto_ppo_agent.pt")
+        
         if strat_name == "ml":
-            strat = MLAlphaStrategy()
+            strat = MLAlphaStrategy(model_path=lgbm_path if os.path.exists(lgbm_path) else None)
         elif strat_name == "rl":
-            strat = RLAlphaStrategy()
+            strat = RLAlphaStrategy(agent_weights_path=ppo_path if os.path.exists(ppo_path) else None)
         else:
             strat = MomentumBreakoutStrategy()
         self.active_bot = CryptoTradingBot(symbol=self.active_bot.symbol, strategy=strat, exchange_adapter=adapter)
-        self.add_log(f"已切換操盤策略至: 【{strat_name.upper()} 策略】")
+        self.add_log(f"已切換操盤策略至: 【{strat_name.upper()} 策略】(自動掛載優化權重)")
 
     def _background_alpha_miner_loop(self):
         """24/7 背景持續自動挖掘 Alpha 因子 Worker"""

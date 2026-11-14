@@ -1,82 +1,67 @@
-import os
-import json
+"""WorldQuant BRAIN API client with asynchronous simulation polling and offline fallback."""
+from __future__ import annotations
+import hashlib, json, os, time
+from typing import Any, Dict, Mapping, Optional
 import requests
-from typing import Dict, Any, Optional
 
 class BrainClient:
-    """
-    WorldQuant BRAIN 官方 API 互動客戶端
-    可用於：
-    1. 驗證帳號認證狀態 (Authentication)
-    2. 自動化發送 Alpha 表達式進行雲端回測 (Simulations)
-    3. 查詢回測進度與 Sharpe / Fitness 指標
-    """
-    BASE_URL = "https://api.worldquantbrain.com"
-
-    def __init__(self, email: Optional[str] = None, password: Optional[str] = None):
-        self.email = email or os.getenv("BRAIN_EMAIL", "")
-        self.password = password or os.getenv("BRAIN_PASSWORD", "")
-        self.session = requests.Session()
-        self.is_authenticated = False
-
-    def authenticate(self) -> bool:
-        """登入 BRAIN 平台取得 Session Cookie"""
-        if not self.email or not self.password:
-            print("[i] 未設定 BRAIN_EMAIL 或 BRAIN_PASSWORD 環境變數，將以離線/研究模式運行。")
-            return False
-
-        try:
-            resp = self.session.post(
-                f"{self.BASE_URL}/authentication",
-                auth=(self.email, self.password)
-            )
-            if resp.status_code == 201:
-                print(f"[✓] WorldQuant BRAIN 帳號認證成功 ({self.email})")
-                self.is_authenticated = True
-                return True
-            else:
-                print(f"[!] 認證失敗: 狀態碼 {resp.status_code}, 回應: {resp.text}")
-                return False
-        except Exception as e:
-            print(f"[!] 連線失敗: {e}")
-            return False
-
-    def simulate_alpha(self, expression: str, universe: str = "TOP3000", delay: int = 1, decay: int = 4) -> Dict[str, Any]:
-        """提交 Alpha 表達式至 BRAIN 伺服器進行雲端回測"""
-        payload = {
-            "type": "REGULAR",
-            "settings": {
-                "instrumentType": "EQUITY",
-                "region": "USA",
-                "universe": universe,
-                "delay": delay,
-                "decay": decay,
-                "neutralization": "SUBINDUSTRY",
-                "truncation": 0.08,
-                "pasteurization": "ON",
-                "unitHandling": "VERIFY",
-                "nanHandling": "OFF",
-                "language": "FASTEXPR",
-                "visualization": False
-            },
-            "regular": expression
-        }
-
-        if not self.is_authenticated:
-            # 離線展示回傳擬真結構
-            return {
-                "status": "OFFLINE_SIMULATION_READY",
-                "alpha_expression": expression,
-                "settings": payload["settings"],
-                "notice": "請配置 BRAIN_EMAIL 及 BRAIN_PASSWORD 即可一鍵送往 WorldQuant 雲端運算叢集進行十數年歷史回測！"
-            }
-
-        resp = self.session.post(f"{self.BASE_URL}/simulations", json=payload)
-        return resp.json()
-
-if __name__ == "__main__":
-    client = BrainClient()
-    test_expr = "rank(ts_argmax(high, 20)) - rank(ts_argmin(low, 20))"
-    res = client.simulate_alpha(test_expr)
-    print("=== WorldQuant BRAIN 提交客戶端測試 ===")
-    print(json.dumps(res, indent=2, ensure_ascii=False))
+    BASE_URL="https://api.worldquantbrain.com"
+    def __init__(self, email: Optional[str]=None, password: Optional[str]=None, timeout: float=30.0, poll_interval: float=5.0, session: Optional[requests.Session]=None) -> None:
+        self.email=email or os.getenv("BRAIN_EMAIL") or os.getenv("BRAIN_USERNAME")
+        self.password=password or os.getenv("BRAIN_PASSWORD")
+        self.timeout=float(timeout); self.poll_interval=float(poll_interval); self.session=session or requests.Session()
+        self.authenticated=False; self._submitted: Dict[str,Dict[str,Any]]={}
+    @property
+    def offline_mode(self)->bool: return not bool(self.email and self.password)
+    def authenticate(self)->bool:
+        if self.offline_mode: return False
+        r=self.session.post(f"{self.BASE_URL}/authentication",auth=(self.email,self.password),timeout=self.timeout)
+        r.raise_for_status(); self.authenticated=True; return True
+    @staticmethod
+    def _key(payload: Mapping[str,Any])->str:
+        return hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
+    @staticmethod
+    def _number(obj: Mapping[str,Any], *names: str) -> Optional[float]:
+        stack=[obj]
+        while stack:
+            cur=stack.pop()
+            if isinstance(cur,dict):
+                lowered={str(k).lower():v for k,v in cur.items()}
+                for n in names:
+                    if n.lower() in lowered:
+                        try: return float(lowered[n.lower()])
+                        except (TypeError,ValueError): pass
+                stack.extend(v for v in cur.values() if isinstance(v,(dict,list)))
+            elif isinstance(cur,list): stack.extend(cur)
+        return None
+    def _offline_result(self,payload: Mapping[str,Any])->Dict[str,Any]:
+        return {"status":"OFFLINE","offline":True,"submitted":False,"deduplicated":False,"reason":"BRAIN_EMAIL/BRAIN_PASSWORD 未設定，未送出任何網路請求。","request":dict(payload),"sharpe":None,"fitness":None,"turnover":None,"margin":None}
+    def submit_and_poll_simulation(self, payload: Mapping[str,Any], poll_interval: Optional[float]=None, max_wait_seconds: float=1800.0)->Dict[str,Any]:
+        body=dict(payload); key=self._key(body)
+        if key in self._submitted:
+            cached=dict(self._submitted[key]); cached["deduplicated"]=True; return cached
+        if self.offline_mode:
+            result=self._offline_result(body); self._submitted[key]=result; return dict(result)
+        if not self.authenticated: self.authenticate()
+        response=self.session.post(f"{self.BASE_URL}/simulations",json=body,timeout=self.timeout)
+        if response.status_code not in (200,201,202): response.raise_for_status()
+        location=response.headers.get("Location") or response.headers.get("location")
+        if not location: raise RuntimeError("BRAIN /simulations 未回傳 Location header")
+        if location.startswith("/"): location=f"{self.BASE_URL}{location}"
+        interval=self.poll_interval if poll_interval is None else float(poll_interval); deadline=time.monotonic()+float(max_wait_seconds)
+        last: Dict[str,Any]={}
+        while True:
+            if time.monotonic()>deadline: raise TimeoutError(f"BRAIN simulation polling 超過 {max_wait_seconds} 秒；Location={location}")
+            poll=self.session.get(location,timeout=self.timeout)
+            if poll.status_code==429:
+                time.sleep(max(interval,float(poll.headers.get("Retry-After",interval)))); continue
+            poll.raise_for_status(); last=poll.json() if poll.content else {}
+            status=str(last.get("status") or last.get("state") or "").upper()
+            if status=="COMPLETE":
+                result={"status":"COMPLETE","offline":False,"submitted":True,"deduplicated":False,"location":location,"simulation_id":last.get("id") or location.rstrip("/").split("/")[-1],"sharpe":self._number(last,"sharpe"),"fitness":self._number(last,"fitness"),"turnover":self._number(last,"turnover"),"margin":self._number(last,"margin"),"raw":last}
+                self._submitted[key]=result; return dict(result)
+            if status in {"ERROR","FAILED","CANCELLED","CANCELED"}: raise RuntimeError(f"BRAIN simulation {status}: {last}")
+            retry=poll.headers.get("Retry-After"); time.sleep(float(retry) if retry else interval)
+    def simulate_alpha(self, expression: str, settings: Optional[Mapping[str,Any]]=None, **kwargs: Any)->Dict[str,Any]:
+        payload={"type":"REGULAR","settings":dict(settings or {"instrumentType":"EQUITY","region":"USA","universe":"TOP3000","delay":1,"decay":4,"neutralization":"SUBINDUSTRY","truncation":0.08,"pasteurization":"ON","unitHandling":"VERIFY","nanHandling":"OFF","language":"FASTEXPR","visualization":False}),"regular":expression}
+        return self.submit_and_poll_simulation(payload,**kwargs)

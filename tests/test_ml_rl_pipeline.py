@@ -118,8 +118,8 @@ class TestMLRLTradingInfrastructure(unittest.TestCase):
 
     def test_taiwan_stock_ml_ranker(self):
         mock_universe = {
-            "2330.TW": generate_mock_crypto_df(150),
-            "2454.TW": generate_mock_crypto_df(150)
+            "2330.TW": generate_mock_crypto_df(350),
+            "2454.TW": generate_mock_crypto_df(350)
         }
         ranker = TaiwanStockMLRanker(model_type="lightgbm")
         clean_ds, feat_cols = ranker.prepare_dataset(mock_universe)

@@ -1,257 +1,185 @@
-"""
-Taiwan Stock Multi-Factor Feature Engineering & ML Ranking Model.
-Constructs cross-sectional and time-series factors:
-1. Momentum factors: 5d, 20d, 60d cumulative returns, volume-weighted momentum
-2. Volatility factors: Historical volatility, High/Low spread, ATR ratio
-3. Trend & Moving Average Disparities: Distance from MA5, MA20, MA60
-4. Volume Flow: Relative volume, volume turnover, price-volume rank correlation
-5. Cross-sectional ranking and Walk-Forward predictive modeling
-"""
+"""台股多因子 ML 排序器，採全域日期排序與 5 交易日 embargo。"""
+from __future__ import annotations
 
 import os
+from typing import Any, Dict, List, Mapping, Optional, Tuple
+
 import joblib
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Any, Tuple, Optional
+
 try:
     import lightgbm as lgb
 except ImportError:
     lgb = None
-
 try:
     import xgboost as xgb
 except ImportError:
     xgb = None
-import yfinance as yf
+
 
 class TaiwanStockMLRanker:
-    """
-    台股多因子機器學習選股排序模型
-    - 結合量價、動量、波動度與籌碼面代理因子
-    - 採用 Cross-Sectional Ranking 或 Time-Series Walk-Forward 進行預測
-    - 輸出各股未來超額報酬預測值與投資組合推薦清單
-    """
-    def __init__(self, model_type: str = "lightgbm"):
+    TARGET_COLUMN = "target_fwd_5d"
+    EMBARGO_TRADING_DAYS = 5
+
+    def __init__(self, model_type: str = "lightgbm") -> None:
         self.model_type = model_type.lower()
         self.feature_cols: List[str] = []
-        self.model = None
+        self.model: Any = None
+        self.last_split_info: Dict[str, Any] = {}
 
     @staticmethod
-    def extract_stock_features(df: pd.DataFrame, forward_period: int = 5) -> pd.DataFrame:
-        """
-        為單檔台股計算標準多因子特徵矩陣
-        """
-        df = df.copy()
-        close = df['Close']
-        high = df['High']
-        low = df['Low']
-        vol = df['Volume']
+    def _normalise_ohlcv_columns(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        aliases = {str(c).lower(): c for c in out.columns}
+        rename = {}
+        for canonical in ("Open", "High", "Low", "Close", "Volume"):
+            current = aliases.get(canonical.lower())
+            if current is not None and current != canonical:
+                rename[current] = canonical
+        return out.rename(columns=rename)
 
-        # 1. 動量因子 (Momentum)
-        df['mom_5d'] = close.pct_change(5)
-        df['mom_10d'] = close.pct_change(10)
-        df['mom_20d'] = close.pct_change(20)
-        df['mom_60d'] = close.pct_change(60)
+    def extract_features(self, df: pd.DataFrame, forward_period: int = 5) -> pd.DataFrame:
+        """只用 t 與過去資料建構特徵；唯一前瞻欄位為訓練目標。"""
+        out = self._normalise_ohlcv_columns(df).copy()
+        required = {"High", "Low", "Close", "Volume"}
+        missing = required.difference(out.columns)
+        if missing:
+            raise ValueError(f"缺少必要 OHLCV 欄位: {sorted(missing)}")
+        if not isinstance(out.index, pd.DatetimeIndex):
+            out.index = pd.to_datetime(out.index, errors="raise")
+        out = out.sort_index()
+        c = pd.to_numeric(out["Close"], errors="coerce")
+        h = pd.to_numeric(out["High"], errors="coerce")
+        lo = pd.to_numeric(out["Low"], errors="coerce")
+        v = pd.to_numeric(out["Volume"], errors="coerce")
 
-        # 2. 均線乖離率 (Disparity)
-        ma5 = close.rolling(5).mean()
-        ma20 = close.rolling(20).mean()
-        ma60 = close.rolling(60).mean()
-        df['bias_ma5'] = (close - ma5) / (ma5 + 1e-9)
-        df['bias_ma20'] = (close - ma20) / (ma20 + 1e-9)
-        df['bias_ma60'] = (close - ma60) / (ma60 + 1e-9)
-        df['ma_cross_spread'] = (ma5 - ma20) / (ma20 + 1e-9)
+        for p in (5, 10, 20, 60):
+            out[f"mom_{p}d"] = c.pct_change(p, fill_method=None)
+        for w in (5, 20, 60):
+            ma = c.rolling(w, min_periods=w).mean()
+            out[f"bias_ma{w}"] = c.div(ma).sub(1.0)
+            out[f"ma{w}_slope_5d"] = ma.pct_change(5, fill_method=None)
 
-        # 3. 波動度因子 (Volatility)
-        ret = close.pct_change()
-        df['hist_vol_20'] = ret.rolling(20).std() * np.sqrt(250)
-        df['hl_spread_pct'] = (high - low) / (close + 1e-9)
-        
-        # ATR 比例
-        tr = np.maximum(high - low, np.maximum((high - close.shift(1)).abs(), (low - close.shift(1)).abs()))
-        df['atr_ratio'] = tr.rolling(14).mean() / (close + 1e-9)
+        daily_ret = c.pct_change(fill_method=None)
+        out["hist_vol_20"] = daily_ret.rolling(20, min_periods=20).std(ddof=1) * np.sqrt(252.0)
+        prev_close = c.shift(1)
+        tr = pd.concat([(h-lo).abs(), (h-prev_close).abs(), (lo-prev_close).abs()], axis=1).max(axis=1)
+        out["atr_ratio_14"] = tr.rolling(14, min_periods=14).mean().div(c)
+        out["vol_surge"] = v.div(v.rolling(5, min_periods=5).mean())
 
-        # 4. 成交量動態 (Volume Dynamics)
-        vol_ma5 = vol.rolling(5).mean()
-        vol_ma20 = vol.rolling(20).mean()
-        df['vol_surge_ratio'] = vol / (vol_ma5 + 1e-9)
-        df['vol_trend'] = vol_ma5 / (vol_ma20 + 1e-9)
+        delta = c.diff()
+        gain = delta.clip(lower=0).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
+        loss = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False, min_periods=14).mean()
+        out["rsi_14"] = 100.0 - 100.0 / (1.0 + gain.div(loss.replace(0.0, np.nan)))
+        low9 = lo.rolling(9, min_periods=9).min()
+        high9 = h.rolling(9, min_periods=9).max()
+        rsv = 100.0 * (c-low9).div((high9-low9).replace(0.0, np.nan))
+        out["k_9"] = rsv.ewm(alpha=1/3, adjust=False).mean()
+        out["d_9"] = out["k_9"].ewm(alpha=1/3, adjust=False).mean()
+        out[self.TARGET_COLUMN] = c.shift(-forward_period).div(c).sub(1.0)
+        return out.replace([np.inf, -np.inf], np.nan)
 
-        # 5. 技術擺盪指標 (KD & RSI)
-        low9 = low.rolling(9).min()
-        high9 = high.rolling(9).max()
-        rsv = (close - low9) / (high9 - low9 + 1e-9) * 100
-        df['kd_k'] = rsv.ewm(alpha=1/3, adjust=False).mean()
-        df['kd_d'] = df['kd_k'].ewm(alpha=1/3, adjust=False).mean()
-        df['kd_diff'] = df['kd_k'] - df['kd_d']
-
-        # RSI 14
-        delta = close.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / (loss + 1e-9)
-        df['rsi_14'] = 100 - (100 / (1 + rs))
-
-        # 6. Target: 未來 5 日前瞻報酬率 (Forward 5-Day Return)
-        df['target_fwd_5d'] = close.shift(-forward_period) / close - 1.0
-
-        return df
-
-    def prepare_dataset(self, stock_dfs: Dict[str, pd.DataFrame]) -> Tuple[pd.DataFrame, List[str]]:
-        """
-        將多檔股票特徵進行整合與標準化處理
-        """
-        panel_data = []
-        feature_names = []
-
-        for symbol, df in stock_dfs.items():
-            if len(df) < 80:
+    def prepare_dataset(self, stock_data_map: Mapping[str, pd.DataFrame]) -> Tuple[pd.DataFrame, List[str]]:
+        panels: List[pd.DataFrame] = []
+        for symbol, raw in stock_data_map.items():
+            if raw is None or raw.empty:
                 continue
-            feats = self.extract_stock_features(df)
-            feats['symbol'] = symbol
-            panel_data.append(feats)
+            panel = self.extract_features(raw)
+            panel["symbol"] = str(symbol)
+            panels.append(panel)
+        if not panels:
+            raise ValueError("stock_data_map 沒有可用資料")
 
-        if not panel_data:
-            raise ValueError("No valid stock data found.")
+        combined = pd.concat(panels, axis=0, sort=False)
+        # 關鍵：跨股票合併後，依日期索引進行全域穩定排序。
+        combined = combined.sort_index(kind="mergesort")
+        excluded = {"Open", "High", "Low", "Close", "Volume", "Dividends", "Stock Splits", "symbol", self.TARGET_COLUMN}
+        self.feature_cols = [c for c in combined.columns if c not in excluded and pd.api.types.is_numeric_dtype(combined[c])]
+        clean = combined.dropna(subset=self.feature_cols + [self.TARGET_COLUMN]).copy()
+        clean = clean.sort_index(kind="mergesort")
+        if clean.empty:
+            raise ValueError("特徵暖機與目標清理後沒有可訓練資料")
+        return clean, list(self.feature_cols)
 
-        combined = pd.concat(panel_data, axis=0)
-        
-        exclude_cols = {'Open', 'High', 'Low', 'Close', 'Volume', 'target_fwd_5d', 'symbol', 'Dividends', 'Stock Splits'}
-        feature_names = [c for c in combined.columns if c not in exclude_cols]
-        self.feature_cols = feature_names
-
-        clean_data = combined.dropna(subset=feature_names + ['target_fwd_5d']).copy()
-        return clean_data, feature_names
-
-    def train_model(self, clean_data: pd.DataFrame) -> Dict[str, Any]:
-        X = clean_data[self.feature_cols].values
-        y = clean_data['target_fwd_5d'].values
-
-        # 依時間前後拆分訓練/驗證集 (80/20)
-        split_idx = int(len(X) * 0.8)
-        X_train, y_train = X[:split_idx], y[:split_idx]
-        X_test, y_test = X[split_idx:], y[split_idx:]
-
-        if self.model_type == "lightgbm":
-            self.model = lgb.LGBMRegressor(
-                n_estimators=250,
-                learning_rate=0.03,
-                num_leaves=31,
-                max_depth=5,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                random_state=42,
-                verbosity=-1
-            )
-        else:
-            self.model = xgb.XGBRegressor(
-                n_estimators=250,
-                learning_rate=0.03,
-                max_depth=4,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                random_state=42,
-                verbosity=0
-            )
-
-        self.model.fit(X_train, y_train)
-
-        # 驗證集評估
-        test_preds = self.model.predict(X_test)
-        rank_ic = pd.Series(test_preds).corr(pd.Series(y_test), method='spearman')
-        mae = np.mean(np.abs(test_preds - y_test))
-
-        # 特徵重要性
-        feat_imp = []
-        if hasattr(self.model, "feature_importances_"):
-            importances = self.model.feature_importances_
-            feat_imp = sorted(zip(self.feature_cols, importances), key=lambda x: x[1], reverse=True)
-
-        return {
-            "model_type": self.model_type,
-            "train_samples": len(X_train),
-            "test_samples": len(X_test),
-            "rank_ic": float(rank_ic if not np.isnan(rank_ic) else 0.0),
-            "mae": float(mae),
-            "top_features": feat_imp[:10]
+    def split_dataset_by_date(self, dataset: pd.DataFrame, test_fraction: float = 0.20, embargo_days: int = 5) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        if not 0.0 < test_fraction < 1.0:
+            raise ValueError("test_fraction 必須介於 0 與 1")
+        data = dataset.sort_index(kind="mergesort")
+        dates = pd.DatetimeIndex(data.index).normalize().unique().sort_values()
+        if len(dates) < embargo_days + 3:
+            raise ValueError(f"至少需要 {embargo_days + 3} 個不同交易日才能切分")
+        test_pos = max(embargo_days + 1, int(np.floor(len(dates) * (1.0-test_fraction))))
+        test_pos = min(test_pos, len(dates)-1)
+        test_start = dates[test_pos]
+        embargo_dates = dates[test_pos-embargo_days:test_pos]
+        train_end_pos = test_pos-embargo_days-1
+        if train_end_pos < 0:
+            raise ValueError("資料不足以建立 embargo")
+        train_end = dates[train_end_pos]
+        normalised = pd.DatetimeIndex(data.index).normalize()
+        train = data.loc[normalised <= train_end].copy()
+        test = data.loc[normalised >= test_start].copy()
+        if train.empty or test.empty or not train.index.max() < test.index.min():
+            raise AssertionError("日期切分失敗：Train 必須嚴格早於 Test")
+        self.last_split_info = {
+            "train_max_date": pd.Timestamp(train.index.max()),
+            "test_min_date": pd.Timestamp(test.index.min()),
+            "embargo_dates": [pd.Timestamp(d) for d in embargo_dates],
+            "embargo_trading_days": len(embargo_dates),
+            "train_rows": len(train),
+            "test_rows": len(test),
         }
+        return train, test
 
-    def predict_rankings(self, current_stock_dfs: Dict[str, pd.DataFrame]) -> pd.DataFrame:
-        """
-        對當前觀察池的所有股票進行最新因子打分與多頭排序
-        支援 Kaggle 訓練產物自動載入，以及 Render 輕量化推論 (免重訓練，低記憶體消耗)
-        """
-        # 若尚未載入模型，優先嘗試從磁碟預訓練權重載入 (Kaggle 訓練產物)
+    def _build_model(self) -> Any:
+        if self.model_type == "lightgbm" and lgb is not None:
+            return lgb.LGBMRegressor(n_estimators=300, learning_rate=0.03, num_leaves=31, max_depth=5, subsample=0.8, colsample_bytree=0.8, random_state=42, verbosity=-1)
+        if self.model_type == "xgboost" and xgb is not None:
+            return xgb.XGBRegressor(n_estimators=300, learning_rate=0.03, max_depth=5, subsample=0.8, colsample_bytree=0.8, objective="reg:squarederror", random_state=42, n_jobs=1)
+        from sklearn.ensemble import HistGradientBoostingRegressor
+        return HistGradientBoostingRegressor(max_iter=250, learning_rate=0.05, max_depth=5, random_state=42)
+
+    def train_model(self, dataset: pd.DataFrame, test_fraction: float = 0.20, embargo_days: int = EMBARGO_TRADING_DAYS) -> Dict[str, Any]:
+        if not self.feature_cols:
+            excluded = {"Open", "High", "Low", "Close", "Volume", "symbol", self.TARGET_COLUMN}
+            self.feature_cols = [c for c in dataset.columns if c not in excluded and pd.api.types.is_numeric_dtype(dataset[c])]
+        train, test = self.split_dataset_by_date(dataset, test_fraction, embargo_days)
+        self.model = self._build_model()
+        self.model.fit(train[self.feature_cols], train[self.TARGET_COLUMN])
+        pred = np.asarray(self.model.predict(test[self.feature_cols]), dtype=float)
+        actual = test[self.TARGET_COLUMN].to_numpy(dtype=float)
+        rank_ic = pd.Series(pred).corr(pd.Series(actual), method="spearman")
+        rmse = float(np.sqrt(np.mean((pred-actual)**2)))
+        return {"rank_ic": 0.0 if pd.isna(rank_ic) else float(rank_ic), "rmse": rmse, **self.last_split_info}
+
+    def predict_rankings(self, stock_data_map: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         if self.model is None:
-            default_weights = os.path.join(os.path.dirname(os.path.abspath(__file__)), "taiwan_stock_ranker.joblib")
-            if os.path.exists(default_weights):
-                try:
-                    loaded = TaiwanStockMLRanker.load_model(default_weights)
-                    self.model = loaded.model
-                    self.feature_cols = loaded.feature_cols
-                except Exception:
-                    pass
-
-        results = []
-        for symbol, df in current_stock_dfs.items():
-            if len(df) < 65:
+            raise RuntimeError("請先呼叫 train_model()")
+        rows = []
+        for symbol, raw in stock_data_map.items():
+            feat = self.extract_features(raw)
+            valid = feat.dropna(subset=self.feature_cols)
+            if valid.empty:
                 continue
-            feats = self.extract_stock_features(df)
-            latest = feats.iloc[-1:]
-            
-            # 若為 Render 輕量化推論模式或未訓練模型，使用經典截面多因子加權打分 (Rule-Based Factor Ranker)
-            if self.model is None or not self.feature_cols:
-                curr_price = float(df['Close'].iloc[-1])
-                vol = float(df['Volume'].iloc[-1])
-                mom = float(latest['mom_20d'].iloc[0]) if 'mom_20d' in latest else 0.0
-                bias = float(latest['bias_ma20'].iloc[0]) if 'bias_ma20' in latest else 0.0
-                rsi = float(latest['rsi_14'].iloc[0]) if 'rsi_14' in latest else 50.0
-                predicted_return = (mom * 0.4) + (bias * 0.3) + ((rsi - 50.0) / 100.0 * 0.3)
-                results.append({
-                    "symbol": symbol,
-                    "current_price": round(curr_price, 2),
-                    "predicted_fwd_5d_ret_pct": round(predicted_return * 100, 2),
-                    "volume": int(vol),
-                    "bias_ma20": round(bias * 100, 2),
-                    "rsi_14": round(rsi, 1)
-                })
-                continue
+            latest = valid.iloc[-1]
+            pred = float(self.model.predict(pd.DataFrame([latest[self.feature_cols].to_dict()], columns=self.feature_cols))[0])
+            rows.append({"symbol": symbol, "current_price": round(float(latest["Close"]), 4), "predicted_fwd_5d_ret_pct": pred*100.0, "bias_ma20": float(latest.get("bias_ma20", np.nan))*100.0, "rsi_14": float(latest.get("rsi_14", np.nan))})
+        result = pd.DataFrame(rows).sort_values("predicted_fwd_5d_ret_pct", ascending=False).reset_index(drop=True)
+        if not result.empty:
+            result["rank"] = np.arange(1, len(result)+1)
+        return result
 
-            if latest[self.feature_cols].isna().any().any():
-                continue
-
-            X_latest = latest[self.feature_cols].values
-            predicted_return = float(self.model.predict(X_latest)[0])
-            curr_price = float(df['Close'].iloc[-1])
-            vol = float(df['Volume'].iloc[-1])
-
-            results.append({
-                "symbol": symbol,
-                "current_price": round(curr_price, 2),
-                "predicted_fwd_5d_ret_pct": round(predicted_return * 100, 2),
-                "volume": int(vol),
-                "bias_ma20": round(float(latest['bias_ma20'].iloc[0]) * 100, 2),
-                "rsi_14": round(float(latest['rsi_14'].iloc[0]), 1)
-            })
-
-        res_df = pd.DataFrame(results)
-        if not res_df.empty:
-            res_df = res_df.sort_values(by="predicted_fwd_5d_ret_pct", ascending=False).reset_index(drop=True)
-            res_df['rank'] = res_df.index + 1
-        return res_df
-
-    def save_model(self, filepath: str):
-        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
-        joblib.dump({
-            "model": self.model,
-            "model_type": self.model_type,
-            "feature_cols": self.feature_cols
-        }, filepath)
+    def save_model(self, path: str) -> None:
+        if self.model is None:
+            raise RuntimeError("沒有可儲存的模型")
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        joblib.dump({"model": self.model, "feature_cols": self.feature_cols, "model_type": self.model_type}, path)
 
     @classmethod
-    def load_model(cls, filepath: str) -> "TaiwanStockMLRanker":
-        bundle = joblib.load(filepath)
-        instance = cls(model_type=bundle["model_type"])
-        instance.model = bundle["model"]
-        instance.feature_cols = bundle["feature_cols"]
-        return instance
+    def load_model(cls, path: str) -> "TaiwanStockMLRanker":
+        payload = joblib.load(path)
+        obj = cls(payload.get("model_type", "lightgbm"))
+        obj.model = payload["model"]
+        obj.feature_cols = list(payload["feature_cols"])
+        return obj
