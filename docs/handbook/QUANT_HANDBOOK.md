@@ -394,3 +394,20 @@ $$\text{Position Size} = \frac{\text{帳戶總資金} \times \text{單筆最大�
 - **每週/每月 (10 分鐘)**：於 Kaggle 免費 GPU 執行一鍵訓練筆記本，下載最新權重檔覆蓋伺服器即可完成升級。
 - **實盤部署**：配置 Binance API Key 並關閉提幣權限，將 `PAPER_TRADING` 切換為 `False`。
 
+
+
+---
+
+## 什麼是 ML 排序 (Cross-Sectional Machine Learning Ranking)？
+
+### 1. 為何需要 ML 排序？
+在台股或加密多幣種市場中，投資者面臨「幾千檔標的該買哪一檔？」的問題。傳統策略多為單一標的時間序列預測（例如：只看台積電漲或跌），容易受大盤整體多空雜訊影響。
+**截面機器學習排序 (Cross-Sectional ML Ranking)** 是量化對沖基金（如 WorldQuant、Two Sigma、Citadel）的核心武器：
+- **核心思維**：不在乎明天市場漲跌，而是預測**明天所有標的之中，誰會漲得比別人多？誰會相對抗跌？**
+- **模型目標**：每期輸入候選標的之多因子特徵（動量、波動率、均線乖離率、量價相關性），預測其未來的超額報酬預期，並由高到低輸出百分位排序評分（0~100 分）。
+
+### 2. 本專案現階段狀態：開箱即用的「多因子規則排序」與「預訓練權重」
+使用者可能會疑惑：「**我好像還沒有在 Kaggle 訓練模型，這樣能跑嗎？**」
+- **完全可以！** 專案已內建**雙軌架構 (Dual-Track Architecture)**：
+  1. **預設回退機制 (Rule-Based Factor Ranker)**：即使使用者尚未跑過 Kaggle 訓練，系統會自動載入經由量化實證調校的複合因子權重（動量 35% + 均線乖離 25% + 波動率壓縮 20% + 量價突破 20%），自動進行截面打分排序，讓您開箱即用。
+  2. **Kaggle 雲端訓練升級**：當您想將排序模型提升至 LightGBM / XGBoost 時，只需將 kaggle_notebooks/kaggle_taiwan_stock_ml_ranker.ipynb 上傳至 Kaggle，使用免費 GPU/CPU 訓練完成後，將產出的 	aiwan_stock_ranker.joblib 放回專案目錄，系統即會無縫升級為最新機器學習模型！

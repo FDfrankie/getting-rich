@@ -45,8 +45,12 @@ class CryptoDataLoader:
         np.random.seed(abs(hash(target_symbol + target_tf)) % (2**31))
         end_time = datetime.now()
 
-        # 根據時間週期解析時間間隔
-        if 'm' in target_tf:
+        # 根據時間週期解析時間間隔 (支援 15s, 1m, 3m, 5m, 15m, 1h, 1d 等)
+        if 's' in target_tf:
+            seconds = int(target_tf.replace('s', '')) if target_tf != 's' else 15
+            delta = pd.Timedelta(seconds=seconds)
+            dt = seconds / (365 * 24 * 3600)
+        elif 'm' in target_tf:
             minutes = int(target_tf.replace('m', '')) if target_tf != 'm' else 1
             delta = pd.Timedelta(minutes=minutes)
             dt = minutes / (365 * 24 * 60)
