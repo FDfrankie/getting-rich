@@ -16,9 +16,7 @@ class AlphaVault:
     """
 
     DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "alpha_vault.db")
-    DEFAULT_EXPORT_JSON = os.path.join(
-        os.path.dirname(__file__), "verified_alphas.json"
-    )
+    DEFAULT_EXPORT_JSON = os.path.join(os.path.dirname(__file__), "verified_alphas.json")
 
     def __init__(self, db_path: str | None = None):
         self.db_path = db_path or self.DEFAULT_DB_PATH
@@ -161,9 +159,7 @@ class AlphaVault:
             "message": "Alpha 已成功登記入庫！",
         }
 
-    def list_alphas(
-        self, status: str | None = None, category: str | None = None
-    ) -> list[dict[str, Any]]:
+    def list_alphas(self, status: str | None = None, category: str | None = None) -> list[dict[str, Any]]:
         """查詢已保存的 Alpha 清單"""
         query = "SELECT * FROM alphas WHERE 1=1"
         params = []
@@ -375,6 +371,4 @@ if __name__ == "__main__":
     print("=== WorldQuant BRAIN Alpha 倉庫自檢 ===")
     print("統計數據:", vault.get_stats())
     for a in vault.list_alphas():
-        print(
-            f"[{a['status']}] ID={a['id']} | {a['name']} | Sharpe: {a['sharpe']} | Fitness: {a['fitness']}"
-        )
+        print(f"[{a['status']}] ID={a['id']} | {a['name']} | Sharpe: {a['sharpe']} | Fitness: {a['fitness']}")

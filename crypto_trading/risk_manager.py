@@ -49,9 +49,7 @@ class RiskManager:
         self.daily_loss_limit = RISK_PARAMS.get("max_daily_loss_pct", 0.05)
         self.max_open_positions = RISK_PARAMS.get("max_open_positions", 3)
         self.max_leverage = RISK_PARAMS.get("max_leverage", 5)
-        self.max_exposure_pct = RISK_PARAMS.get(
-            "max_exposure_pct", 1.5
-        )  # 總持倉名義價值上限
+        self.max_exposure_pct = RISK_PARAMS.get("max_exposure_pct", 1.5)  # 總持倉名義價值上限
         self.min_notional = 5.0
         self.is_halted = False
         self.daily_pnl = 0.0
@@ -71,15 +69,11 @@ class RiskManager:
             return False
         return True
 
-    def calculate_position_size(
-        self, current_price: float, atr: float
-    ) -> dict[str, float]:
+    def calculate_position_size(self, current_price: float, atr: float) -> dict[str, float]:
         if self.is_halted:
             return {"size": 0.0, "stop_loss": 0.0, "take_profit": 0.0}
 
-        stop_distance = max(
-            atr * RISK_PARAMS.get("atr_stop_multiplier", 2.0), current_price * 0.01
-        )
+        stop_distance = max(atr * RISK_PARAMS.get("atr_stop_multiplier", 2.0), current_price * 0.01)
         risk_amount = self.current_capital * self.risk_per_trade
         position_size = risk_amount / stop_distance
 
@@ -120,9 +114,7 @@ class RiskManager:
             reasons.append("BITUNIX_LIVE is locked without user confirmation token")
 
         # 2. 回撤與每日虧損熔斷
-        drawdown = (self.peak_capital - self.current_capital) / (
-            self.peak_capital + 1e-9
-        )
+        drawdown = (self.peak_capital - self.current_capital) / (self.peak_capital + 1e-9)
         if self.is_halted or drawdown >= self.max_drawdown_limit:
             reasons.append(
                 f"Max drawdown circuit breaker active ({drawdown * 100:.2f}% >= {self.max_drawdown_limit * 100}%)"
@@ -145,25 +137,19 @@ class RiskManager:
                 staleness = (datetime.utcnow() - dt).total_seconds()
                 max_stale = ctx.get("max_stale_seconds", 300)
                 if staleness > max_stale:
-                    reasons.append(
-                        f"Stale market data: age {staleness:.1f}s > {max_stale}s"
-                    )
+                    reasons.append(f"Stale market data: age {staleness:.1f}s > {max_stale}s")
             except Exception:
                 reasons.append("Invalid data_timestamp format")
 
         if ctx.get("data_quality_passed") is False:
-            reasons.append(
-                "DataQuality check failed (missing/inf/nan candles detected)"
-            )
+            reasons.append("DataQuality check failed (missing/inf/nan candles detected)")
 
         # 4. 對帳新鮮度與未確認訂單
         if ctx.get("reconciliation_fresh") is False:
             reasons.append("Reconciliation is not fresh or has pending discrepancies")
 
         if ctx.get("has_unknown_orders", False):
-            reasons.append(
-                "There are UNKNOWN / in-flight orders waiting for remote resolution"
-            )
+            reasons.append("There are UNKNOWN / in-flight orders waiting for remote resolution")
 
         # 5. DB 可寫性檢查
         db_path = self.db_path or ctx.get("db_path")
@@ -189,9 +175,7 @@ class RiskManager:
         notional = amount * price
         min_not = ctx.get("min_notional", self.min_notional)
         if notional < min_not:
-            reasons.append(
-                f"Notional value {notional:.2f} < minimum required {min_not:.2f}"
-            )
+            reasons.append(f"Notional value {notional:.2f} < minimum required {min_not:.2f}")
 
         step_size = ctx.get("step_size", 0.001)
         if step_size > 0:
@@ -202,27 +186,18 @@ class RiskManager:
         tick_size = ctx.get("tick_size", 0.01)
         if tick_size > 0:
             remainder_p = price % tick_size
-            if (
-                round(remainder_p, 6) != 0
-                and round(abs(remainder_p - tick_size), 6) != 0
-            ):
+            if round(remainder_p, 6) != 0 and round(abs(remainder_p - tick_size), 6) != 0:
                 reasons.append(f"Price {price} violates tick_size {tick_size}")
 
         # 部位與槓桿限額
         open_positions = ctx.get("open_positions_count", 0)
         if not is_reduce_only and open_positions >= self.max_open_positions:
-            reasons.append(
-                f"Max open positions count reached ({open_positions} >= {self.max_open_positions})"
-            )
+            reasons.append(f"Max open positions count reached ({open_positions} >= {self.max_open_positions})")
 
-        total_exposure = ctx.get("total_exposure_notional", 0.0) + (
-            0.0 if is_reduce_only else notional
-        )
+        total_exposure = ctx.get("total_exposure_notional", 0.0) + (0.0 if is_reduce_only else notional)
         max_exposure = self.current_capital * self.max_exposure_pct
         if not is_reduce_only and total_exposure > max_exposure:
-            reasons.append(
-                f"Total exposure {total_exposure:.2f} exceeds cap {max_exposure:.2f}"
-            )
+            reasons.append(f"Total exposure {total_exposure:.2f} exceeds cap {max_exposure:.2f}")
 
         # 8. 決策輸出 (Fail-Closed)
         if not reasons:
@@ -240,11 +215,7 @@ class RiskManager:
         # 若有違規理由，檢查是否為減倉 / 平倉
         if is_reduce_only:
             # 只要不是 DB 寫入失敗或連線全斷，減倉原則上放行
-            critical_blockers = [
-                r
-                for r in reasons
-                if "Database write probe" in r or "Exchange connectivity" in r
-            ]
+            critical_blockers = [r for r in reasons if "Database write probe" in r or "Exchange connectivity" in r]
             if critical_blockers:
                 return RiskDecision(
                     action=DecisionAction.REJECT,

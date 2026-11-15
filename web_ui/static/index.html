@@ -1382,7 +1382,7 @@
       if (d.success) fetchAlphas();
     }
 
-    // 安全 Fetch JSON 輔助函式（嚴格防護 Unexpected end of JSON input 與憑證洩漏）
+    // 安全 Fetch JSON 輔助函式（先取 text，非空且符合 JSON 才 parse，避免 Unexpected end of JSON input）
     async function safeFetchJson(url, options = {}) {
       try {
         const response = await fetch(url, options);
@@ -1395,49 +1395,49 @@
             status: response.status,
             error: {
               code: "EMPTY_RESPONSE",
-              message: `伺服器回傳空內容 (HTTP ${response.status})`,
+              message: `伺服器回傳空內容 (HTTP ${response.status}, Content-Type: ${contentType || 'None'}, Endpoint: ${url})`,
+              http_status: response.status,
+              content_type: contentType,
+              prefix: "",
+              endpoint: url,
               retryable: false
             }
           };
         }
 
-        if (!contentType.includes("application/json")) {
-          return {
-            ok: false,
-            status: response.status,
-            error: {
-              code: "INVALID_CONTENT_TYPE",
-              message: `伺服器回應非 JSON 格式 (HTTP ${response.status})`,
-              retryable: false
-            }
-          };
-        }
-
+        let parsed = null;
         try {
-          const parsed = JSON.parse(text);
-          return {
-            ok: response.ok,
-            status: response.status,
-            data: parsed
-          };
+          parsed = JSON.parse(text);
         } catch (parseErr) {
+          const prefix = text.slice(0, 300);
           return {
             ok: false,
             status: response.status,
             error: {
               code: "JSON_PARSE_ERROR",
-              message: `JSON 解析失敗 (HTTP ${response.status})`,
+              message: `伺服器回應非合法 JSON。\nHTTP 狀態: ${response.status}\nContent-Type: ${contentType}\nEndpoint: ${url}\n回應前 300 字元:\n${prefix}`,
+              http_status: response.status,
+              content_type: contentType,
+              prefix: prefix,
+              endpoint: url,
               retryable: false
             }
           };
         }
+
+        return {
+          ok: response.ok,
+          status: response.status,
+          data: parsed
+        };
       } catch (networkErr) {
         return {
           ok: false,
           status: 0,
           error: {
             code: "NETWORK_ERROR",
-            message: "網路連線中斷或伺服器未回應",
+            message: `網路連線中斷或伺服器未回應 (${networkErr.message || 'NetworkError'})`,
+            endpoint: url,
             retryable: true
           }
         };
@@ -1463,31 +1463,61 @@
         const job = result.data;
         const jobId = job.job_id;
         const nextPoll = (job.next_poll_seconds || 2.0) * 1000;
-        alert(`Alpha 已排入送測佇列 (Job: ${jobId})，系統將在背景進行非同步計算！`);
+        alert(`Alpha 已排入送測佇列 (Job: ${jobId})，系統正在背景非同步模擬...`);
 
         // 非同步輪詢 Job 狀態
         let attempts = 0;
-        const maxAttempts = 30;
+        const maxAttempts = 60;
         const pollInterval = setInterval(async () => {
           attempts++;
           if (attempts > maxAttempts) {
             clearInterval(pollInterval);
-            console.log(`[Brain Polling] Job ${jobId} 輪詢逾時，背景將持續運算。`);
+            alert(`⚠️ Job ${jobId} 輪詢逾時，背景將持續嘗試。請稍後重新整理查看狀態。`);
             return;
           }
 
           const pollRes = await safeFetchJson(`/api/brain/jobs/${jobId}`);
-          if (pollRes.ok && pollRes.data && pollRes.data.job) {
-            const j = pollRes.data.job;
-            if (j.status === 'COMPLETE' || j.status === 'OFFLINE') {
-              clearInterval(pollInterval);
-              const m = j.metrics || {};
-              alert(`🎉 Alpha 模擬完成！\n狀態: ${j.status}\nSharpe: ${m.sharpe ?? 'N/A'}\nFitness: ${m.fitness ?? 'N/A'}`);
-              fetchAlphas();
-            } else if (j.status === 'FAILED') {
-              clearInterval(pollInterval);
-              alert(`❌ Alpha 模擬失敗: ${j.safe_error || '未知錯誤'}`);
+          if (!pollRes.ok && pollRes.status !== 401 && pollRes.status !== 502 && pollRes.status !== 504) {
+            // 暫時性網路抖動，繼續重試
+            return;
+          }
+
+          const resData = pollRes.data || {};
+          const j = resData.job || resData;
+          const status = j.status;
+          const m = j.metrics || {};
+          const sharpe = j.sharpe !== undefined && j.sharpe !== null ? j.sharpe : m.sharpe;
+          const fitness = j.fitness !== undefined && j.fitness !== null ? j.fitness : m.fitness;
+          const isFiniteSharpe = typeof sharpe === 'number' && isFinite(sharpe);
+          const isFiniteFitness = typeof fitness === 'number' && isFinite(fitness);
+
+          // 嚴格判定成功：HTTP 200, success === true, status === 'COMPLETED', submitted === true, simulation_id 存在, Sharpe 與 Fitness 皆為有效數字
+          if (pollRes.ok && j.success === true && status === 'COMPLETED' && j.submitted === true && (j.simulation_id || j.alpha_id) && isFiniteSharpe && isFiniteFitness) {
+            clearInterval(pollInterval);
+            alert(`🎉 Alpha 回測完成！\n狀態: COMPLETED\nSimulation ID: ${j.simulation_id || j.alpha_id}\nSharpe: ${sharpe.toFixed(2)}\nFitness: ${fitness.toFixed(2)}\n換手率: ${j.turnover ?? m.turnover ?? 'N/A'}`);
+            fetchAlphas();
+            return;
+          }
+
+          // 嚴格判定 OFFLINE：絕對不能當作成功
+          if (status === 'OFFLINE') {
+            clearInterval(pollInterval);
+            const detailMsg = j.error || j.message || j.safe_error || 'BRAIN_EMAIL 或 BRAIN_PASSWORD 未配置';
+            alert(`⚠️ WorldQuant 線上回測未完成。Alpha 可能只在本地產生，未取得正式模擬結果。\n\n詳細資訊: ${detailMsg}`);
+            return;
+          }
+
+          // 處理 FAILED、AUTH_FAILED、TIMEOUT 狀態
+          if (status === 'FAILED' || status === 'AUTH_FAILED' || status === 'TIMEOUT' || (!pollRes.ok && (pollRes.status === 401 || pollRes.status === 502 || pollRes.status === 504))) {
+            clearInterval(pollInterval);
+            let reason = j.error || j.safe_error || j.message || '線上模擬失敗';
+            if (status === 'AUTH_FAILED' || pollRes.status === 401) {
+              reason = `認證授權失敗 (請檢查 BRAIN 帳號密碼)。\n${reason}`;
+            } else if (status === 'TIMEOUT' || pollRes.status === 504) {
+              reason = `WorldQuant 伺服器模擬逾時。\n${reason}`;
             }
+            alert(`❌ Alpha 模擬未通過 [${status || 'HTTP_' + pollRes.status}]:\n${reason}`);
+            return;
           }
         }, nextPoll);
 

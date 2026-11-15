@@ -38,9 +38,7 @@ class TestBrainJobQueue(unittest.TestCase):
         # Mock session.post and session.get
         mock_post_resp = MagicMock()
         mock_post_resp.status_code = 201
-        mock_post_resp.headers = {
-            "Location": "https://api.worldquantbrain.com/simulations/sim_test_123"
-        }
+        mock_post_resp.headers = {"Location": "https://api.worldquantbrain.com/simulations/sim_test_123"}
         mock_client.session.post.return_value = mock_post_resp
 
         mock_get_resp = MagicMock()
@@ -65,9 +63,7 @@ class TestBrainJobQueue(unittest.TestCase):
         mock_client = MockBrainClient(offline_mode=False)
         mock_post_resp = MagicMock()
         mock_post_resp.status_code = 201
-        mock_post_resp.headers = {
-            "Location": "https://api.worldquantbrain.com/simulations/sim_poll_abc"
-        }
+        mock_post_resp.headers = {"Location": "https://api.worldquantbrain.com/simulations/sim_poll_abc"}
         mock_client.session.post.return_value = mock_post_resp
 
         # First poll RUNNING, second poll COMPLETE
@@ -79,9 +75,7 @@ class TestBrainJobQueue(unittest.TestCase):
 
         poll_complete = MagicMock()
         poll_complete.status_code = 200
-        poll_complete.content = (
-            b'{"status": "COMPLETE", "sharpe": 1.9, "fitness": 1.25}'
-        )
+        poll_complete.content = b'{"status": "COMPLETE", "sharpe": 1.9, "fitness": 1.25}'
         poll_complete.headers = {}
         poll_complete.json.return_value = {
             "status": "COMPLETE",
@@ -132,9 +126,7 @@ class TestBrainJobQueue(unittest.TestCase):
     def test_worker_catches_exception_safely(self):
         """背景例外安全捕獲，不中斷常駐程序，並過濾敏感資訊"""
         mock_client = MockBrainClient(offline_mode=False)
-        mock_client.session.post.side_effect = ConnectionResetError(
-            "Connection reset by peer: secret_token=abc12345"
-        )
+        mock_client.session.post.side_effect = ConnectionResetError("Connection reset by peer: secret_token=abc12345")
 
         queue = BrainJobQueue(mock_client, default_poll_interval=0.05)
         job, _ = queue.create_job("rank(open / vwap)")

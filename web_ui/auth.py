@@ -23,9 +23,7 @@ class AuthManager:
         self.sessions: dict[str, dict[str, Any]] = {}
         self.csrf_tokens: dict[str, float] = {}
 
-    def create_session(
-        self, username: str, role: str = Role.VIEWER, ttl: int = 86400
-    ) -> str:
+    def create_session(self, username: str, role: str = Role.VIEWER, ttl: int = 86400) -> str:
         session_id = secrets.token_urlsafe(32)
         self.sessions[session_id] = {
             "username": username,

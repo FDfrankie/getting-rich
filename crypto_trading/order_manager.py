@@ -86,9 +86,7 @@ class OrderManager:
             client_order_id
             or f"ord_{int(time.time() * 1000)}_{hashlib.md5(f'{symbol}_{amount}_{time.time()}'.encode()).hexdigest()[:8]}"
         )
-        ikey = generate_idempotency_key(
-            symbol, side, order_type, amount, price, client_tag or cid
-        )
+        ikey = generate_idempotency_key(symbol, side, order_type, amount, price, client_tag or cid)
 
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
@@ -96,7 +94,7 @@ class OrderManager:
             try:
                 cur.execute(
                     """
-                    INSERT INTO idempotent_orders 
+                    INSERT INTO idempotent_orders
                     (client_order_id, idempotency_key, exchange_order_id, symbol, side, order_type, amount, price, state, error_message, created_at, updated_at)
                     VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
                     """,
@@ -127,9 +125,7 @@ class OrderManager:
                     (cid, ikey),
                 )
                 row = cur.fetchone()
-                existing_cid, existing_state, ex_oid = (
-                    row if row else (cid, OrderState.UNKNOWN.value, None)
-                )
+                existing_cid, existing_state, ex_oid = row if row else (cid, OrderState.UNKNOWN.value, None)
                 return {
                     "claimed": False,
                     "error": "DUPLICATE_ORDER_REJECTED",
@@ -155,7 +151,7 @@ class OrderManager:
             try:
                 cur.execute(
                     """
-                    UPDATE idempotent_orders 
+                    UPDATE idempotent_orders
                     SET state = ?, exchange_order_id = COALESCE(?, exchange_order_id), error_message = ?, updated_at = ?
                     WHERE client_order_id = ?
                     """,
@@ -217,9 +213,7 @@ class OrderManager:
         4. 成功更新為 ACKNOWLEDGED / FILLED
         5. 逾時或異常轉入 UNKNOWN 並先查詢遠端狀態，嚴禁重送
         """
-        claim_res = self.claim_order(
-            symbol, side, order_type, amount, price, client_tag=client_tag
-        )
+        claim_res = self.claim_order(symbol, side, order_type, amount, price, client_tag=client_tag)
         if not claim_res["claimed"]:
             return claim_res
 
@@ -238,15 +232,10 @@ class OrderManager:
                 raise AttributeError("Client does not have create_order method")
 
             if res.get("success"):
-                ex_oid = str(
-                    res.get("order", {}).get("id") or res.get("order_id") or ""
-                )
+                ex_oid = str(res.get("order", {}).get("id") or res.get("order_id") or "")
                 new_state = (
                     OrderState.FILLED
-                    if (
-                        res.get("order", {}).get("status") == "closed"
-                        or order_type.upper() == "MARKET"
-                    )
+                    if (res.get("order", {}).get("status") == "closed" or order_type.upper() == "MARKET")
                     else OrderState.ACKNOWLEDGED
                 )
                 self.update_order_state(cid, new_state, exchange_order_id=ex_oid)

@@ -9,9 +9,7 @@ class MockExecutionClient:
         self.orders = []
 
     def create_order(self, symbol, side, order_type, amount, price=None):
-        self.orders.append(
-            {"symbol": symbol, "side": side, "type": order_type, "amount": amount}
-        )
+        self.orders.append({"symbol": symbol, "side": side, "type": order_type, "amount": amount})
         return {"success": True, "order_id": f"mock_ex_{len(self.orders)}"}
 
 
@@ -62,18 +60,14 @@ def test_manual_close_and_reduce_position():
         # 模擬持倉 LONG 0.5 BTC
         curr_pos = {"contracts": 0.5, "side": "LONG"}
         # 1. 部分減倉 0.2
-        red_res = ctrl.manual_reduce_position(
-            client, "BTC/USDT", curr_pos, reduce_amount=0.2
-        )
+        red_res = ctrl.manual_reduce_position(client, "BTC/USDT", curr_pos, reduce_amount=0.2)
         assert red_res["success"] is True
         assert len(client.orders) == 1
         assert client.orders[0]["side"] == "SELL"
         assert client.orders[0]["amount"] == 0.2
 
         # 2. 全平剩餘 0.3
-        close_res = ctrl.manual_close_position(
-            client, "BTC/USDT", {"contracts": 0.3, "side": "LONG"}
-        )
+        close_res = ctrl.manual_close_position(client, "BTC/USDT", {"contracts": 0.3, "side": "LONG"})
         assert close_res["success"] is True
         assert len(client.orders) == 2
         assert client.orders[1]["side"] == "SELL"

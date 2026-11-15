@@ -11,7 +11,7 @@ from crypto_trading.data_quality import validate_ohlcv
 
 def test_unclosed_candle_is_rejected():
     now_utc = datetime.now(timezone.utc)
-    delta = timedelta(hours=1)
+    timedelta(hours=1)
     # Candle open is 10 minutes ago -> close is 50 minutes in the future
     candle_open = now_utc - timedelta(minutes=10)
     df = pd.DataFrame(

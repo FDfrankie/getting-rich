@@ -190,9 +190,7 @@ class ManualPositionController:
             "take_profit": take_profit,
         }
 
-    def manual_close_position(
-        self, client, symbol: str, current_position: dict[str, Any]
-    ) -> dict[str, Any]:
+    def manual_close_position(self, client, symbol: str, current_position: dict[str, Any]) -> dict[str, Any]:
         """單筆全平"""
         now = datetime.utcnow().isoformat()
         contracts = float(current_position.get("contracts", 0.0))
@@ -200,9 +198,7 @@ class ManualPositionController:
         close_side = "SELL" if side == "LONG" else "BUY"
 
         if hasattr(client, "create_order"):
-            res = client.create_order(
-                symbol=symbol, side=close_side, order_type="MARKET", amount=contracts
-            )
+            res = client.create_order(symbol=symbol, side=close_side, order_type="MARKET", amount=contracts)
         else:
             res = {"success": True, "message": "Simulated close"}
 

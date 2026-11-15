@@ -80,9 +80,7 @@ class HierarchicalRegimeFilter:
             allow_long = False
             allow_short = True
             mult = 0.8
-            reason = (
-                "高階時框空頭防守格局，微觀時框禁止多頭追價，僅允許防禦性對沖或空手。"
-            )
+            reason = "高階時框空頭防守格局，微觀時框禁止多頭追價，僅允許防禦性對沖或空手。"
         else:
             regime = "CHOP_RANGE"
             score = 10

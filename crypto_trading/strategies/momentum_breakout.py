@@ -1,4 +1,3 @@
-
 import numpy as np
 import pandas as pd
 
@@ -54,13 +53,9 @@ class MomentumBreakoutStrategy(BaseStrategy):
 
         # 生成交易信號 (Signal)
         # 突破布林上軌且創近 20 根 K 線最高價 -> 做多
-        long_condition = (close > df["BB_UPPER"].shift(1)) & (
-            close >= df["DONCHIAN_HIGH"].shift(1)
-        )
+        long_condition = (close > df["BB_UPPER"].shift(1)) & (close >= df["DONCHIAN_HIGH"].shift(1))
         # 跌破布林下軌且創近 20 根 K 線最低價 -> 做空
-        short_condition = (close < df["BB_LOWER"].shift(1)) & (
-            close <= df["DONCHIAN_LOW"].shift(1)
-        )
+        short_condition = (close < df["BB_LOWER"].shift(1)) & (close <= df["DONCHIAN_LOW"].shift(1))
         # 回歸均線 (BB_MID) -> 平倉信號
         exit_long = close < df["BB_MID"]
         exit_short = close > df["BB_MID"]

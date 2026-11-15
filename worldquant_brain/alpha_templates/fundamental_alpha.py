@@ -43,9 +43,7 @@ def print_catalog():
         print(f"\n【{a['id']}】{a['name']}")
         print(f"表達式 (Expression): {a['expression']}")
         print(f"經濟學直覺: {a['intuition']}")
-        print(
-            f"預期 Sharpe: {a['expected_sharpe']} | 預期換手率: {a['typical_turnover']}"
-        )
+        print(f"預期 Sharpe: {a['expected_sharpe']} | 預期換手率: {a['typical_turnover']}")
 
 
 if __name__ == "__main__":

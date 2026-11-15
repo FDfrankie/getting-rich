@@ -31,14 +31,10 @@ class TimeframePolicy:
     @classmethod
     def get_status(cls, timeframe: str) -> TimeframeStatus:
         key = timeframe.strip().lower()
-        return cls._TIMEFRAME_STATUS.get(
-            key, TimeframeStatus.EXPERIMENTAL_RESEARCH_ONLY
-        )
+        return cls._TIMEFRAME_STATUS.get(key, TimeframeStatus.EXPERIMENTAL_RESEARCH_ONLY)
 
     @classmethod
-    def can_live_trade(
-        cls, timeframe: str, has_aggtrade_feed: bool = False
-    ) -> tuple[bool, str]:
+    def can_live_trade(cls, timeframe: str, has_aggtrade_feed: bool = False) -> tuple[bool, str]:
         status = cls.get_status(timeframe)
         if status == TimeframeStatus.EXPERIMENTAL_RESEARCH_ONLY:
             if not has_aggtrade_feed:

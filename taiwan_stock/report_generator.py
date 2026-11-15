@@ -1,6 +1,7 @@
 import os
 from datetime import datetime
 
+import pandas as pd
 import yfinance as yf
 
 from data_persistence.gdrive_sync import GDrivePersistenceSync
@@ -22,16 +23,12 @@ class ReportGenerator:
         self.ml_ranker = TaiwanStockMLRanker(model_type="lightgbm")
         self.sync = GDrivePersistenceSync()
 
-    def generate(
-        self, session_type: str = "盤前晨報", cached_market_info: dict = None
-    ) -> str:
+    def generate(self, session_type: str = "盤前晨報", cached_market_info: dict = None) -> str:
         today_str = datetime.now().strftime("%Y-%m-%d")
         now_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         print("[*] 正在進行大盤多空診斷...")
-        market_info = (
-            cached_market_info if cached_market_info else self.market_analyzer.analyze()
-        )
+        market_info = cached_market_info if cached_market_info else self.market_analyzer.analyze()
 
         print("[*] 正在掃描潛力強勢標的...")
         screener_res = self.stock_screener.run_screener_detailed()
@@ -65,17 +62,11 @@ class ReportGenerator:
         ]
 
         if not picks:
-            report_lines.append(
-                "> ⚠️ 今日篩選池中無標的完全符合突破門檻 (分數 >= 50 分)，系統啟動防守保護機制！"
-            )
+            report_lines.append("> ⚠️ 今日篩選池中無標的完全符合突破門檻 (分數 >= 50 分)，系統啟動防守保護機制！")
             if near_picks:
                 report_lines.append("\n### 🔍 前 3 檔最接近門檻標的 (密切追蹤名單)：")
-                report_lines.append(
-                    "| 股票代碼 | 收盤價 | 漲跌幅 | 目前評分 | 觀察信號 | 建議防守停損 | 目標價位 |"
-                )
-                report_lines.append(
-                    "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
-                )
+                report_lines.append("| 股票代碼 | 收盤價 | 漲跌幅 | 目前評分 | 觀察信號 | 建議防守停損 | 目標價位 |")
+                report_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
                 for p in near_picks:
                     sigs = "<br>".join(p["signals"])
                     report_lines.append(
@@ -85,9 +76,7 @@ class ReportGenerator:
             report_lines.append(
                 "| 股票代碼 | 收盤價 | 漲跌幅 | 量化評分 | 觸發技術信號 | 建議防守停損 | 目標價位 | 風險報酬比 |"
             )
-            report_lines.append(
-                "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
-            )
+            report_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
             for p in picks:
                 sigs = "<br>".join(p["signals"])
                 report_lines.append(
@@ -105,9 +94,7 @@ class ReportGenerator:
                 ]
             )
             for d in defense_hedges:
-                report_lines.append(
-                    f"| **{d['symbol']}** | {d['close']} | {d['change_pct']:+0.2f}% | {d['reason']} |"
-                )
+                report_lines.append(f"| **{d['symbol']}** | {d['close']} | {d['change_pct']:+0.2f}% | {d['reason']} |")
 
         # 區塊 3: 機器學習多因子 Alpha 排名 (讀取已訓練之 taiwan_stock_ranker.joblib，禁止 HTTP request 現場重訓)
         print("[*] 正在載入 ML 多因子預測排序模型...")
@@ -160,9 +147,7 @@ class ReportGenerator:
                     )
                     rank_df["rank"] = range(1, len(rank_df) + 1)
 
-                badge_str = (
-                    "【RULE_BASED fallback】" if is_fallback else "【LightGBM ML 預測】"
-                )
+                badge_str = "【RULE_BASED fallback】" if is_fallback else "【LightGBM ML 預測】"
                 report_lines.extend(
                     [
                         "",
@@ -190,13 +175,9 @@ class ReportGenerator:
             ]
         )
         if not post_mortems:
-            report_lines.append(
-                "> ✅ 最近期無觸發停損或重大虧損事件，系統執行紀律率 100%。"
-            )
+            report_lines.append("> ✅ 最近期無觸發停損或重大虧損事件，系統執行紀律率 100%。")
         else:
-            report_lines.append(
-                "| 日期 | 標的 | 進場價 | 出場價 | 虧損金額 | 虧損幅度 | 歸因分析與優化對策 |"
-            )
+            report_lines.append("| 日期 | 標的 | 進場價 | 出場價 | 虧損金額 | 虧損幅度 | 歸因分析與優化對策 |")
             report_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
             for pm in post_mortems:
                 report_lines.append(
@@ -228,9 +209,7 @@ class ReportGenerator:
         print(f"[✓] 晨報已成功生成並存檔至: {report_path}")
         return report_content
 
-    def generate_html_report(
-        self, session_type: str = "盤前晨報", cached_market_info: dict = None
-    ) -> str:
+    def generate_html_report(self, session_type: str = "盤前晨報", cached_market_info: dict = None) -> str:
         """
         生成具備精緻視覺排版、色彩標籤、多空燈號與響應式表格的報告 HTML 視圖
         支援渲染為 HTML/PDF 格式，顯示產出時間與最後交易日
@@ -238,9 +217,7 @@ class ReportGenerator:
         today_str = datetime.now().strftime("%Y-%m-%d")
         now_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        market_info = (
-            cached_market_info if cached_market_info else self.market_analyzer.analyze()
-        )
+        market_info = cached_market_info if cached_market_info else self.market_analyzer.analyze()
         screener_res = self.stock_screener.run_screener_detailed()
         scanned_count = screener_res["scanned_count"]
         qualified_count = screener_res["qualified_count"]
@@ -258,9 +235,7 @@ class ReportGenerator:
             badge_class = "bg-rose-500/20 text-rose-400 border border-rose-500/30"
             light_icon = "🟢 多頭強勢格局"
         elif score <= 40:
-            badge_class = (
-                "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
-            )
+            badge_class = "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
             light_icon = "🔴 空頭防守格局"
         else:
             badge_class = "bg-amber-500/20 text-amber-400 border border-amber-500/30"
@@ -341,11 +316,7 @@ class ReportGenerator:
                             </tr>
             """
             for p in near_picks:
-                change_color = (
-                    "text-rose-400 font-bold"
-                    if p["change_pct"] >= 0
-                    else "text-emerald-400 font-bold"
-                )
+                change_color = "text-rose-400 font-bold" if p["change_pct"] >= 0 else "text-emerald-400 font-bold"
                 sigs = " ".join(
                     [
                         f"<span class='px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px] mr-1'>{s}</span>"
@@ -366,11 +337,7 @@ class ReportGenerator:
                 """
         else:
             for p in picks:
-                change_color = (
-                    "text-rose-400 font-bold"
-                    if p["change_pct"] >= 0
-                    else "text-emerald-400 font-bold"
-                )
+                change_color = "text-rose-400 font-bold" if p["change_pct"] >= 0 else "text-emerald-400 font-bold"
                 sigs = " ".join(
                     [
                         f"<span class='px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 text-[10px] mr-1'>{s}</span>"
@@ -441,7 +408,6 @@ class ReportGenerator:
             "models",
             "taiwan_stock_ranker.joblib",
         )
-        html_rankings = []
         is_html_fallback = False
         try:
             stock_data_map = {}

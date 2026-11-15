@@ -15,9 +15,7 @@ BITUNIX_API_SECRET = os.getenv("BITUNIX_API_SECRET", "")
 
 # 預設交易對與時間週期 (Timeframe)
 DEFAULT_SYMBOL = "BTC/USDT"
-DEFAULT_SETTLEMENT_CURRENCY = (
-    "USDC"  # 實盤優先 USDC 永續合約 (0 費率優勢)，訓練採用 USDT
-)
+DEFAULT_SETTLEMENT_CURRENCY = "USDC"  # 實盤優先 USDC 永續合約 (0 費率優勢)，訓練採用 USDT
 DEFAULT_TIMEFRAME = "1h"  # 1m, 3m, 5m, 15m, 1h, 1d
 
 # 安全機制開關：相容層

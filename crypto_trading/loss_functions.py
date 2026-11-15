@@ -24,7 +24,6 @@ Includes:
    - For autoencoders learning compressed latent states of financial time series.
 """
 
-
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -62,9 +61,7 @@ class SoftSharpeLoss(nn.Module):
         self.eps = eps
         self.risk_free_rate = risk_free_rate
 
-    def forward(
-        self, positions: torch.Tensor, forward_returns: torch.Tensor
-    ) -> torch.Tensor:
+    def forward(self, positions: torch.Tensor, forward_returns: torch.Tensor) -> torch.Tensor:
         """
         Calculates negative Sharpe Ratio of strategy portfolio returns.
 
@@ -298,9 +295,7 @@ class BayesianConditionalLoss(nn.Module):
         if regime_volatility is not None:
             reg_vol = regime_volatility.view(-1).float()
             # In higher regime volatility, downscale noisy spikes or adapt weights
-            regime_weight = torch.exp(
-                -self.vol_scale * (reg_vol - 1.0).clamp(min=-1.0, max=2.0)
-            )
+            regime_weight = torch.exp(-self.vol_scale * (reg_vol - 1.0).clamp(min=-1.0, max=2.0))
         else:
             regime_weight = 1.0
 

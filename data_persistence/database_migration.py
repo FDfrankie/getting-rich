@@ -106,9 +106,7 @@ class DatabaseMigrationManager:
                 "success": True,
                 "backup_file": backup_file,
                 "newly_applied": newly_applied,
-                "current_version": max(applied.union(newly_applied))
-                if (applied or newly_applied)
-                else 0,
+                "current_version": max(applied.union(newly_applied)) if (applied or newly_applied) else 0,
             }
         except Exception as e:
             conn.close()
@@ -202,7 +200,5 @@ class DatabaseMigrationManager:
 
     def _migration_v3(self, conn: sqlite3.Connection):
         cur = conn.cursor()
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_idempotent_orders_key ON idempotent_orders(idempotency_key)"
-        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_idempotent_orders_key ON idempotent_orders(idempotency_key)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_symbol ON orders(symbol)")

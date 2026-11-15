@@ -55,9 +55,7 @@ def quarantine_unverified_models() -> list[str]:
         m_path = os.path.join(MODELS_DIR, model_file)
         mf_path = os.path.join(MODELS_DIR, manifest_file)
         alt_mf_path = os.path.splitext(m_path)[0] + "_manifest.json"
-        if os.path.exists(m_path) and not (
-            os.path.exists(mf_path) or os.path.exists(alt_mf_path)
-        ):
+        if os.path.exists(m_path) and not (os.path.exists(mf_path) or os.path.exists(alt_mf_path)):
             dst = os.path.join(LEGACY_DIR, f"{model_file}.unverified")
             shutil.move(m_path, dst)
             quarantined.append(model_file)
@@ -90,12 +88,8 @@ def train_crypto_lgbm(
             any_synthetic = True
 
     primary_df = frames[0]
-    trainer = CryptoMLTrainer(
-        model_type="lightgbm", task="regression", horizon=3, timeframe=timeframe
-    )
-    summary = trainer.walk_forward_train(
-        primary_df, n_splits=5, purge_bars=12, embargo_bars=2
-    )
+    trainer = CryptoMLTrainer(model_type="lightgbm", task="regression", horizon=3, timeframe=timeframe)
+    summary = trainer.walk_forward_train(primary_df, n_splits=5, purge_bars=12, embargo_bars=2)
 
     out_path = os.path.join(output_dir, "crypto_lgbm_weights.joblib")
     manifest = trainer.save_weights(
@@ -106,9 +100,7 @@ def train_crypto_lgbm(
             "timeframe": timeframe,
             "data_source": "SYNTHETIC" if any_synthetic else "LIVE",
             "is_synthetic": any_synthetic,
-            "deployment_stage": "RESEARCH_ONLY"
-            if any_synthetic
-            else "LOCAL_PAPER_READY",
+            "deployment_stage": "RESEARCH_ONLY" if any_synthetic else "LOCAL_PAPER_READY",
             "oos_metrics": {
                 "mean_rank_ic": summary["mean_rank_ic"],
                 "mean_sharpe": summary["mean_sharpe"],
@@ -134,9 +126,7 @@ def train_crypto_ppo(
 ) -> dict[str, Any]:
     os.makedirs(output_dir, exist_ok=True)
     loader = CryptoDataLoader(symbol=symbol, timeframe=timeframe)
-    res = loader.fetch_ohlcv_result(
-        limit=limit, symbol=symbol, timeframe=timeframe, allow_synthetic=allow_synthetic
-    )
+    res = loader.fetch_ohlcv_result(limit=limit, symbol=symbol, timeframe=timeframe, allow_synthetic=allow_synthetic)
     any_synthetic = bool(res.is_synthetic or res.source == DataSource.SYNTHETIC)
 
     fe = CryptoFeatureEngineer()
@@ -169,9 +159,7 @@ def train_crypto_ppo(
             dones.append(done)
             state = next_state
         advantages, returns = agent.compute_gae(rewards, values, dones, next_value=0.0)
-        agent.train_step(
-            states, actions, log_probs, advantages, returns, k_epochs=4, batch_size=64
-        )
+        agent.train_step(states, actions, log_probs, advantages, returns, k_epochs=4, batch_size=64)
 
     # Evaluate on untouched OOS test slice
     env_test = CryptoTradingEnv(df_test, feature_cols, initial_balance=10000.0)
@@ -184,13 +172,9 @@ def train_crypto_ppo(
     oos_rets = np.asarray(env_test.returns_history, dtype=float)
     ann_factor = CryptoFeatureEngineer.get_annualization_factor(timeframe)
     oos_sharpe = (
-        float(np.mean(oos_rets) / (np.std(oos_rets) + 1e-9) * np.sqrt(ann_factor))
-        if len(oos_rets) > 1
-        else 0.0
+        float(np.mean(oos_rets) / (np.std(oos_rets) + 1e-9) * np.sqrt(ann_factor)) if len(oos_rets) > 1 else 0.0
     )
-    oos_total_ret = float(
-        (env_test.balance - env_test.initial_balance) / env_test.initial_balance
-    )
+    oos_total_ret = float((env_test.balance - env_test.initial_balance) / env_test.initial_balance)
 
     out_path = os.path.join(output_dir, "crypto_ppo_agent.pt")
     manifest = agent.save(
@@ -202,9 +186,7 @@ def train_crypto_ppo(
             "feature_columns": feature_cols,
             "data_source": "SYNTHETIC" if any_synthetic else "LIVE",
             "is_synthetic": any_synthetic,
-            "deployment_stage": "RESEARCH_ONLY"
-            if any_synthetic
-            else "LOCAL_PAPER_READY",
+            "deployment_stage": "RESEARCH_ONLY" if any_synthetic else "LOCAL_PAPER_READY",
             "oos_metrics": {
                 "oos_return_pct": round(oos_total_ret * 100.0, 2),
                 "oos_sharpe": round(oos_sharpe, 3),
@@ -222,11 +204,7 @@ def train_taiwan_ranker(
     output_dir: str = MODELS_DIR,
 ) -> dict[str, Any]:
     os.makedirs(output_dir, exist_ok=True)
-    symbols = [
-        s
-        for s in (watchlist or DEFAULT_WATCHLIST)
-        if not TaiwanStockMLRanker.is_inverse_etf(s)
-    ]
+    symbols = [s for s in (watchlist or DEFAULT_WATCHLIST) if not TaiwanStockMLRanker.is_inverse_etf(s)]
     stock_dfs: dict[str, pd.DataFrame] = {}
     any_synthetic = False
 
@@ -246,25 +224,17 @@ def train_taiwan_ranker(
 
     if len(stock_dfs) < 2:
         if not allow_synthetic:
-            raise DataUnavailableError(
-                "Failed to fetch >= 2 Taiwan stocks via yfinance and allow_synthetic=False."
-            )
+            raise DataUnavailableError("Failed to fetch >= 2 Taiwan stocks via yfinance and allow_synthetic=False.")
         any_synthetic = True
         loader = CryptoDataLoader(timeframe="1d")
         for sym in symbols[:5]:
-            res = loader.fetch_ohlcv_result(
-                limit=260, symbol=sym, timeframe="1d", allow_synthetic=True
-            )
+            res = loader.fetch_ohlcv_result(limit=260, symbol=sym, timeframe="1d", allow_synthetic=True)
             df_s = res.df.copy()
-            df_s.index = pd.date_range(
-                end=datetime.now(timezone.utc).date(), periods=len(df_s), freq="B"
-            )
+            df_s.index = pd.date_range(end=datetime.now(timezone.utc).date(), periods=len(df_s), freq="B")
             stock_dfs[sym] = df_s
 
     ranker = TaiwanStockMLRanker(model_type="lightgbm", target_mode="RAW_RETURN")
-    clean_df, feature_cols = ranker.prepare_dataset(
-        stock_dfs, exclude_inverse_etfs=True
-    )
+    clean_df, feature_cols = ranker.prepare_dataset(stock_dfs, exclude_inverse_etfs=True)
     metrics = ranker.train_model(clean_df, test_fraction=0.20, embargo_days=5)
 
     out_path = os.path.join(output_dir, "taiwan_stock_ranker.joblib")
@@ -276,9 +246,7 @@ def train_taiwan_ranker(
             "feature_cols": feature_cols,
             "data_source": "SYNTHETIC" if any_synthetic else "LIVE_YFINANCE",
             "is_synthetic": any_synthetic,
-            "deployment_stage": "RESEARCH_ONLY"
-            if any_synthetic
-            else "LOCAL_PAPER_READY",
+            "deployment_stage": "RESEARCH_ONLY" if any_synthetic else "LOCAL_PAPER_READY",
             "oos_metrics": {
                 "rank_ic": metrics["rank_ic"],
                 "daily_mean_ic": metrics["daily_mean_ic"],
@@ -291,9 +259,7 @@ def train_taiwan_ranker(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Unified No-Leakage Model Training CLI"
-    )
+    parser = argparse.ArgumentParser(description="Unified No-Leakage Model Training CLI")
     parser.add_argument(
         "--target",
         required=True,
@@ -307,12 +273,8 @@ def main(argv: list[str] | None = None) -> int:
         help="Comma-separated crypto symbols",
     )
     parser.add_argument("--timeframe", type=str, default="1h", help="Bar timeframe")
-    parser.add_argument(
-        "--limit", type=int, default=800, help="Historical bars per symbol"
-    )
-    parser.add_argument(
-        "--episodes", type=int, default=10, help="PPO training episodes"
-    )
+    parser.add_argument("--limit", type=int, default=800, help="Historical bars per symbol")
+    parser.add_argument("--episodes", type=int, default=10, help="PPO training episodes")
     parser.add_argument(
         "--output-dir",
         type=str,
@@ -331,11 +293,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[*] Quarantined unverified models without manifest: {quarantined}")
 
     sym_list = [s.strip() for s in args.symbols.split(",") if s.strip()]
-    targets = (
-        ["crypto_lgbm", "crypto_ppo", "taiwan_ranker"]
-        if args.target == "all"
-        else [args.target]
-    )
+    targets = ["crypto_lgbm", "crypto_ppo", "taiwan_ranker"] if args.target == "all" else [args.target]
 
     for tgt in targets:
         if tgt == "crypto_lgbm":
@@ -346,9 +304,7 @@ def main(argv: list[str] | None = None) -> int:
                 allow_synthetic=args.allow_synthetic,
                 output_dir=args.output_dir,
             )
-            print(
-                f"[✓] crypto_lgbm trained -> {res['model_path']} (SHA-256: {res['manifest']['sha256'][:12]}...)"
-            )
+            print(f"[✓] crypto_lgbm trained -> {res['model_path']} (SHA-256: {res['manifest']['sha256'][:12]}...)")
         elif tgt == "crypto_ppo":
             res = train_crypto_ppo(
                 symbol=sym_list[0],
@@ -358,17 +314,13 @@ def main(argv: list[str] | None = None) -> int:
                 allow_synthetic=args.allow_synthetic,
                 output_dir=args.output_dir,
             )
-            print(
-                f"[✓] crypto_ppo trained -> {res['model_path']} (SHA-256: {res['manifest']['sha256'][:12]}...)"
-            )
+            print(f"[✓] crypto_ppo trained -> {res['model_path']} (SHA-256: {res['manifest']['sha256'][:12]}...)")
         elif tgt == "taiwan_ranker":
             res = train_taiwan_ranker(
                 allow_synthetic=args.allow_synthetic,
                 output_dir=args.output_dir,
             )
-            print(
-                f"[✓] taiwan_ranker trained -> {res['model_path']} (SHA-256: {res['manifest']['sha256'][:12]}...)"
-            )
+            print(f"[✓] taiwan_ranker trained -> {res['model_path']} (SHA-256: {res['manifest']['sha256'][:12]}...)")
     return 0
 
 

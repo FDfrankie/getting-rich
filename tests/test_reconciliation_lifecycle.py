@@ -14,9 +14,7 @@ def test_reconciliation_perfect_match():
     local_bal = 10000.0
     remote_bal = 10000.0
 
-    res = svc.reconcile(
-        local_pos, remote_pos, local_orders, remote_orders, local_bal, remote_bal
-    )
+    res = svc.reconcile(local_pos, remote_pos, local_orders, remote_orders, local_bal, remote_bal)
     assert res["is_reconciled"] is True
     assert res["discrepancy_count"] == 0
     assert res["allowed_actions"] == "ALL"
@@ -32,9 +30,7 @@ def test_reconciliation_position_mismatch_locks_reduce_only():
     local_bal = 10000.0
     remote_bal = 10000.0
 
-    res = svc.reconcile(
-        local_pos, remote_pos, local_orders, remote_orders, local_bal, remote_bal
-    )
+    res = svc.reconcile(local_pos, remote_pos, local_orders, remote_orders, local_bal, remote_bal)
     assert res["is_reconciled"] is False
     assert res["discrepancy_count"] > 0
     assert res["allowed_actions"] == "REDUCE_ONLY"
@@ -57,8 +53,6 @@ def test_reconciliation_inflight_order_resolution():
     local_bal = 5000.0
     remote_bal = 5000.0
 
-    res = svc.reconcile(
-        local_pos, remote_pos, local_orders, remote_orders, local_bal, remote_bal
-    )
+    res = svc.reconcile(local_pos, remote_pos, local_orders, remote_orders, local_bal, remote_bal)
     assert len(res["order_resolutions"]) == 1
     assert res["order_resolutions"][0]["resolved_state"] == "FILLED"

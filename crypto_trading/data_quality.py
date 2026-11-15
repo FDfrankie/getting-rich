@@ -15,7 +15,6 @@ class DataQualityError(Exception):
     """Raised when OHLCV fails strict quality validation gates."""
 
 
-
 def parse_timeframe_delta(timeframe: str) -> pd.Timedelta:
     tf = timeframe.lower().strip()
     if "s" in tf:
@@ -87,12 +86,7 @@ def validate_ohlcv(
         return False, "Data quality violation: Low > Open found"
     if (lows > closes).any():
         return False, "Data quality violation: Low > Close found"
-    if (
-        (opens <= 0).any()
-        or (highs <= 0).any()
-        or (lows <= 0).any()
-        or (closes <= 0).any()
-    ):
+    if (opens <= 0).any() or (highs <= 0).any() or (lows <= 0).any() or (closes <= 0).any():
         return False, "Data quality violation: Non-positive prices found"
     if (volumes < 0).any():
         return False, "Data quality violation: Negative volumes found"

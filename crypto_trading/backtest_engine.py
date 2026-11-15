@@ -21,9 +21,7 @@ class FeeSchedule:
     taker_fee_rate: float = 0.0005  # 5 bps (0.05%)
     spread_bps: float = 1.0  # 1 bps (0.01%)
     slippage_bps: float = 5.0  # 5 bps (0.05%)
-    funding_rate_per_bar: float = (
-        0.0001  # 每期資金費率 (預設 0.01% 或每 8 小時結算，可為 0)
-    )
+    funding_rate_per_bar: float = 0.0001  # 每期資金費率 (預設 0.01% 或每 8 小時結算，可為 0)
     delay_bars: int = 1  # 信號執行延遲期數 (預設 t+1 即 shift(1))
     tick_size: float = 0.1  # 價格最小變動單位
     step_size: float = 0.001  # 數量最小變動單位
@@ -64,9 +62,7 @@ class BacktestEngine:
         close = df["Close"]
         signal = df["signal"]
 
-        source_name = data_source or getattr(
-            df, "data_source", self.fee_schedule.source
-        )
+        source_name = data_source or getattr(df, "data_source", self.fee_schedule.source)
 
         # 1. 計算資產市場收益率
         market_returns = close.pct_change().fillna(0)
@@ -82,9 +78,7 @@ class BacktestEngine:
         # 4.1 Taker 手續費 (以 taker 假設計算換手手續費)
         taker_costs = turnover * self.fee_schedule.taker_fee_rate
         # 4.2 Maker 手續費 (若策略有掛單情境，可分開追蹤)
-        maker_costs = (
-            turnover * self.fee_schedule.maker_fee_rate * 0.0
-        )  # 預設市價撮合全部為 taker
+        maker_costs = turnover * self.fee_schedule.maker_fee_rate * 0.0  # 預設市價撮合全部為 taker
         # 4.3 點差成本 (Spread Cost)
         spread_rate = (self.fee_schedule.spread_bps / 10000.0) / 2.0  # 半個 spread
         spread_costs = turnover * spread_rate
@@ -95,9 +89,7 @@ class BacktestEngine:
         funding_costs = strategy_pos.abs() * self.fee_schedule.funding_rate_per_bar
 
         # 總摩擦成本
-        total_friction_cost = (
-            taker_costs + maker_costs + spread_costs + slippage_costs + funding_costs
-        )
+        total_friction_cost = taker_costs + maker_costs + spread_costs + slippage_costs + funding_costs
 
         # 5. 毛收益率 vs 淨收益率
         gross_returns = strategy_pos * market_returns
@@ -107,12 +99,8 @@ class BacktestEngine:
         gross_equity = (1.0 + gross_returns).cumprod() * self.initial_capital
         net_equity = (1.0 + net_returns).cumprod() * self.initial_capital
 
-        gross_return_pct = (
-            gross_equity.iloc[-1] - self.initial_capital
-        ) / self.initial_capital
-        net_return_pct = (
-            net_equity.iloc[-1] - self.initial_capital
-        ) / self.initial_capital
+        gross_return_pct = (gross_equity.iloc[-1] - self.initial_capital) / self.initial_capital
+        net_return_pct = (net_equity.iloc[-1] - self.initial_capital) / self.initial_capital
 
         # 6. 回撤 (Drawdown) 計算
         net_rolling_max = net_equity.cummax()
@@ -149,9 +137,7 @@ class BacktestEngine:
 
         winning_bars = net_returns[net_returns > 0]
         losing_bars = net_returns[net_returns < 0]
-        hit_rate = float(
-            len(winning_bars) / (len(winning_bars) + len(losing_bars) + 1e-9)
-        )
+        hit_rate = float(len(winning_bars) / (len(winning_bars) + len(losing_bars) + 1e-9))
         profit_factor = float(winning_bars.sum() / (abs(losing_bars.sum()) + 1e-9))
 
         # Closed trades 計算
@@ -165,14 +151,8 @@ class BacktestEngine:
             p_i = close.iloc[i]
             if pos_i != curr_pos:
                 if in_trade and curr_pos != 0.0:
-                    trade_pnl = (
-                        (p_i - entry_p) / entry_p
-                        if curr_pos > 0
-                        else (entry_p - p_i) / entry_p
-                    )
-                    fee_roundtrip = (
-                        self.fee_schedule.taker_fee_rate + slippage_rate + spread_rate
-                    ) * 2
+                    trade_pnl = (p_i - entry_p) / entry_p if curr_pos > 0 else (entry_p - p_i) / entry_p
+                    fee_roundtrip = (self.fee_schedule.taker_fee_rate + slippage_rate + spread_rate) * 2
                     trades_pnl.append(trade_pnl - fee_roundtrip)
                     trade_count += 1
                 if pos_i != 0.0:
@@ -226,23 +206,11 @@ class BacktestEngine:
                 "min_notional": self.fee_schedule.min_notional,
             },
             "costs": {
-                "total_cost": round(
-                    float(total_friction_cost.sum() * self.initial_capital), 4
-                ),
-                "taker_costs": round(
-                    float(taker_costs.sum() * self.initial_capital), 4
-                ),
-                "maker_costs": round(
-                    float(maker_costs.sum() * self.initial_capital), 4
-                ),
-                "spread_costs": round(
-                    float(spread_costs.sum() * self.initial_capital), 4
-                ),
-                "slippage_costs": round(
-                    float(slippage_costs.sum() * self.initial_capital), 4
-                ),
-                "funding_costs": round(
-                    float(funding_costs.sum() * self.initial_capital), 4
-                ),
+                "total_cost": round(float(total_friction_cost.sum() * self.initial_capital), 4),
+                "taker_costs": round(float(taker_costs.sum() * self.initial_capital), 4),
+                "maker_costs": round(float(maker_costs.sum() * self.initial_capital), 4),
+                "spread_costs": round(float(spread_costs.sum() * self.initial_capital), 4),
+                "slippage_costs": round(float(slippage_costs.sum() * self.initial_capital), 4),
+                "funding_costs": round(float(funding_costs.sum() * self.initial_capital), 4),
             },
         }

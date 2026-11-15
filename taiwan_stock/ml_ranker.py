@@ -41,9 +41,7 @@ class TaiwanStockMLRanker:
                 rename[current] = canonical
         return out.rename(columns=rename)
 
-    def extract_features(
-        self, df: pd.DataFrame, forward_period: int = 5
-    ) -> pd.DataFrame:
+    def extract_features(self, df: pd.DataFrame, forward_period: int = 5) -> pd.DataFrame:
         """只用 t 與過去資料建構特徵；唯一前瞻欄位為訓練目標。"""
         out = self._normalise_ohlcv_columns(df).copy()
         required = {"High", "Low", "Close", "Volume"}
@@ -66,25 +64,15 @@ class TaiwanStockMLRanker:
             out[f"ma{w}_slope_5d"] = ma.pct_change(5, fill_method=None)
 
         daily_ret = c.pct_change(fill_method=None)
-        out["hist_vol_20"] = daily_ret.rolling(20, min_periods=20).std(
-            ddof=1
-        ) * np.sqrt(252.0)
+        out["hist_vol_20"] = daily_ret.rolling(20, min_periods=20).std(ddof=1) * np.sqrt(252.0)
         prev_close = c.shift(1)
-        tr = pd.concat(
-            [(h - lo).abs(), (h - prev_close).abs(), (lo - prev_close).abs()], axis=1
-        ).max(axis=1)
+        tr = pd.concat([(h - lo).abs(), (h - prev_close).abs(), (lo - prev_close).abs()], axis=1).max(axis=1)
         out["atr_ratio_14"] = tr.rolling(14, min_periods=14).mean().div(c)
         out["vol_surge"] = v.div(v.rolling(5, min_periods=5).mean())
 
         delta = c.diff()
-        gain = (
-            delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
-        )
-        loss = (
-            (-delta.clip(upper=0))
-            .ewm(alpha=1 / 14, adjust=False, min_periods=14)
-            .mean()
-        )
+        gain = delta.clip(lower=0).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+        loss = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
         out["rsi_14"] = 100.0 - 100.0 / (1.0 + gain.div(loss.replace(0.0, np.nan)))
         low9 = lo.rolling(9, min_periods=9).min()
         high9 = h.rolling(9, min_periods=9).max()
@@ -94,9 +82,7 @@ class TaiwanStockMLRanker:
         out[self.TARGET_COLUMN] = c.shift(-forward_period).div(c).sub(1.0)
         return out.replace([np.inf, -np.inf], np.nan)
 
-    def prepare_dataset(
-        self, stock_data_map: Mapping[str, pd.DataFrame]
-    ) -> tuple[pd.DataFrame, list[str]]:
+    def prepare_dataset(self, stock_data_map: Mapping[str, pd.DataFrame]) -> tuple[pd.DataFrame, list[str]]:
         panels: list[pd.DataFrame] = []
         for symbol, raw in stock_data_map.items():
             if raw is None or raw.empty:
@@ -122,9 +108,7 @@ class TaiwanStockMLRanker:
             self.TARGET_COLUMN,
         }
         self.feature_cols = [
-            c
-            for c in combined.columns
-            if c not in excluded and pd.api.types.is_numeric_dtype(combined[c])
+            c for c in combined.columns if c not in excluded and pd.api.types.is_numeric_dtype(combined[c])
         ]
         clean = combined.dropna(subset=self.feature_cols + [self.TARGET_COLUMN]).copy()
         clean = clean.sort_index(kind="mergesort")
@@ -141,9 +125,7 @@ class TaiwanStockMLRanker:
         dates = pd.DatetimeIndex(data.index).normalize().unique().sort_values()
         if len(dates) < embargo_days + 3:
             raise ValueError(f"至少需要 {embargo_days + 3} 個不同交易日才能切分")
-        test_pos = max(
-            embargo_days + 1, int(np.floor(len(dates) * (1.0 - test_fraction)))
-        )
+        test_pos = max(embargo_days + 1, int(np.floor(len(dates) * (1.0 - test_fraction))))
         test_pos = min(test_pos, len(dates) - 1)
         test_start = dates[test_pos]
         embargo_dates = dates[test_pos - embargo_days : test_pos]
@@ -191,9 +173,7 @@ class TaiwanStockMLRanker:
             )
         from sklearn.ensemble import HistGradientBoostingRegressor
 
-        return HistGradientBoostingRegressor(
-            max_iter=250, learning_rate=0.05, max_depth=5, random_state=42
-        )
+        return HistGradientBoostingRegressor(max_iter=250, learning_rate=0.05, max_depth=5, random_state=42)
 
     def train_model(
         self,
@@ -212,9 +192,7 @@ class TaiwanStockMLRanker:
                 self.TARGET_COLUMN,
             }
             self.feature_cols = [
-                c
-                for c in dataset.columns
-                if c not in excluded and pd.api.types.is_numeric_dtype(dataset[c])
+                c for c in dataset.columns if c not in excluded and pd.api.types.is_numeric_dtype(dataset[c])
             ]
         train, test = self.split_dataset_by_date(dataset, test_fraction, embargo_days)
         self.model = self._build_model()
@@ -229,9 +207,7 @@ class TaiwanStockMLRanker:
             **self.last_split_info,
         }
 
-    def predict_rankings(
-        self, stock_data_map: Mapping[str, pd.DataFrame]
-    ) -> pd.DataFrame:
+    def predict_rankings(self, stock_data_map: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         if self.model is None:
             raise RuntimeError("請先呼叫 train_model()")
         rows = []
@@ -242,11 +218,7 @@ class TaiwanStockMLRanker:
                 continue
             latest = valid.iloc[-1]
             pred = float(
-                self.model.predict(
-                    pd.DataFrame(
-                        [latest[self.feature_cols].to_dict()], columns=self.feature_cols
-                    )
-                )[0]
+                self.model.predict(pd.DataFrame([latest[self.feature_cols].to_dict()], columns=self.feature_cols))[0]
             )
             rows.append(
                 {
@@ -257,11 +229,7 @@ class TaiwanStockMLRanker:
                     "rsi_14": float(latest.get("rsi_14", np.nan)),
                 }
             )
-        result = (
-            pd.DataFrame(rows)
-            .sort_values("predicted_fwd_5d_ret_pct", ascending=False)
-            .reset_index(drop=True)
-        )
+        result = pd.DataFrame(rows).sort_values("predicted_fwd_5d_ret_pct", ascending=False).reset_index(drop=True)
         if not result.empty:
             result["rank"] = np.arange(1, len(result) + 1)
         return result

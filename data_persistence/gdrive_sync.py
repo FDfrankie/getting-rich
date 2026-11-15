@@ -130,11 +130,7 @@ class LocalPersistenceService:
 
     def save_state(self, key: str, value: Any):
         try:
-            val_str = (
-                json.dumps(value, ensure_ascii=False)
-                if not isinstance(value, str)
-                else value
-            )
+            val_str = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn = self.get_connection()
             cur = conn.cursor()
@@ -425,9 +421,7 @@ class LocalPersistenceService:
         except Exception:
             return []
 
-    def record_equity(
-        self, total_equity: float, balance_usdt: float, unrealized_pnl: float = 0.0
-    ):
+    def record_equity(self, total_equity: float, balance_usdt: float, unrealized_pnl: float = 0.0):
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn = self.get_connection()
@@ -510,12 +504,8 @@ class LocalPersistenceService:
             conn = self.get_connection()
             cur = conn.cursor()
             cur.execute("SELECT key, value, updated_at FROM bot_state")
-            state_dict = {
-                r[0]: {"value": r[1], "updated_at": r[2]} for r in cur.fetchall()
-            }
-            cur.execute(
-                "SELECT timestamp, message FROM bot_logs ORDER BY id DESC LIMIT 100"
-            )
+            state_dict = {r[0]: {"value": r[1], "updated_at": r[2]} for r in cur.fetchall()}
+            cur.execute("SELECT timestamp, message FROM bot_logs ORDER BY id DESC LIMIT 100")
             logs = [{"timestamp": r[0], "message": r[1]} for r in cur.fetchall()]
             conn.close()
 
@@ -545,13 +535,7 @@ class LocalPersistenceService:
                     src_conn.close()
                 except Exception:
                     shutil.copy2(self.db_path, backup_file)
-                existing = sorted(
-                    [
-                        os.path.join(BACKUP_DIR, f)
-                        for f in os.listdir(BACKUP_DIR)
-                        if f.endswith(".db")
-                    ]
-                )
+                existing = sorted([os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR) if f.endswith(".db")])
                 if len(existing) > 10:
                     for old_file in existing[:-10]:
                         try:
@@ -567,9 +551,7 @@ class LocalPersistenceService:
         檢查環境變數 GOOGLE_DRIVE_CREDENTIALS 與 GOOGLE_DRIVE_FOLDER_ID。
         若無真實 OAuth/服務帳戶，則誠實以 LOCAL_PERSISTENCE 運作。
         """
-        creds_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS", "") or os.getenv(
-            "GOOGLE_DRIVE_CREDENTIALS_JSON", ""
-        )
+        creds_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS", "") or os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON", "")
         folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
         snapshot_file = self.export_snapshot_json()
 
@@ -579,35 +561,23 @@ class LocalPersistenceService:
                 from googleapiclient.discovery import build
                 from googleapiclient.http import MediaFileUpload
 
-                info = (
-                    json.loads(creds_json)
-                    if creds_json.startswith("{")
-                    else json.load(open(creds_json))
-                )
+                info = json.loads(creds_json) if creds_json.startswith("{") else json.load(open(creds_json))
                 credentials = service_account.Credentials.from_service_account_info(
                     info, scopes=["https://www.googleapis.com/auth/drive"]
                 )
                 service = build("drive", "v3", credentials=credentials)
 
                 query = f"name = 'system_state.db' and '{folder_id}' in parents and trashed = false"
-                response = (
-                    service.files()
-                    .list(q=query, spaces="drive", fields="files(id, name)")
-                    .execute()
-                )
+                response = service.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
                 files = response.get("files", [])
 
-                media = MediaFileUpload(
-                    self.db_path, mimetype="application/x-sqlite3", resumable=True
-                )
+                media = MediaFileUpload(self.db_path, mimetype="application/x-sqlite3", resumable=True)
                 if files:
                     file_id = files[0]["id"]
                     service.files().update(fileId=file_id, media_body=media).execute()
                 else:
                     file_metadata = {"name": "system_state.db", "parents": [folder_id]}
-                    service.files().create(
-                        body=file_metadata, media_body=media, fields="id"
-                    ).execute()
+                    service.files().create(body=file_metadata, media_body=media, fields="id").execute()
                 return {
                     "status": "SUCCESS",
                     "mode": "REMOTE_API",

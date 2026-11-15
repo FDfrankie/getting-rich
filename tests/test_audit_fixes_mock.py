@@ -73,9 +73,7 @@ def test_bot_runner_no_paper_fallback_on_error():
     bot = CryptoTradingBot(symbol="BTC/USDT", exchange_adapter=mock_adapter)
     bot.execute_paper_order = MagicMock()
 
-    bot.execute_order(
-        side="BUY", amount=0.01, current_price=60000.0, reason="Test order"
-    )
+    bot.execute_order(side="BUY", amount=0.01, current_price=60000.0, reason="Test order")
     # 確保 execute_paper_order 未被呼叫
     bot.execute_paper_order.assert_not_called()
     assert bot.position == 0.0
@@ -88,9 +86,7 @@ def test_bot_runner_accounting_and_equity():
     init_bal = bot.balance_usdt
 
     # 模擬做多開倉
-    bot.execute_paper_order(
-        side="BUY", amount=1.0, current_price=50000.0, reason="Open Long"
-    )
+    bot.execute_paper_order(side="BUY", amount=1.0, current_price=50000.0, reason="Open Long")
     assert bot.position == 1.0
     assert bot.position_side == "LONG"
     assert bot.entry_price == 50000.0
@@ -111,9 +107,7 @@ def test_bot_runner_accounting_and_equity():
     assert bot.balance_usdt > init_bal
 
     # 模擬做空開倉
-    bot.execute_paper_order(
-        side="SELL", amount=1.0, current_price=50000.0, reason="Open Short"
-    )
+    bot.execute_paper_order(side="SELL", amount=1.0, current_price=50000.0, reason="Open Short")
     assert bot.position == 1.0
     assert bot.position_side == "SHORT"
     assert bot.entry_price == 50000.0

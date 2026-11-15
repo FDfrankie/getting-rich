@@ -55,14 +55,10 @@ class ReconciliationService:
             diff = round(abs(loc - rem), 6)
             if diff > 1e-4:
                 pos_diffs[s] = {"local": loc, "remote": rem, "discrepancy": diff}
-                discrepancies.append(
-                    f"Position mismatch on {s}: local={loc}, remote={rem}"
-                )
+                discrepancies.append(f"Position mismatch on {s}: local={loc}, remote={rem}")
 
         # 2. 訂單狀態與未結清掛單比對
-        remote_order_ids = {
-            str(ro.get("id") or ro.get("orderId")): ro for ro in remote_orders
-        }
+        remote_order_ids = {str(ro.get("id") or ro.get("orderId")): ro for ro in remote_orders}
         order_diffs = []
         for lo in local_orders:
             ex_id = str(lo.get("exchange_order_id") or "")
@@ -78,16 +74,12 @@ class ReconciliationService:
                         }
                     )
                 else:
-                    discrepancies.append(
-                        f"In-flight order {lo.get('client_order_id')} not confirmed by exchange"
-                    )
+                    discrepancies.append(f"In-flight order {lo.get('client_order_id')} not confirmed by exchange")
 
         # 3. 餘額比對
         bal_diff = round(abs(local_balance - remote_balance), 2)
         if bal_diff > 1.0:
-            discrepancies.append(
-                f"Balance mismatch: local={local_balance}, remote={remote_balance}"
-            )
+            discrepancies.append(f"Balance mismatch: local={local_balance}, remote={remote_balance}")
 
         self.is_reconciled = len(discrepancies) == 0
         self.last_reconciled_time = datetime.utcnow().isoformat()

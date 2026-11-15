@@ -71,9 +71,7 @@ class CryptoTradingEnv:
         current_price = current_row["Close"]
         unrealized_pnl = 0.0
         if self.position != 0 and self.entry_price > 0:
-            unrealized_pnl = (
-                self.position * (current_price - self.entry_price) / self.entry_price
-            )
+            unrealized_pnl = self.position * (current_price - self.entry_price) / self.entry_price
 
         agent_state = np.array([self.position, unrealized_pnl], dtype=np.float32)
         obs = np.concatenate([feat_vec, agent_state])
@@ -118,9 +116,7 @@ class CryptoTradingEnv:
             self.entry_price = next_price if action != 0 else 0.0
 
         self.current_step = next_step
-        done = (self.current_step >= self.max_steps) or (
-            drawdown >= self.max_drawdown_limit
-        )
+        done = (self.current_step >= self.max_steps) or (drawdown >= self.max_drawdown_limit)
 
         info = {
             "step": self.current_step,
@@ -131,16 +127,10 @@ class CryptoTradingEnv:
             "close_price": next_price,
         }
 
-        obs = (
-            self._get_observation()
-            if not done
-            else np.zeros(self.state_dim, dtype=np.float32)
-        )
+        obs = self._get_observation() if not done else np.zeros(self.state_dim, dtype=np.float32)
         return obs, float(reward), done, info
 
-    def _calculate_reward(
-        self, net_return: float, drawdown: float, delta_pos: float
-    ) -> float:
+    def _calculate_reward(self, net_return: float, drawdown: float, delta_pos: float) -> float:
         """
         Reward function designed for real alpha:
         1. Differential Sharpe: Incentivizes high returns with low volatility.

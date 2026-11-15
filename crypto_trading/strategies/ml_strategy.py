@@ -7,7 +7,6 @@ Signal Output:
   0: Flat / Neutral
 """
 
-
 import numpy as np
 import pandas as pd
 

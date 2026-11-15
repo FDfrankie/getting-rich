@@ -2,7 +2,6 @@
 Tests for TradingMode safety checks and Settings validation.
 """
 
-
 import pytest
 
 from crypto_trading.bitunix_client import BitunixClient
@@ -28,9 +27,7 @@ def test_bitunix_live_requires_all_safety_conditions():
         Settings(env={"TRADING_MODE": "BITUNIX_LIVE"})
 
     # 2. Missing Key / Secret
-    with pytest.raises(
-        ValueError, match="non-empty BITUNIX_API_KEY and BITUNIX_API_SECRET"
-    ):
+    with pytest.raises(ValueError, match="non-empty BITUNIX_API_KEY and BITUNIX_API_SECRET"):
         Settings(
             env={
                 "TRADING_MODE": "BITUNIX_LIVE",

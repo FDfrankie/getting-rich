@@ -42,9 +42,7 @@ FORBIDDEN_DIR_NAMES: set[str] = {
 }
 
 SUSPICIOUS_PATTERNS: list[re.Pattern] = [
-    re.compile(
-        r"""(?i)(secret_key|api_secret|password|private_key)\s*=\s*['\"][A-Za-z0-9+/=_-]{16,}['\"]"""
-    ),
+    re.compile(r"""(?i)(secret_key|api_secret|password|private_key)\s*=\s*['\"][A-Za-z0-9+/=_-]{16,}['\"]"""),
     re.compile(r"""-----BEGIN (?:EC|RSA|DSA|OPENSSH)?\s*PRIVATE KEY-----"""),
 ]
 
@@ -61,16 +59,12 @@ def check_forbidden_rules(path: Path) -> None:
     parts = path.parts
     for p in parts:
         if p in FORBIDDEN_DIR_NAMES:
-            raise ValueError(
-                f"Packaging rejected: forbidden directory component '{p}' in {path}"
-            )
+            raise ValueError(f"Packaging rejected: forbidden directory component '{p}' in {path}")
     name = path.name
     if name in FORBIDDEN_NAMES:
         raise ValueError(f"Packaging rejected: forbidden file '{name}' in {path}")
     if any(name.endswith(ext) for ext in FORBIDDEN_EXTENSIONS):
-        raise ValueError(
-            f"Packaging rejected: forbidden file extension for '{name}' in {path}"
-        )
+        raise ValueError(f"Packaging rejected: forbidden file extension for '{name}' in {path}")
 
 
 def scan_for_secrets(file_path: Path) -> None:
@@ -82,14 +76,10 @@ def scan_for_secrets(file_path: Path) -> None:
     for pattern in SUSPICIOUS_PATTERNS:
         match = pattern.search(content)
         if match:
-            raise ValueError(
-                f"Packaging rejected: potential secret found in {file_path}: {match.group(0)[:20]}..."
-            )
+            raise ValueError(f"Packaging rejected: potential secret found in {file_path}: {match.group(0)[:20]}...")
 
 
-def build_package(
-    root_dir: Path, output_zip: Path, allowed_patterns: list[str] | None = None
-) -> dict[str, str]:
+def build_package(root_dir: Path, output_zip: Path, allowed_patterns: list[str] | None = None) -> dict[str, str]:
     manifest: dict[str, str] = {}
     root_dir = root_dir.resolve()
 
@@ -111,9 +101,7 @@ def build_package(
 
     for curr_root, dirs, files in os.walk(root_dir):
         # Prune forbidden dirs in place
-        dirs[:] = [
-            d for d in dirs if d not in FORBIDDEN_DIR_NAMES and not d.startswith(".")
-        ]
+        dirs[:] = [d for d in dirs if d not in FORBIDDEN_DIR_NAMES and not d.startswith(".")]
 
         curr_p = Path(curr_root)
         for f in files:

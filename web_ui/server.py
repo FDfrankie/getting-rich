@@ -67,9 +67,7 @@ class QuantAppContext:
         self.testnet_client = BinanceTestnetClient(settlement="USDC")
         self.bitunix_client = BitunixClient()
         if CryptoTradingBot is not None:
-            self.active_bot = CryptoTradingBot(
-                symbol=DEFAULT_SYMBOL, exchange_adapter=self.testnet_client
-            )
+            self.active_bot = CryptoTradingBot(symbol=DEFAULT_SYMBOL, exchange_adapter=self.testnet_client)
         else:
             # Fallback placeholder when heavy ML/RL bot is unavailable
             class _DummyBot:
@@ -149,16 +147,12 @@ class QuantAppContext:
         try:
             conn = sqlite3.connect(STATE_DB_PATH)
             cur = conn.cursor()
-            cur.execute(
-                "SELECT timestamp, message FROM bot_logs ORDER BY id DESC LIMIT 50"
-            )
+            cur.execute("SELECT timestamp, message FROM bot_logs ORDER BY id DESC LIMIT 50")
             rows = cur.fetchall()
             if rows:
                 self.bot_logs = [f"[{r[0]}] {r[1]}" for r in reversed(rows)]
             else:
-                self.bot_logs = [
-                    f"[{datetime.now().strftime('%H:%M:%S')}] 系統常駐核心已就緒，雲端背景運算常駐啟動。"
-                ]
+                self.bot_logs = [f"[{datetime.now().strftime('%H:%M:%S')}] 系統常駐核心已就緒，雲端背景運算常駐啟動。"]
 
             cur.execute("SELECT key, value FROM bot_state")
             for k, v in cur.fetchall():
@@ -179,11 +173,7 @@ class QuantAppContext:
         獲取大盤多空結構計算結果，實施 60 秒快取保護並強制與報告共用同一份結果
         """
         now = time.time()
-        if (
-            not force_refresh
-            and self.last_taiwan_market
-            and (now - self.last_taiwan_calc_time < 60)
-        ):
+        if not force_refresh and self.last_taiwan_market and (now - self.last_taiwan_calc_time < 60):
             return self.last_taiwan_market
 
         res = self.market_analyzer.analyze()
@@ -191,18 +181,12 @@ class QuantAppContext:
         self.last_taiwan_calc_time = now
         return res
 
-    def get_taiwan_screener_detailed(
-        self, force_refresh: bool = False
-    ) -> dict[str, Any]:
+    def get_taiwan_screener_detailed(self, force_refresh: bool = False) -> dict[str, Any]:
         """
         獲取台股選股詳細清單 (含選股透明度與空頭避險閉環)
         """
         now = time.time()
-        if (
-            not force_refresh
-            and self.last_taiwan_screener_detailed
-            and (now - self.last_taiwan_calc_time < 60)
-        ):
+        if not force_refresh and self.last_taiwan_screener_detailed and (now - self.last_taiwan_calc_time < 60):
             return self.last_taiwan_screener_detailed
 
         detailed = self.stock_screener.run_screener_detailed()
@@ -222,9 +206,7 @@ class QuantAppContext:
             now_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn = sqlite3.connect(STATE_DB_PATH)
             cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO bot_logs (timestamp, message) VALUES (?, ?)", (ts, msg)
-            )
+            cur.execute("INSERT INTO bot_logs (timestamp, message) VALUES (?, ?)", (ts, msg))
             cur.execute(
                 "REPLACE INTO bot_state (key, value, updated_at) VALUES ('bot_strategy_name', ?, ?)",
                 (self.bot_strategy_name, now_dt),
@@ -251,30 +233,20 @@ class QuantAppContext:
         adapter = (
             self.testnet_client
             if self.execution_mode == "BINANCE_TESTNET"
-            else (
-                self.bitunix_client if self.execution_mode == "BITUNIX_LIVE" else None
-            )
+            else (self.bitunix_client if self.execution_mode == "BITUNIX_LIVE" else None)
         )
         lgbm_path = os.path.join(DATA_DIR, "models", "crypto_lgbm_weights.joblib")
         ppo_path = os.path.join(DATA_DIR, "models", "crypto_ppo_agent.pt")
 
         if strat_name == "ml" and MLAlphaStrategy is not None:
-            strat = MLAlphaStrategy(
-                model_path=lgbm_path if os.path.exists(lgbm_path) else None
-            )
+            strat = MLAlphaStrategy(model_path=lgbm_path if os.path.exists(lgbm_path) else None)
         elif strat_name == "rl" and RLAlphaStrategy is not None:
-            strat = RLAlphaStrategy(
-                agent_weights_path=ppo_path if os.path.exists(ppo_path) else None
-            )
+            strat = RLAlphaStrategy(agent_weights_path=ppo_path if os.path.exists(ppo_path) else None)
         else:
             strat = MomentumBreakoutStrategy()
         if CryptoTradingBot is not None:
-            self.active_bot = CryptoTradingBot(
-                symbol=self.active_bot.symbol, strategy=strat, exchange_adapter=adapter
-            )
-        self.add_log(
-            f"已切換操盤策略至: 【{strat_name.upper()} 策略】(自動掛載優化權重)"
-        )
+            self.active_bot = CryptoTradingBot(symbol=self.active_bot.symbol, strategy=strat, exchange_adapter=adapter)
+        self.add_log(f"已切換操盤策略至: 【{strat_name.upper()} 策略】(自動掛載優化權重)")
 
     def _background_alpha_miner_loop(self):
         """24/7 背景持續自動挖掘 Alpha 因子 Worker"""
@@ -293,9 +265,7 @@ class QuantAppContext:
 
     def _background_worker_loop(self):
         """24/7 背景獨立常駐執行緒，不依賴 HTTP 請求或前端瀏覽器"""
-        print(
-            "⚡ [Background Worker] 常駐執行緒啟動！無論瀏覽器是否關閉，AI 操盤引擎均在背景運作。"
-        )
+        print("⚡ [Background Worker] 常駐執行緒啟動！無論瀏覽器是否關閉，AI 操盤引擎均在背景運作。")
         self.add_log("常駐 Background Worker 已連線至雲端主機，24/7 自動監控盤勢。")
         last_reconcile_time = 0
         while True:
@@ -318,17 +288,11 @@ class QuantAppContext:
 
                     # 取得目前報價
                     if self.execution_mode == "BITUNIX_LIVE":
-                        ticker = self.bitunix_client.fetch_ticker(
-                            self.active_bot.symbol
-                        )
+                        ticker = self.bitunix_client.fetch_ticker(self.active_bot.symbol)
                     else:
-                        ticker = self.testnet_client.fetch_ticker(
-                            self.active_bot.symbol
-                        )
+                        ticker = self.testnet_client.fetch_ticker(self.active_bot.symbol)
                     curr_price = ticker.get("last", 68500.0)
-                    equity = self.active_bot.balance_usdt + (
-                        self.active_bot.position * curr_price
-                    )
+                    equity = self.active_bot.balance_usdt + (self.active_bot.position * curr_price)
 
                     # 每 60 秒執行一次持倉同調對齊 (reconcile_with_exchange)
                     now_ts = time.time()
@@ -360,21 +324,15 @@ class QuantAppContext:
 
     def _start_background_worker(self):
         if self.bot_thread is None or not self.bot_thread.is_alive():
-            self.bot_thread = threading.Thread(
-                target=self._background_worker_loop, daemon=True
-            )
+            self.bot_thread = threading.Thread(target=self._background_worker_loop, daemon=True)
             self.bot_thread.start()
         if self.miner_thread is None or not self.miner_thread.is_alive():
-            self.miner_thread = threading.Thread(
-                target=self._background_alpha_miner_loop, daemon=True
-            )
+            self.miner_thread = threading.Thread(target=self._background_alpha_miner_loop, daemon=True)
             self.miner_thread.start()
 
     def start_bot(self):
         self.bot_running = True
-        self.add_log(
-            f"自動操盤機器人已設定為【積極運轉】(策略: {self.bot_strategy_name.upper()})"
-        )
+        self.add_log(f"自動操盤機器人已設定為【積極運轉】(策略: {self.bot_strategy_name.upper()})")
 
     def stop_bot(self):
         self.bot_running = False
@@ -400,9 +358,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_error_json(
-        self, code: str, message: str, status: int = 400, retryable: bool = False
-    ):
+    def _send_error_json(self, code: str, message: str, status: int = 400, retryable: bool = False):
         return self._send_json_response(
             {
                 "ok": False,
@@ -428,9 +384,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
 
         # 靜態文件映射：講義頁面
         if path == "/handbook":
-            handbook_path = os.path.join(
-                BASE_DIR, "docs", "handbook", "QUANT_HANDBOOK.html"
-            )
+            handbook_path = os.path.join(BASE_DIR, "docs", "handbook", "QUANT_HANDBOOK.html")
             if os.path.exists(handbook_path):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -446,16 +400,26 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
         if path.startswith("/api/brain/jobs/"):
             job_id = path[len("/api/brain/jobs/") :]
             if not job_id:
-                return self._send_error_json(
-                    "MISSING_JOB_ID", "Job ID 未指定", status=400
-                )
+                return self._send_error_json("MISSING_JOB_ID", "Job ID 未指定", status=400)
             job = APP_STATE.brain_job_queue.get_job(job_id)
             if not job:
-                return self._send_error_json(
-                    "JOB_NOT_FOUND", f"找不到指定的工作: {job_id}", status=404
-                )
+                return self._send_error_json("JOB_NOT_FOUND", f"找不到指定的工作: {job_id}", status=404)
+            job_dict = job.to_dict()
+            status_val = job_dict.get("status")
+            http_status = 200
+            if status_val == "AUTH_FAILED":
+                http_status = 401
+            elif status_val == "TIMEOUT":
+                http_status = 504
+            elif status_val == "FAILED":
+                http_status = 502
             return self._send_json_response(
-                {"ok": True, "job": job.to_dict()}, status=200
+                {
+                    "ok": True,
+                    "job": job_dict,
+                    **job_dict,
+                },
+                status=http_status,
             )
 
         # API: 系統總覽與健康度 (含 Watchdog 四大核心心跳)
@@ -469,18 +433,12 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     "bot_strategy": APP_STATE.bot_strategy_name,
                     "execution_mode": APP_STATE.execution_mode,
                     "watchdog": {
-                        "trading_bot": "OK"
-                        if (now_ts - APP_STATE.heartbeats["trading_bot"] < 30)
-                        else "LAGGING",
-                        "alpha_miner": "OK"
-                        if (now_ts - APP_STATE.heartbeats["alpha_miner"] < 90)
-                        else "LAGGING",
+                        "trading_bot": "OK" if (now_ts - APP_STATE.heartbeats["trading_bot"] < 30) else "LAGGING",
+                        "alpha_miner": "OK" if (now_ts - APP_STATE.heartbeats["alpha_miner"] < 90) else "LAGGING",
                         "taiwan_scheduler": "OK"
                         if (now_ts - APP_STATE.heartbeats["taiwan_scheduler"] < 60)
                         else "LAGGING",
-                        "gdrive_sync": "OK"
-                        if (now_ts - APP_STATE.heartbeats["gdrive_sync"] < 60)
-                        else "LAGGING",
+                        "gdrive_sync": "OK" if (now_ts - APP_STATE.heartbeats["gdrive_sync"] < 60) else "LAGGING",
                         "total_alphas_mined": APP_STATE.alpha_miner.total_mined,
                         "total_alphas_accepted": APP_STATE.alpha_miner.total_accepted,
                     },
@@ -493,9 +451,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 res = APP_STATE.get_taiwan_market_analysis()
                 return self._send_json_response({"success": True, "data": res})
             except Exception as e:
-                return self._send_json_response(
-                    {"success": False, "error": str(e)}, status=500
-                )
+                return self._send_json_response({"success": False, "error": str(e)}, status=500)
 
         # API: 台股精選選股池與 ML 排序 (含選股透明度統計)
         if path == "/api/taiwan/screener":
@@ -512,30 +468,24 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     }
                 )
             except Exception as e:
-                return self._send_json_response(
-                    {"success": False, "error": str(e)}, status=500
-                )
+                return self._send_json_response({"success": False, "error": str(e)}, status=500)
 
         # API: 台股晨報獲取 (強制共用同一份後端大盤計算快取與透明度數據)
         if path == "/api/taiwan/report":
-            format_type = parse_qs(parsed.query).get("format", ["markdown"])[0]
+            parse_qs(parsed.query).get("format", ["markdown"])[0]
             # 確保大盤計算結果已生成
             market_info = APP_STATE.get_taiwan_market_analysis()
 
             if not APP_STATE.last_taiwan_report:
                 try:
-                    APP_STATE.last_taiwan_report = APP_STATE.report_gen.generate(
-                        cached_market_info=market_info
-                    )
+                    APP_STATE.last_taiwan_report = APP_STATE.report_gen.generate(cached_market_info=market_info)
                 except Exception:
                     pass
 
             if not APP_STATE.last_taiwan_html:
                 try:
-                    APP_STATE.last_taiwan_html = (
-                        APP_STATE.report_gen.generate_html_report(
-                            cached_market_info=market_info
-                        )
+                    APP_STATE.last_taiwan_html = APP_STATE.report_gen.generate_html_report(
+                        cached_market_info=market_info
                     )
                 except Exception:
                     pass
@@ -543,8 +493,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             return self._send_json_response(
                 {
                     "success": True,
-                    "content": APP_STATE.last_taiwan_report
-                    or "尚無已生成報告，請點擊「生成晨報」按鈕。",
+                    "content": APP_STATE.last_taiwan_report or "尚無已生成報告，請點擊「生成晨報」按鈕。",
                     "html_content": APP_STATE.last_taiwan_html or "",
                 }
             )
@@ -554,17 +503,11 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             try:
                 mode = APP_STATE.execution_mode
                 if mode == "BITUNIX_LIVE":
-                    ticker = APP_STATE.bitunix_client.fetch_ticker(
-                        APP_STATE.active_bot.symbol
-                    )
+                    ticker = APP_STATE.bitunix_client.fetch_ticker(APP_STATE.active_bot.symbol)
                     bal = APP_STATE.bitunix_client.fetch_balance()
                     positions = APP_STATE.bitunix_client.fetch_positions()
                     curr_price = ticker.get("last", 68500.0)
-                    unrealized_pnl = (
-                        sum([float(p.get("unrealized_pnl", 0.0)) for p in positions])
-                        if positions
-                        else 0.0
-                    )
+                    unrealized_pnl = sum([float(p.get("unrealized_pnl", 0.0)) for p in positions]) if positions else 0.0
                     return self._send_json_response(
                         {
                             "success": True,
@@ -582,17 +525,11 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                         }
                     )
                 elif mode == "BINANCE_TESTNET":
-                    ticker = APP_STATE.testnet_client.fetch_ticker(
-                        APP_STATE.active_bot.symbol
-                    )
+                    ticker = APP_STATE.testnet_client.fetch_ticker(APP_STATE.active_bot.symbol)
                     curr_price = ticker.get("last", 68500.0)
                     bal = APP_STATE.testnet_client.fetch_balance()
                     positions = APP_STATE.testnet_client.fetch_positions()
-                    unrealized_pnl = (
-                        sum([float(p.get("unrealized_pnl", 0.0)) for p in positions])
-                        if positions
-                        else 0.0
-                    )
+                    unrealized_pnl = sum([float(p.get("unrealized_pnl", 0.0)) for p in positions]) if positions else 0.0
                     return self._send_json_response(
                         {
                             "success": True,
@@ -603,9 +540,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                             "total_equity": bal.get("total_equity", 15000.0),
                             "free_balance": bal.get("free_balance", 12000.0),
                             "unrealized_pnl": unrealized_pnl,
-                            "settlement_currency": bal.get(
-                                "settlement_currency", "USDC"
-                            ),
+                            "settlement_currency": bal.get("settlement_currency", "USDC"),
                             "zero_fee_usdc": bal.get("zero_fee_usdc", True),
                             "positions": positions,
                             "bot_running": APP_STATE.bot_running,
@@ -614,9 +549,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                         }
                     )
                 else:  # PAPER_SANDBOX
-                    ticker = APP_STATE.testnet_client.fetch_ticker(
-                        APP_STATE.active_bot.symbol
-                    )
+                    ticker = APP_STATE.testnet_client.fetch_ticker(APP_STATE.active_bot.symbol)
                     curr_price = ticker.get("last", 68500.0)
                     bot = APP_STATE.active_bot
                     equity = bot.get_equity(curr_price)
@@ -645,16 +578,12 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                         }
                     )
             except Exception as e:
-                return self._send_json_response(
-                    {"success": False, "error": str(e)}, status=500
-                )
+                return self._send_json_response({"success": False, "error": str(e)}, status=500)
 
         # API: 加密貨幣歷史 K 線數據 (專供 TradingView Lightweight Charts 繪製)
         if path == "/api/crypto/klines":
             try:
-                symbol = parse_qs(parsed.query).get(
-                    "symbol", [APP_STATE.active_bot.symbol]
-                )[0]
+                symbol = parse_qs(parsed.query).get("symbol", [APP_STATE.active_bot.symbol])[0]
                 interval = parse_qs(parsed.query).get("interval", ["1m"])[0]
 
                 # 支援台股代碼與加密貨幣雙市場
@@ -673,27 +602,19 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     ticker = yf.Ticker(symbol)
                     df = ticker.history(
                         period=req_period,
-                        interval=interval
-                        if interval in ["1m", "5m", "15m", "1h", "1d"]
-                        else "1d",
+                        interval=interval if interval in ["1m", "5m", "15m", "1h", "1d"] else "1d",
                     )
                     if df.empty:
                         # 備援以日線重試
                         df = ticker.history(period="3mo", interval="1d")
                 else:
                     loader = CryptoDataLoader()
-                    df = loader.fetch_ohlcv(
-                        symbol=symbol, timeframe=interval, limit=120
-                    )
+                    df = loader.fetch_ohlcv(symbol=symbol, timeframe=interval, limit=120)
 
                 candles = []
                 for idx, row in df.iterrows():
                     # Lightweight charts 接受 unix timestamp (秒)
-                    ts = (
-                        int(idx.timestamp())
-                        if hasattr(idx, "timestamp")
-                        else int(time.time())
-                    )
+                    ts = int(idx.timestamp()) if hasattr(idx, "timestamp") else int(time.time())
                     candles.append(
                         {
                             "time": ts,
@@ -716,26 +637,11 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     lower_bb = (ma20_series - 2.0 * std20).fillna(close_series)
 
                     overlay = {
-                        "ma5": [
-                            {"time": int(t.timestamp()), "value": float(v)}
-                            for t, v in ma5_series.items()
-                        ],
-                        "ma20": [
-                            {"time": int(t.timestamp()), "value": float(v)}
-                            for t, v in ma20_series.items()
-                        ],
-                        "ma60": [
-                            {"time": int(t.timestamp()), "value": float(v)}
-                            for t, v in ma60_series.items()
-                        ],
-                        "bb_upper": [
-                            {"time": int(t.timestamp()), "value": float(v)}
-                            for t, v in upper_bb.items()
-                        ],
-                        "bb_lower": [
-                            {"time": int(t.timestamp()), "value": float(v)}
-                            for t, v in lower_bb.items()
-                        ],
+                        "ma5": [{"time": int(t.timestamp()), "value": float(v)} for t, v in ma5_series.items()],
+                        "ma20": [{"time": int(t.timestamp()), "value": float(v)} for t, v in ma20_series.items()],
+                        "ma60": [{"time": int(t.timestamp()), "value": float(v)} for t, v in ma60_series.items()],
+                        "bb_upper": [{"time": int(t.timestamp()), "value": float(v)} for t, v in upper_bb.items()],
+                        "bb_lower": [{"time": int(t.timestamp()), "value": float(v)} for t, v in lower_bb.items()],
                     }
                 else:
                     overlay = {
@@ -757,11 +663,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                         try:
                             # 轉換 ISO/標準時間為 unix timestamp
                             ord_ts = int(
-                                time.mktime(
-                                    datetime.strptime(
-                                        ord_item["timestamp"], "%Y-%m-%d %H:%M:%S"
-                                    ).timetuple()
-                                )
+                                time.mktime(datetime.strptime(ord_item["timestamp"], "%Y-%m-%d %H:%M:%S").timetuple())
                             )
                             if earliest_chart_ts <= ord_ts <= latest_chart_ts + 300:
                                 side_upper = ord_item["side"].upper()
@@ -769,9 +671,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                                 markers.append(
                                     {
                                         "time": ord_ts,
-                                        "position": "belowBar"
-                                        if is_buy
-                                        else "aboveBar",
+                                        "position": "belowBar" if is_buy else "aboveBar",
                                         "color": "#10b981" if is_buy else "#ef4444",
                                         "shape": "arrowUp" if is_buy else "arrowDown",
                                         "text": f"{side_upper} @ {ord_item['price']:.1f}",
@@ -800,9 +700,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     }
                 )
             except Exception as e:
-                return self._send_json_response(
-                    {"success": False, "error": str(e)}, status=500
-                )
+                return self._send_json_response({"success": False, "error": str(e)}, status=500)
 
         # API: WorldQuant BRAIN Alpha 倉庫列表與變現教學
         if path == "/api/brain/alphas":
@@ -843,21 +741,15 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             try:
                 session_type = post_data.get("session_type", "盤前晨報")
                 market_info = APP_STATE.get_taiwan_market_analysis(force_refresh=True)
-                rep = APP_STATE.report_gen.generate(
-                    session_type=session_type, cached_market_info=market_info
-                )
+                rep = APP_STATE.report_gen.generate(session_type=session_type, cached_market_info=market_info)
                 html_rep = APP_STATE.report_gen.generate_html_report(
                     session_type=session_type, cached_market_info=market_info
                 )
                 APP_STATE.last_taiwan_report = rep
                 APP_STATE.last_taiwan_html = html_rep
-                return self._send_json_response(
-                    {"success": True, "content": rep, "html_content": html_rep}
-                )
+                return self._send_json_response({"success": True, "content": rep, "html_content": html_rep})
             except Exception as e:
-                return self._send_json_response(
-                    {"success": False, "error": str(e)}, status=500
-                )
+                return self._send_json_response({"success": False, "error": str(e)}, status=500)
 
         # 切換執行模式 (本地沙盒 vs 幣安合約 Testnet vs Bitunix 實盤)
         if path == "/api/crypto/switch_mode":
@@ -907,12 +799,8 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             else:  # PAPER_SANDBOX
                 ticker = APP_STATE.testnet_client.fetch_ticker(symbol)
                 price = ticker["last"]
-                APP_STATE.active_bot.execute_paper_order(
-                    side, amount, price, reason="Web UI 手動下單"
-                )
-                APP_STATE.add_log(
-                    f"沙盒訂單成交: {side} {amount} {symbol} @ {price:.2f}"
-                )
+                APP_STATE.active_bot.execute_paper_order(side, amount, price, reason="Web UI 手動下單")
+                APP_STATE.add_log(f"沙盒訂單成交: {side} {amount} {symbol} @ {price:.2f}")
                 return self._send_json_response(
                     {
                         "success": True,
@@ -941,9 +829,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                         reason="Web UI 一鍵全數平倉",
                     )
                 APP_STATE.add_log("UI 執行一鍵平倉完成 (沙盒部位結清)")
-                return self._send_json_response(
-                    {"success": True, "message": "沙盒持倉已全部結清！"}
-                )
+                return self._send_json_response({"success": True, "message": "沙盒持倉已全部結清！"})
 
         # WorldQuant BRAIN: 提交與儲存 Alpha
         if path == "/api/brain/submit_alpha":
@@ -972,9 +858,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             try:
                 expr = post_data.get("expression") or post_data.get("regular") or ""
                 if not expr or not expr.strip():
-                    return self._send_error_json(
-                        "INVALID_EXPRESSION", "Alpha 表達式不可為空", status=400
-                    )
+                    return self._send_error_json("INVALID_EXPRESSION", "Alpha 表達式不可為空", status=400)
 
                 settings = post_data.get("settings")
                 job, is_new = APP_STATE.brain_job_queue.create_job(expr, settings)
@@ -985,9 +869,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 return self._send_json_response(
                     {
                         "ok": True,
-                        "status": job.status.value
-                        if hasattr(job.status, "value")
-                        else str(job.status),
+                        "status": job.status.value if hasattr(job.status, "value") else str(job.status),
                         "job_id": job.job_id,
                         "simulation_key": job.simulation_key,
                         "next_poll_seconds": APP_STATE.brain_job_queue.default_poll_interval,
@@ -995,14 +877,12 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     status=202,
                 )
             except Exception:
-                return self._send_error_json(
-                    "INTERNAL_SERVER_ERROR", "建立送測作業失敗", status=500
-                )
+                return self._send_error_json("INTERNAL_SERVER_ERROR", "建立送測作業失敗", status=500)
 
         # 🚀 一鍵自動送出至 Quant 測試 (向後相容舊端點，升級為 202 非同步 job 回應)
         if path == "/api/brain/test_alpha":
             try:
-                alpha_id = post_data.get("alpha_id")
+                post_data.get("alpha_id")
                 expr = post_data.get("expression", "")
                 target_engine = post_data.get("target_engine", "worldquant")
 
@@ -1014,23 +894,17 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     )
 
                 if not expr or not expr.strip():
-                    return self._send_error_json(
-                        "INVALID_EXPRESSION", "Alpha 表達式不可為空", status=400
-                    )
+                    return self._send_error_json("INVALID_EXPRESSION", "Alpha 表達式不可為空", status=400)
 
                 job, is_new = APP_STATE.brain_job_queue.create_job(expr)
-                APP_STATE.add_log(
-                    f"🚀 [Quant 測試送出] Job {job.job_id} 已排入非同步背景輪詢"
-                )
+                APP_STATE.add_log(f"🚀 [Quant 測試送出] Job {job.job_id} 已排入非同步背景輪詢")
 
                 return self._send_json_response(
                     {
                         "ok": True,
                         "success": True,
                         "target_engine": "WorldQuant BRAIN",
-                        "status": job.status.value
-                        if hasattr(job.status, "value")
-                        else str(job.status),
+                        "status": job.status.value if hasattr(job.status, "value") else str(job.status),
                         "job_id": job.job_id,
                         "simulation_key": job.simulation_key,
                         "next_poll_seconds": APP_STATE.brain_job_queue.default_poll_interval,

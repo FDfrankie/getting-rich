@@ -28,12 +28,8 @@ class BitunixClient:
         settings: Settings | None = None,
     ):
         self._settings = settings or get_settings()
-        self.api_key = (
-            api_key if api_key is not None else self._settings.bitunix_api_key
-        )
-        self.api_secret = (
-            api_secret if api_secret is not None else self._settings.bitunix_api_secret
-        )
+        self.api_key = api_key if api_key is not None else self._settings.bitunix_api_key
+        self.api_secret = api_secret if api_secret is not None else self._settings.bitunix_api_secret
         self.base_url = base_url.rstrip("/")
         # 由 Settings 注入判定 is_live，不得再用 bool(api_key) 判定
         self.is_live = self._settings.trading_mode == TradingMode.BITUNIX_LIVE
@@ -43,25 +39,19 @@ class BitunixClient:
         self._simulated_positions = []
         self._simulated_orders = []
 
-    def _generate_signature(
-        self, timestamp: str, nonce: str, query_params: str, body: str = ""
-    ) -> str:
+    def _generate_signature(self, timestamp: str, nonce: str, query_params: str, body: str = "") -> str:
         """
         Bitunix HMAC-SHA256 簽名算法:
         Signature = HMAC-SHA256(secret, timestamp + nonce + api_key + query_params + body)
         """
         raw_payload = f"{timestamp}{nonce}{self.api_key}{query_params}{body}"
-        sig = hmac.new(
-            self.api_secret.encode("utf-8"), raw_payload.encode("utf-8"), hashlib.sha256
-        ).hexdigest()
+        sig = hmac.new(self.api_secret.encode("utf-8"), raw_payload.encode("utf-8"), hashlib.sha256).hexdigest()
         return sig
 
     def _get_headers(self, query_params: str = "", body: str = "") -> dict[str, str]:
         """產生 Bitunix 要求的 HTTP Header"""
         timestamp = str(int(time.time() * 1000))
-        nonce = hashlib.md5(f"{timestamp}_{os.urandom(8)}".encode()).hexdigest()[
-            :16
-        ]
+        nonce = hashlib.md5(f"{timestamp}_{os.urandom(8)}".encode()).hexdigest()[:16]
         signature = self._generate_signature(timestamp, nonce, query_params, body)
 
         return {
@@ -224,9 +214,7 @@ class BitunixClient:
                 )
             else:
                 self._simulated_balance["USDT"] += exec_price * amount
-                self._simulated_positions = [
-                    p for p in self._simulated_positions if p["symbol"] != symbol
-                ]
+                self._simulated_positions = [p for p in self._simulated_positions if p["symbol"] != symbol]
 
             return {
                 "success": True,

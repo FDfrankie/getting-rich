@@ -30,9 +30,7 @@ from web_ui.server import APP_STATE, AppAPIHandler
 
 
 class DummyRequest:
-    def __init__(
-        self, command: str, path: str, body: bytes = b"", headers: dict[str, str] = None
-    ):
+    def __init__(self, command: str, path: str, body: bytes = b"", headers: dict[str, str] = None):
         self.command = command
         self.path = path
         self.body = body
@@ -109,9 +107,7 @@ class TestBrainWebAPIJsonContract(unittest.TestCase):
     def test_simulations_post_returns_202_with_valid_json(self):
         """1. 202 回應有合法 JSON 且包含 ok, status, job_id, simulation_key, next_poll_seconds"""
         payload = {"expression": "ts_rank(close, 10)"}
-        status, headers, body = self._execute_request(
-            "POST", "/api/brain/simulations", payload
-        )
+        status, headers, body = self._execute_request("POST", "/api/brain/simulations", payload)
 
         self.assertEqual(status, 202)
         self.assertIn("application/json", headers.get("content-type", ""))
@@ -148,9 +144,7 @@ class TestBrainWebAPIJsonContract(unittest.TestCase):
             "create_job",
             side_effect=TimeoutError("Connection timed out"),
         ):
-            status, headers, body = self._execute_request(
-                "POST", "/api/brain/simulations", {"expression": "close"}
-            )
+            status, headers, body = self._execute_request("POST", "/api/brain/simulations", {"expression": "close"})
             self.assertEqual(status, 500)
             data = json.loads(body.decode("utf-8"))
             self.assertFalse(data.get("ok"))
@@ -158,9 +152,7 @@ class TestBrainWebAPIJsonContract(unittest.TestCase):
 
     def test_client_exception_returns_valid_json_error(self):
         """4. Client exception 有合法 JSON"""
-        status, headers, body = self._execute_request(
-            "POST", "/api/brain/simulations", {"expression": ""}
-        )
+        status, headers, body = self._execute_request("POST", "/api/brain/simulations", {"expression": ""})
         self.assertEqual(status, 400)
         data = json.loads(body.decode("utf-8"))
         self.assertFalse(data.get("ok"))
@@ -170,9 +162,7 @@ class TestBrainWebAPIJsonContract(unittest.TestCase):
         """查詢 GET /api/brain/jobs/{job_id} 回傳標準 JSON"""
         # Create a job first
         job, _ = APP_STATE.brain_job_queue.create_job("rank(volume)")
-        status, headers, body = self._execute_request(
-            "GET", f"/api/brain/jobs/{job.job_id}"
-        )
+        status, headers, body = self._execute_request("GET", f"/api/brain/jobs/{job.job_id}")
 
         self.assertEqual(status, 200)
         self.assertIn("application/json", headers.get("content-type", ""))
@@ -183,9 +173,7 @@ class TestBrainWebAPIJsonContract(unittest.TestCase):
 
     def test_not_found_endpoint_returns_json(self):
         """404 endpoint 必須回傳合法 JSON 錯誤"""
-        status, headers, body = self._execute_request(
-            "POST", "/api/brain/unknown_route", {}
-        )
+        status, headers, body = self._execute_request("POST", "/api/brain/unknown_route", {})
         self.assertEqual(status, 404)
         data = json.loads(body.decode("utf-8"))
         self.assertFalse(data.get("ok"))

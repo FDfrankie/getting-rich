@@ -32,7 +32,6 @@ class DataUnavailableError(Exception):
     """Raised when data cannot be retrieved and synthetic fallback is disallowed."""
 
 
-
 @dataclass
 class OHLCVResult:
     df: pd.DataFrame
@@ -51,9 +50,7 @@ class CryptoDataLoader:
     3. 合成數據 seed 改用 hashlib.sha256 具備確定性與統計可重現性。
     """
 
-    def __init__(
-        self, symbol: str = DEFAULT_SYMBOL, timeframe: str = DEFAULT_TIMEFRAME
-    ):
+    def __init__(self, symbol: str = DEFAULT_SYMBOL, timeframe: str = DEFAULT_TIMEFRAME):
         self.symbol = symbol
         self.timeframe = timeframe
         self.cache_dir = os.path.join(os.path.dirname(__file__), "data_cache")
@@ -78,12 +75,8 @@ class CryptoDataLoader:
         try:
             import ccxt
 
-            exchange_class = ccxt.binance(
-                {"enableRateLimit": True, "timeout": 5000}
-            )
-            ohlcv = exchange_class.fetch_ohlcv(
-                target_symbol, timeframe=target_timeframe, limit=limit + 1
-            )
+            exchange_class = ccxt.binance({"enableRateLimit": True, "timeout": 5000})
+            ohlcv = exchange_class.fetch_ohlcv(target_symbol, timeframe=target_timeframe, limit=limit + 1)
             if ohlcv and len(ohlcv) > 0:
                 df = pd.DataFrame(
                     ohlcv,
@@ -106,13 +99,9 @@ class CryptoDataLoader:
 
                 if len(df) > 0:
                     if validate:
-                        ok, reason = validate_ohlcv(
-                            df, timeframe=target_timeframe, now_utc=now_utc
-                        )
+                        ok, reason = validate_ohlcv(df, timeframe=target_timeframe, now_utc=now_utc)
                         if not ok:
-                            raise DataQualityError(
-                                f"Remote OHLCV failed data quality check: {reason}"
-                            )
+                            raise DataQualityError(f"Remote OHLCV failed data quality check: {reason}")
                     return OHLCVResult(
                         df=df,
                         source=DataSource.LIVE,
@@ -137,13 +126,9 @@ class CryptoDataLoader:
             now_utc=now_utc,
         )
         if validate:
-            ok, reason = validate_ohlcv(
-                synth_df, timeframe=target_timeframe, now_utc=now_utc
-            )
+            ok, reason = validate_ohlcv(synth_df, timeframe=target_timeframe, now_utc=now_utc)
             if not ok:
-                raise DataQualityError(
-                    f"Synthetic OHLCV failed data quality check: {reason}"
-                )
+                raise DataQualityError(f"Synthetic OHLCV failed data quality check: {reason}")
 
         return OHLCVResult(
             df=synth_df,
@@ -227,9 +212,7 @@ class CryptoDataLoader:
             shock = rng.normal(0, 1)
             if rng.rand() < 0.05:
                 shock *= 2.5
-            p = prices[-1] * np.exp(
-                (mu - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * shock
-            )
+            p = prices[-1] * np.exp((mu - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * shock)
             prices.append(max(p, 0.01))
 
         df_list = []

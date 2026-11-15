@@ -32,9 +32,7 @@ class TestNoLookaheadAudit(unittest.TestCase):
         mutated = original.copy()
         t_pos = len(original) - 6
         t = original.index[t_pos]
-        mutated.iloc[
-            -5:, mutated.columns.get_indexer(["Open", "High", "Low", "Close"])
-        ] = 1e9
+        mutated.iloc[-5:, mutated.columns.get_indexer(["Open", "High", "Low", "Close"])] = 1e9
         mutated.iloc[-5:, mutated.columns.get_loc("Volume")] = 1e12
         fe1 = CryptoFeatureEngineer()
         a = fe1.compute_features(original, "1h")
@@ -58,16 +56,11 @@ class TestNoLookaheadAudit(unittest.TestCase):
         self.assertLess(train.index.max(), test.index.min())
         self.assertEqual(ranker.last_split_info["embargo_trading_days"], 5)
         all_dates = pd.DatetimeIndex(clean.index).normalize().unique().sort_values()
-        between = all_dates[
-            (all_dates > train.index.max().normalize())
-            & (all_dates < test.index.min().normalize())
-        ]
+        between = all_dates[(all_dates > train.index.max().normalize()) & (all_dates < test.index.min().normalize())]
         self.assertGreaterEqual(len(between), 5)
 
     def test_annualization_factors(self):
-        self.assertEqual(
-            CryptoFeatureEngineer.get_annualization_factor("15s"), 2102400.0
-        )
+        self.assertEqual(CryptoFeatureEngineer.get_annualization_factor("15s"), 2102400.0)
         self.assertEqual(CryptoFeatureEngineer.get_annualization_factor("1d"), 365.0)
 
 

@@ -17,8 +17,8 @@ def scheduled_job(session_type: str = "盤前晨報"):
     print(f"\n[{now_str}] ⏰ 觸發台股【{session_type}】自動產出任務 (Asia/Taipei)...")
     try:
         generator = ReportGenerator()
-        report_text = generator.generate(session_type=session_type)
-        html_report = generator.generate_html_report(session_type=session_type)
+        generator.generate(session_type=session_type)
+        generator.generate_html_report(session_type=session_type)
         print(f"[✓] 【{session_type}】產出成功！(含 Markdown 與視覺化 HTML/PDF)")
 
         # 檢查是否啟用外部推播 (例如 LINE Notify 或 Discord Webhook)
@@ -37,12 +37,8 @@ def main():
     print("=" * 60)
 
     # 註冊雙時段定時排程
-    schedule.every().day.at(AFTERNOON_SCHEDULE_TIME).do(
-        scheduled_job, session_type="下午盤後報告"
-    )
-    schedule.every().day.at(MORNING_SCHEDULE_TIME).do(
-        scheduled_job, session_type="早上盤前晨報"
-    )
+    schedule.every().day.at(AFTERNOON_SCHEDULE_TIME).do(scheduled_job, session_type="下午盤後報告")
+    schedule.every().day.at(MORNING_SCHEDULE_TIME).do(scheduled_job, session_type="早上盤前晨報")
 
     print("[*] 系統進入常駐監聽迴圈 (按 Ctrl+C 可停止)...")
     while True:

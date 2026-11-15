@@ -40,9 +40,7 @@ class TestCustomLossFunctions(unittest.TestCase):
 
         # Compare with numpy helper
         py_sharpe = -loss.item()
-        np_sharpe = numpy_sharpe_ratio(
-            positions.detach().numpy(), returns.numpy(), annualization_factor=252.0
-        )
+        np_sharpe = numpy_sharpe_ratio(positions.detach().numpy(), returns.numpy(), annualization_factor=252.0)
         self.assertAlmostEqual(py_sharpe, np_sharpe, places=3)
 
     def test_soft_rank_ic_loss(self):

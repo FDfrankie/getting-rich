@@ -89,9 +89,7 @@ def test_order_idempotency_successful_fill():
         om = OrderManager(db_path=db_path)
         client = MockFailingClient(mode="success")
 
-        res = om.execute_with_idempotency(
-            client, "SOL/USDT", "BUY", "MARKET", 10.0, client_tag="order_success_test"
-        )
+        res = om.execute_with_idempotency(client, "SOL/USDT", "BUY", "MARKET", 10.0, client_tag="order_success_test")
         assert res["success"] is True
         assert res["state"] == OrderState.FILLED.value
         assert res["exchange_order_id"] == "ex_999888"

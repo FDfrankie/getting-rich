@@ -96,9 +96,7 @@ class CryptoMLTrainer:
         else:
             raise ValueError(f"Unsupported model_type: {self.model_type}")
 
-    def walk_forward_train(
-        self, df_raw: pd.DataFrame, n_splits: int = 5, train_ratio: float = 0.7
-    ) -> dict[str, Any]:
+    def walk_forward_train(self, df_raw: pd.DataFrame, n_splits: int = 5, train_ratio: float = 0.7) -> dict[str, Any]:
         """
         Executes strict chronological Walk-Forward Validation.
         At each fold k:
@@ -113,11 +111,7 @@ class CryptoMLTrainer:
         target_col = (
             "target_fwd_ret_3"
             if self.task == "regression"
-            else (
-                "target_direction_3"
-                if "target_direction_3" in processed.columns
-                else "target_binary"
-            )
+            else ("target_direction_3" if "target_direction_3" in processed.columns else "target_binary")
         )
         X = processed[features].values
         y = processed[target_col].values
@@ -152,18 +146,14 @@ class CryptoMLTrainer:
                 rank_ic = pd.Series(preds).corr(pd.Series(y_test), method="spearman")
                 # Strategy simulated returns based on sign of prediction
                 strat_ret = np.sign(preds) * test_ret
-                sharpe = (
-                    np.mean(strat_ret) / (np.std(strat_ret) + 1e-9)
-                ) * annual_multiplier
+                sharpe = (np.mean(strat_ret) / (np.std(strat_ret) + 1e-9)) * annual_multiplier
                 accuracy = np.mean((preds > 0) == (y_test > 0))
             else:
                 prob = model.predict_proba(X_test)[:, 1]
                 preds = prob - 0.5
                 rank_ic = pd.Series(prob).corr(pd.Series(y_test), method="spearman")
                 strat_ret = np.sign(preds) * test_ret
-                sharpe = (
-                    np.mean(strat_ret) / (np.std(strat_ret) + 1e-9)
-                ) * annual_multiplier
+                sharpe = (np.mean(strat_ret) / (np.std(strat_ret) + 1e-9)) * annual_multiplier
                 accuracy = np.mean((prob > 0.5) == (y_test == 1))
 
             oof_predictions[train_end:test_end] = preds
@@ -187,9 +177,7 @@ class CryptoMLTrainer:
         # Feature Importance
         if hasattr(self.model, "feature_importances_"):
             importances = self.model.feature_importances_
-            feat_imp = sorted(
-                zip(self.feature_names, importances), key=lambda x: x[1], reverse=True
-            )
+            feat_imp = sorted(zip(self.feature_names, importances), key=lambda x: x[1], reverse=True)
         else:
             feat_imp = []
 
@@ -199,12 +187,8 @@ class CryptoMLTrainer:
             "features_count": len(self.feature_names),
             "folds": all_metrics,
             "mean_rank_ic": float(np.mean([m["rank_ic"] for m in all_metrics])),
-            "mean_accuracy": float(
-                np.mean([m["directional_accuracy"] for m in all_metrics])
-            ),
-            "mean_sharpe": float(
-                np.mean([m["annualized_sharpe"] for m in all_metrics])
-            ),
+            "mean_accuracy": float(np.mean([m["directional_accuracy"] for m in all_metrics])),
+            "mean_sharpe": float(np.mean([m["annualized_sharpe"] for m in all_metrics])),
             "top_10_features": feat_imp[:10],
         }
         return summary

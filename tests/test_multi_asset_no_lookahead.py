@@ -36,17 +36,12 @@ def test_no_bfill_lookahead_leak():
     )
 
     fe = CryptoFeatureEngineer()
-    cross_df = fe.compute_multi_asset_cross_features(
-        {"BTC/USDT": df_a, "ETH/USDT": df_b}
-    )
+    cross_df = fe.compute_multi_asset_cross_features({"BTC/USDT": df_a, "ETH/USDT": df_b})
 
     # At indices 0, 1, 2, ETH was not available yet.
     # If bfill had occurred, ETH's index 3 price (50.0) would leak to 0, 1, 2.
     # Without bfill, ETH close is NaN, and correlation / spread shouldn't have lookahead values.
-    assert (
-        pd.isna(cross_df.iloc[0]["ETH_corr_BTC_24"])
-        or cross_df.iloc[0]["ETH_corr_BTC_24"] == 0.0
-    )
+    assert pd.isna(cross_df.iloc[0]["ETH_corr_BTC_24"]) or cross_df.iloc[0]["ETH_corr_BTC_24"] == 0.0
 
 
 def test_target_direction_tail_is_pd_na():

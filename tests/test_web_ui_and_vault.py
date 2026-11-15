@@ -57,9 +57,7 @@ class TestWebUIAndServices(unittest.TestCase):
         self.assertEqual(alphas[0]["name"], "Super_Alpha")
 
         # 測試分潤公式
-        payout = vault.calculate_payout_projection(
-            50000.0, 1.85, 32.0, is_consultant=True
-        )
+        payout = vault.calculate_payout_projection(50000.0, 1.85, 32.0, is_consultant=True)
         self.assertEqual(payout["final_estimated_payout_usd"], 4800.0)
 
     def test_02_binance_testnet_client(self):
@@ -103,9 +101,7 @@ class TestWebUIAndServices(unittest.TestCase):
         btc_df = loader.fetch_ohlcv(limit=50, symbol="BTC/USDT")
         eth_df = loader.fetch_ohlcv(limit=50, symbol="ETH/USDT")
         sol_df = loader.fetch_ohlcv(limit=50, symbol="SOL/USDT")
-        cross = fe.compute_multi_asset_cross_features(
-            {"BTC": btc_df, "ETH": eth_df, "SOL": sol_df}
-        )
+        cross = fe.compute_multi_asset_cross_features({"BTC": btc_df, "ETH": eth_df, "SOL": sol_df})
         self.assertIn("ETH_corr_BTC_24", cross.columns)
         self.assertIn("SOL_to_ETH_ratio", cross.columns)
 
@@ -144,9 +140,7 @@ class TestWebUIAndServices(unittest.TestCase):
             self.assertIn("html_content", data)
 
         # 6. TradingView Lightweight Charts K 線即時行情 API (支援加密與台股)
-        with urlopen(
-            f"{base_url}/api/crypto/klines?symbol=BTC/USDT&interval=1m"
-        ) as resp:
+        with urlopen(f"{base_url}/api/crypto/klines?symbol=BTC/USDT&interval=1m") as resp:
             data = json.loads(resp.read().decode("utf-8"))
             self.assertTrue(data["success"])
             self.assertIn("candles", data)
@@ -154,9 +148,7 @@ class TestWebUIAndServices(unittest.TestCase):
             self.assertIn("markers", data)
             self.assertGreater(len(data["candles"]), 0)
 
-        with urlopen(
-            f"{base_url}/api/crypto/klines?symbol=2330.TW&interval=1d"
-        ) as resp:
+        with urlopen(f"{base_url}/api/crypto/klines?symbol=2330.TW&interval=1d") as resp:
             data = json.loads(resp.read().decode("utf-8"))
             self.assertTrue(data["success"])
             self.assertIn("candles", data)
@@ -168,9 +160,7 @@ class TestWebUIAndServices(unittest.TestCase):
         # 下單
         req = Request(
             f"{base_url}/api/crypto/order",
-            data=json.dumps(
-                {"side": "BUY", "amount": 0.01, "symbol": "BTC/USDT"}
-            ).encode("utf-8"),
+            data=json.dumps({"side": "BUY", "amount": 0.01, "symbol": "BTC/USDT"}).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
         with urlopen(req) as resp:

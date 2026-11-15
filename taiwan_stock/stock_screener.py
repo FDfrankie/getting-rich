@@ -109,9 +109,7 @@ class StockScreener:
 
             # 條件 4: KD 黃金交叉或強勢高檔鈍化
             if curr["K"] > curr["D"] and prev["K"] <= prev["D"]:
-                signals.append(
-                    f"KD低檔/中檔黃金交叉 (K:{curr['K']:.1f}, D:{curr['D']:.1f})"
-                )
+                signals.append(f"KD低檔/中檔黃金交叉 (K:{curr['K']:.1f}, D:{curr['D']:.1f})")
                 score += 20
             elif curr["K"] > 70 and curr["D"] > 70:
                 signals.append(f"KD強勢高檔鈍化 (K:{curr['K']:.1f})")
@@ -127,19 +125,13 @@ class StockScreener:
                 bearish_signals.append("跌破布林下軌 (超跌/弱勢主跌)")
 
             atr = curr["ATR"] if not np.isnan(curr["ATR"]) else (curr["Close"] * 0.03)
-            suggested_stop_loss = round(
-                curr["Close"] - (atr * PARAMS["atr_stop_loss_multiplier"]), 2
-            )
-            suggested_target = round(
-                curr["Close"] + (atr * PARAMS["atr_stop_loss_multiplier"] * 2), 2
-            )
+            suggested_stop_loss = round(curr["Close"] - (atr * PARAMS["atr_stop_loss_multiplier"]), 2)
+            suggested_target = round(curr["Close"] + (atr * PARAMS["atr_stop_loss_multiplier"] * 2), 2)
 
             return {
                 "symbol": symbol,
                 "close": round(curr["Close"], 2),
-                "change_pct": round(
-                    (curr["Close"] - prev["Close"]) / prev["Close"] * 100, 2
-                ),
+                "change_pct": round((curr["Close"] - prev["Close"]) / prev["Close"] * 100, 2),
                 "volume": int(curr["Volume"]),
                 "score": score,
                 "signals": signals if signals else ["盤整觀望中"],
@@ -187,9 +179,7 @@ class StockScreener:
                 if res["symbol"] == "00632R.TW" or res["is_weak"]:
                     defense_candidates.append(res)
 
-        qualified = [
-            e for e in all_evals if e["meets_threshold"] and e["symbol"] != "00632R.TW"
-        ]
+        qualified = [e for e in all_evals if e["meets_threshold"] and e["symbol"] != "00632R.TW"]
         qualified.sort(key=lambda x: x["score"], reverse=True)
 
         all_evals.sort(key=lambda x: x["score"], reverse=True)

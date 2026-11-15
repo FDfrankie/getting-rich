@@ -1,10 +1,14 @@
 """
 Top Transcripts Fetcher (fetch_top_transcripts.py)
 擷取並整理頂尖量化金融演算法精華文本，轉換為 Prompt 與 Alpha 研發特徵庫
+STATUS: SYNTHETIC_PLACEHOLDER
 """
 
 import json
 import os
+
+# Marked as SYNTHETIC_PLACEHOLDER per P13 compliance guidelines
+DATA_SOURCE_STATUS = "SYNTHETIC_PLACEHOLDER"
 
 QUANT_TRANSCRIPTS = {
     "Cross_Sectional_Momentum": "By ranking assets based on multi-timeframe normalized returns and residual momentum, factor neutral portfolios achieve higher Sharpe ratios while minimizing market exposure.",
@@ -19,9 +23,7 @@ def fetch_and_save_transcripts():
     out_file = os.path.join(out_dir, "curated_transcripts.json")
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(QUANT_TRANSCRIPTS, f, ensure_ascii=False, indent=2)
-    print(
-        f"[+] Extracted and stored {len(QUANT_TRANSCRIPTS)} quantitative lecture transcripts into {out_file}"
-    )
+    print(f"[+] Extracted and stored {len(QUANT_TRANSCRIPTS)} quantitative lecture transcripts into {out_file}")
 
 
 if __name__ == "__main__":

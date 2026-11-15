@@ -31,16 +31,12 @@ class ActorCritic(nn.Module):
         )
 
         # Actor head: Outputs continuous mean [-1.0, 1.0]
-        self.actor_mean = nn.Sequential(
-            nn.Linear(hidden_dim, 64), nn.Mish(), nn.Linear(64, action_dim), nn.Tanh()
-        )
+        self.actor_mean = nn.Sequential(nn.Linear(hidden_dim, 64), nn.Mish(), nn.Linear(64, action_dim), nn.Tanh())
         # Learnable log standard deviation for exploration
         self.actor_log_std = nn.Parameter(torch.full((action_dim,), -0.5))
 
         # Critic head: Outputs state value scalar V(s)
-        self.critic = nn.Sequential(
-            nn.Linear(hidden_dim, 64), nn.Mish(), nn.Linear(64, 1)
-        )
+        self.critic = nn.Sequential(nn.Linear(hidden_dim, 64), nn.Mish(), nn.Linear(64, 1))
 
     def forward(self, state: torch.Tensor) -> tuple[Normal, torch.Tensor]:
         features = self.shared(state)
@@ -64,9 +60,7 @@ class PPOAgent:
         c_ent: float = 0.01,
         device: str = "cpu",
     ):
-        self.device = torch.device(
-            device if torch.cuda.is_available() and device != "cpu" else "cpu"
-        )
+        self.device = torch.device(device if torch.cuda.is_available() and device != "cpu" else "cpu")
         self.gamma = gamma
         self.gae_lambda = gae_lambda
         self.clip_epsilon = clip_epsilon
@@ -78,9 +72,7 @@ class PPOAgent:
         self.policy_old = ActorCritic(state_dim, action_dim).to(self.device)
         self.policy_old.load_state_dict(self.policy.state_dict())
 
-    def select_action(
-        self, state: np.ndarray, evaluate: bool = False
-    ) -> tuple[float, float, float]:
+    def select_action(self, state: np.ndarray, evaluate: bool = False) -> tuple[float, float, float]:
         """
         Returns (action, log_prob, value)
         If evaluate=True, takes deterministic action (distribution mean).
@@ -113,18 +105,12 @@ class PPOAgent:
         values_ext = values + [next_value]
 
         for step in reversed(range(len(rewards))):
-            delta = (
-                rewards[step]
-                + self.gamma * values_ext[step + 1] * (1 - dones[step])
-                - values_ext[step]
-            )
+            delta = rewards[step] + self.gamma * values_ext[step + 1] * (1 - dones[step]) - values_ext[step]
             gae = delta + self.gamma * self.gae_lambda * (1 - dones[step]) * gae
             advantages.insert(0, gae)
 
         returns = [adv + val for adv, val in zip(advantages, values)]
-        return torch.FloatTensor(advantages).to(self.device), torch.FloatTensor(
-            returns
-        ).to(self.device)
+        return torch.FloatTensor(advantages).to(self.device), torch.FloatTensor(returns).to(self.device)
 
     def train_step(
         self,
@@ -138,9 +124,7 @@ class PPOAgent:
     ) -> dict[str, float]:
         states_t = torch.FloatTensor(np.array(states)).to(self.device)
         actions_t = torch.FloatTensor(np.array(actions)).unsqueeze(-1).to(self.device)
-        old_log_probs_t = (
-            torch.FloatTensor(np.array(old_log_probs)).unsqueeze(-1).to(self.device)
-        )
+        old_log_probs_t = torch.FloatTensor(np.array(old_log_probs)).unsqueeze(-1).to(self.device)
 
         # Normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -168,18 +152,11 @@ class PPOAgent:
 
                 ratios = torch.exp(log_prob - b_old_log_probs)
                 surr1 = ratios * b_advantages
-                surr2 = (
-                    torch.clamp(
-                        ratios, 1.0 - self.clip_epsilon, 1.0 + self.clip_epsilon
-                    )
-                    * b_advantages
-                )
+                surr2 = torch.clamp(ratios, 1.0 - self.clip_epsilon, 1.0 + self.clip_epsilon) * b_advantages
 
                 policy_loss = -torch.min(surr1, surr2).mean()
                 value_loss = nn.MSELoss()(value, b_returns)
-                loss = (
-                    policy_loss + self.c_val * value_loss - self.c_ent * entropy.mean()
-                )
+                loss = policy_loss + self.c_val * value_loss - self.c_ent * entropy.mean()
 
                 self.optimizer.zero_grad()
                 loss.backward()

@@ -50,9 +50,7 @@ class CryptoTradingBot:
         self.manual_controller = ManualPositionController()
         self.regime_filter = HierarchicalRegimeFilter(high_tf="1h", low_tf="1m")
         self.sync = LocalPersistenceService()
-        self.exchange_adapter = (
-            exchange_adapter  # BinanceTestnetClient or BitunixClient
-        )
+        self.exchange_adapter = exchange_adapter  # BinanceTestnetClient or BitunixClient
 
         # 帳戶狀態
         self.balance_usdt = INITIAL_BALANCE_USDT
@@ -75,9 +73,7 @@ class CryptoTradingBot:
     ):
         """下單撮合：先經 manual_override 防護，再走 RiskManager 閘道與 OrderManager 冪等下單"""
         if self.manual_controller.is_symbol_locked(self.symbol):
-            self.log(
-                f"🛡️ [手動接管防護] {self.symbol} 處於 manual_override 鎖定狀態，Bot 策略下單被抑制！"
-            )
+            self.log(f"🛡️ [手動接管防護] {self.symbol} 處於 manual_override 鎖定狀態，Bot 策略下單被抑制！")
             return
 
         order_side = side.upper()
@@ -116,9 +112,7 @@ class CryptoTradingBot:
                     price=current_price,
                 )
                 if res.get("success", False):
-                    order_id = res.get(
-                        "exchange_order_id", f"MOCK_{int(time.time() * 1000)}"
-                    )
+                    order_id = res.get("exchange_order_id", f"MOCK_{int(time.time() * 1000)}")
                     fill_price = float(res.get("price", current_price))
                     self.last_order_info = res
                     self.log(
@@ -134,9 +128,7 @@ class CryptoTradingBot:
                         status="FILLED",
                         exchange_order_id=order_id,
                         cost=fill_price * amount,
-                        fee=0.0
-                        if "USDC" in self.symbol
-                        else (fill_price * amount * 0.0005),
+                        fee=0.0 if "USDC" in self.symbol else (fill_price * amount * 0.0005),
                         reason=reason,
                     )
 
@@ -156,11 +148,7 @@ class CryptoTradingBot:
                             ((fill_price - self.entry_price) / self.entry_price * 100.0)
                             if (self.entry_price > 0 and self.position_side == "LONG")
                             else (
-                                (
-                                    (self.entry_price - fill_price)
-                                    / self.entry_price
-                                    * 100.0
-                                )
+                                ((self.entry_price - fill_price) / self.entry_price * 100.0)
                                 if self.entry_price > 0
                                 else 0.0
                             )
@@ -239,9 +227,7 @@ class CryptoTradingBot:
                 return
 
         # 2. 僅在純沙盒模式 (exchange_adapter is None) 呼叫內部沙盒 Paper Order 記帳
-        self.execute_paper_order(
-            side, amount, current_price, reason, reduce_only=reduce_only
-        )
+        self.execute_paper_order(side, amount, current_price, reason, reduce_only=reduce_only)
 
     def execute_paper_order(
         self,
@@ -272,11 +258,7 @@ class CryptoTradingBot:
             pnl_pct = (
                 ((current_price - self.entry_price) / self.entry_price * 100.0)
                 if (self.entry_price > 0 and self.position_side == "LONG")
-                else (
-                    ((self.entry_price - current_price) / self.entry_price * 100.0)
-                    if self.entry_price > 0
-                    else 0.0
-                )
+                else (((self.entry_price - current_price) / self.entry_price * 100.0) if self.entry_price > 0 else 0.0)
             )
 
             self.balance_usdt += pnl - fee
@@ -468,12 +450,8 @@ class CryptoTradingBot:
     def run_loop(self, iterations: int | None = None, sleep_sec: int = 2):
         """啟動監聽迴圈 (支援 iterations=None 無限常駐背景操盤)"""
         self.log("🤖 虛擬貨幣量化操盤機器人已啟動！")
-        self.log(
-            f"⚙️ 模式: {'【模擬沙盒交易 Paper Trading】' if self.is_paper else '【真實實盤交易 Live Trading】'}"
-        )
-        self.log(
-            f"💰 當前初始資金: {self.balance_usdt:.2f} USDT | 監控交易對: {self.symbol}"
-        )
+        self.log(f"⚙️ 模式: {'【模擬沙盒交易 Paper Trading】' if self.is_paper else '【真實實盤交易 Live Trading】'}")
+        self.log(f"💰 當前初始資金: {self.balance_usdt:.2f} USDT | 監控交易對: {self.symbol}")
         self.log("=" * 60)
 
         step_i = 0
@@ -484,9 +462,7 @@ class CryptoTradingBot:
             cycle_desc = f"Cycle {step_i}" + (f"/{iterations}" if iterations else "")
             self.log(f"--- 執行心跳檢測 {cycle_desc} ---")
             self.step()
-            total_equity = self.balance_usdt + (
-                self.position * self.entry_price if self.position > 0 else 0
-            )
+            total_equity = self.balance_usdt + (self.position * self.entry_price if self.position > 0 else 0)
             self.log(
                 f"📊 當前帳戶淨值: {total_equity:.2f} USDT | 倉位狀態: {self.position_side} ({self.position:.4f} {self.symbol})"
             )

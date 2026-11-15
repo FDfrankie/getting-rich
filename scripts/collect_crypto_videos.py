@@ -1,11 +1,15 @@
 """
 YouTube Crypto Video Collector (collect_crypto_videos.py)
 自動抓取頂尖量化交易、加密貨幣合約、市場結構之 YouTube 影片中繼資料與字幕
+STATUS: SYNTHETIC_PLACEHOLDER
 """
 
 import json
 import os
 from typing import Any
+
+# Marked as SYNTHETIC_PLACEHOLDER per P13 compliance guidelines
+DATA_SOURCE_STATUS = "SYNTHETIC_PLACEHOLDER"
 
 CHANNELS_OR_QUERIES = [
     "Crypto Quant Strategies 2026",
@@ -46,8 +50,6 @@ if __name__ == "__main__":
     videos = collect_videos()
     out_dir = os.path.join(os.path.dirname(__file__), "..", "data_persistence")
     os.makedirs(out_dir, exist_ok=True)
-    with open(
-        os.path.join(out_dir, "crypto_video_topics.json"), "w", encoding="utf-8"
-    ) as f:
+    with open(os.path.join(out_dir, "crypto_video_topics.json"), "w", encoding="utf-8") as f:
         json.dump(videos, f, ensure_ascii=False, indent=2)
     print("[+] Saved video topics to data_persistence/crypto_video_topics.json")

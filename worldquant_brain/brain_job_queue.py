@@ -17,10 +17,15 @@ from typing import Any
 
 class BrainJobStatus(str, Enum):
     QUEUED = "QUEUED"
+    GENERATED_LOCAL = "GENERATED_LOCAL"
+    SUBMITTED = "SUBMITTED"
     RUNNING = "RUNNING"
-    COMPLETE = "COMPLETE"
+    COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    AUTH_FAILED = "AUTH_FAILED"
+    TIMEOUT = "TIMEOUT"
     OFFLINE = "OFFLINE"
+    COMPLETE = "COMPLETED"  # Backwards compatibility alias
 
 
 class BrainSimulationJob:
@@ -64,23 +69,52 @@ class BrainSimulationJob:
         self.is_duplicate: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        sharpe = self.metrics.get("sharpe")
+        fitness = self.metrics.get("fitness")
+        turnover = self.metrics.get("turnover")
+        margin = self.metrics.get("margin")
+        status_str = self.status.value if isinstance(self.status, BrainJobStatus) else str(self.status)
+        is_completed = (
+            status_str == "COMPLETED"
+            and (sharpe is not None)
+            and (fitness is not None)
+            and bool(self.simulation_location or self.alpha_id)
+        )
+        is_submitted = status_str in ("SUBMITTED", "RUNNING", "COMPLETED")
+
+        res: dict[str, Any] = {
             "job_id": self.job_id,
-            "status": self.status.value
-            if isinstance(self.status, BrainJobStatus)
-            else str(self.status),
-            "simulation_location": self.simulation_location,
+            "status": status_str,
+            "success": is_completed,
+            "submitted": is_submitted,
+            "simulation_id": self.alpha_id,
             "alpha_id": self.alpha_id,
+            "sharpe": sharpe,
+            "fitness": fitness,
+            "turnover": turnover,
+            "margin": margin,
+            "simulation_location": self.simulation_location,
             "last_polled_at": self.last_polled_at,
             "next_poll_at": self.next_poll_at,
             "metrics": self.metrics,
             "safe_error": self.safe_error,
+            "message": "WorldQuant 線上回測完成"
+            if is_completed
+            else ("WorldQuant 線上模擬未完成" if status_str == "OFFLINE" else None),
+            "error": None if is_completed else (self.safe_error or f"Job status is {status_str}"),
+            "error_code": None
+            if is_completed
+            else (
+                "OFFLINE_MODE"
+                if status_str == "OFFLINE"
+                else ("AUTH_ERROR" if status_str == "AUTH_FAILED" else "SIMULATION_FAILED")
+            ),
+            "retryable": status_str in ("TIMEOUT", "FAILED"),
         }
+        return res
 
 
-def compute_simulation_key(
-    expression: str, settings: Mapping[str, Any] | None = None
-) -> str:
+def compute_simulation_key(expression: str, settings: Mapping[str, Any] | None = None) -> str:
     data = {"expression": expression.strip(), "settings": dict(settings or {})}
     raw = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -154,7 +188,7 @@ class BrainJobQueue:
             if job_to_run:
                 self._execute_job(job_to_run)
             else:
-                time.sleep(0.2)
+                time.sleep(0.02)
 
     def _execute_job(self, job: BrainSimulationJob) -> None:
         with self._lock:
@@ -164,9 +198,19 @@ class BrainJobQueue:
         # Handle offline mode immediately
         if getattr(self.brain_client, "offline_mode", True):
             try:
-                res = self.brain_client.simulate_alpha(
-                    job.expression, settings=job.settings
-                )
+                simulate_fn = getattr(self.brain_client, "simulate_alpha", None)
+                if callable(simulate_fn):
+                    res = simulate_fn(job.expression, settings=job.settings)
+                else:
+                    res = {
+                        "status": "OFFLINE",
+                        "sharpe": None,
+                        "fitness": None,
+                        "turnover": None,
+                        "margin": None,
+                        "location": None,
+                        "simulation_id": None,
+                    }
                 with self._lock:
                     job.status = BrainJobStatus.OFFLINE
                     job.simulation_location = res.get("location")
@@ -177,7 +221,7 @@ class BrainJobQueue:
                         "turnover": res.get("turnover"),
                         "margin": res.get("margin"),
                     }
-                    job.safe_error = None
+                    job.safe_error = res.get("error") or "WorldQuant 線上模擬未完成（離線模式）"
             except Exception as e:
                 with self._lock:
                     job.status = BrainJobStatus.FAILED
@@ -186,8 +230,14 @@ class BrainJobQueue:
 
         # Online mode: submit simulation
         try:
-            if not self.brain_client.authenticated:
-                self.brain_client.authenticate()
+            if not getattr(self.brain_client, "authenticated", False):
+                try:
+                    self.brain_client.authenticate()
+                except Exception as auth_err:
+                    with self._lock:
+                        job.status = BrainJobStatus.AUTH_FAILED
+                        job.safe_error = f"WorldQuant 認證失敗: {sanitize_error(auth_err)}"
+                    return
 
             payload = {
                 "type": "REGULAR",
@@ -200,18 +250,38 @@ class BrainJobQueue:
                 json=payload,
                 timeout=self.brain_client.timeout,
             )
+            if resp.status_code in (401, 403):
+                with self._lock:
+                    job.status = BrainJobStatus.AUTH_FAILED
+                    job.safe_error = f"WorldQuant 授權失敗 (HTTP {resp.status_code})"
+                return
+
             if resp.status_code not in (200, 201, 202):
                 resp.raise_for_status()
 
+            with self._lock:
+                job.status = BrainJobStatus.SUBMITTED
+
             location = resp.headers.get("Location") or resp.headers.get("location")
             if not location:
-                raise RuntimeError("BRAIN /simulations did not return Location header")
+                body_json = {}
+                try:
+                    body_json = resp.json() if resp.content else {}
+                except Exception:
+                    pass
+                loc = body_json.get("location") or body_json.get("id")
+                if loc:
+                    location = loc if str(loc).startswith("http") else f"{self.brain_client.BASE_URL}/simulations/{loc}"
+
+            if not location:
+                raise RuntimeError("WorldQuant /simulations 未回傳 Location header 或 ID")
             if location.startswith("/"):
                 location = f"{self.brain_client.BASE_URL}{location}"
 
             with self._lock:
                 job.simulation_location = location
                 job.alpha_id = location.rstrip("/").split("/")[-1]
+                job.status = BrainJobStatus.RUNNING
 
             # Poll simulation in background without blocking HTTP requests
             deadline = time.monotonic() + 1800.0
@@ -220,47 +290,58 @@ class BrainJobQueue:
             while time.monotonic() <= deadline:
                 with self._lock:
                     job.last_polled_at = datetime.now(timezone.utc).isoformat()
-                    job.next_poll_at = datetime.fromtimestamp(
-                        time.time() + poll_interval, tz=timezone.utc
-                    ).isoformat()
+                    job.next_poll_at = datetime.fromtimestamp(time.time() + poll_interval, tz=timezone.utc).isoformat()
 
-                poll_resp = self.brain_client.session.get(
-                    location, timeout=self.brain_client.timeout
-                )
+                poll_resp = self.brain_client.session.get(location, timeout=self.brain_client.timeout)
                 if poll_resp.status_code == 429:
-                    retry_after = float(
-                        poll_resp.headers.get("Retry-After", poll_interval)
-                    )
+                    retry_after = float(poll_resp.headers.get("Retry-After", poll_interval))
                     time.sleep(max(poll_interval, retry_after))
                     continue
+                elif poll_resp.status_code in (502, 503, 504):
+                    time.sleep(poll_interval)
+                    continue
+
+                if poll_resp.status_code in (401, 403):
+                    with self._lock:
+                        job.status = BrainJobStatus.AUTH_FAILED
+                        job.safe_error = f"WorldQuant 輪詢認證失敗 (HTTP {poll_resp.status_code})"
+                    return
 
                 poll_resp.raise_for_status()
                 poll_data = poll_resp.json() if poll_resp.content else {}
-                state = str(
-                    poll_data.get("status") or poll_data.get("state") or ""
-                ).upper()
+                state = str(poll_data.get("status") or poll_data.get("state") or "").upper()
 
-                if state == "COMPLETE":
+                if state in ("COMPLETE", "COMPLETED"):
+                    sharpe = self.brain_client._number(poll_data, "sharpe")
+                    fitness = self.brain_client._number(poll_data, "fitness")
+                    turnover = self.brain_client._number(poll_data, "turnover")
+                    margin = self.brain_client._number(poll_data, "margin")
+
+                    # Sharpe 與 Fitness 必須是有效非空數字才算成功
+                    has_metrics = (sharpe is not None) and (fitness is not None)
                     with self._lock:
-                        job.status = BrainJobStatus.COMPLETE
+                        job.status = BrainJobStatus.COMPLETED if has_metrics else BrainJobStatus.FAILED
                         job.metrics = {
-                            "sharpe": self.brain_client._number(poll_data, "sharpe"),
-                            "fitness": self.brain_client._number(poll_data, "fitness"),
-                            "turnover": self.brain_client._number(
-                                poll_data, "turnover"
-                            ),
-                            "margin": self.brain_client._number(poll_data, "margin"),
+                            "sharpe": sharpe,
+                            "fitness": fitness,
+                            "turnover": turnover,
+                            "margin": margin,
                         }
+                        if not has_metrics:
+                            job.safe_error = "線上模擬完成但缺少有效 Sharpe 或 Fitness 指標"
                     return
 
                 if state in {"ERROR", "FAILED", "CANCELLED", "CANCELED"}:
-                    raise RuntimeError(f"Simulation {state}: {poll_data}")
+                    err_msg = poll_data.get("message") or poll_data.get("error") or f"Simulation {state}"
+                    raise RuntimeError(f"Simulation {state}: {err_msg}")
 
                 retry_after = poll_resp.headers.get("Retry-After")
                 sleep_dur = float(retry_after) if retry_after else poll_interval
                 time.sleep(sleep_dur)
 
-            raise TimeoutError("BRAIN simulation polling exceeded 1800 seconds")
+            with self._lock:
+                job.status = BrainJobStatus.TIMEOUT
+                job.safe_error = "BRAIN simulation polling exceeded 1800 seconds"
 
         except Exception as e:
             with self._lock:

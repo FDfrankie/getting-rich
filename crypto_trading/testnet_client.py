@@ -94,9 +94,7 @@ class BinanceTestnetClient:
     def _to_raw_symbol(self, symbol: str) -> str:
         """轉換為幣安合約原始 symbol (例如 BTCUSDC, BTCUSDT)"""
         base = (
-            symbol.split("/")[0]
-            if "/" in symbol
-            else symbol.replace("USDT", "").replace("USDC", "").replace(":", "")
+            symbol.split("/")[0] if "/" in symbol else symbol.replace("USDT", "").replace("USDC", "").replace(":", "")
         )
         return f"{base}{self.settlement}".upper()
 
@@ -257,9 +255,7 @@ class BinanceTestnetClient:
             print(f"[!] 獲取幣安持倉失敗: {e}")
             return []
 
-    def check_liquidity_guard(
-        self, symbol: str, max_spread_pct: float = 0.50
-    ) -> dict[str, Any]:
+    def check_liquidity_guard(self, symbol: str, max_spread_pct: float = 0.50) -> dict[str, Any]:
         """
         USDC Liquidity Guard:
         在對 USDC 交易對執行市價單前，檢查盤口價差與前 5 檔深度。
@@ -271,9 +267,7 @@ class BinanceTestnetClient:
         # 1. 抓取真實委託簿深度 (L2 order book)
         if self.exchange and self.is_connected:
             try:
-                ob = self.exchange.fapiPublicGetDepth(
-                    {"symbol": raw_symbol, "limit": 5}
-                )
+                ob = self.exchange.fapiPublicGetDepth({"symbol": raw_symbol, "limit": 5})
                 bids = ob.get("bids", [])
                 asks = ob.get("asks", [])
                 if bids and asks:
@@ -282,10 +276,7 @@ class BinanceTestnetClient:
                     bid_depth_top5 = sum(float(b[1]) for b in bids[:5])
                     ask_depth_top5 = sum(float(a[1]) for a in asks[:5])
                     spread_pct = ((best_ask - best_bid) / best_bid) * 100.0
-                    passed = (
-                        spread_pct <= max_spread_pct
-                        and min(bid_depth_top5, ask_depth_top5) > 0.01
-                    )
+                    passed = spread_pct <= max_spread_pct and min(bid_depth_top5, ask_depth_top5) > 0.01
                     return {
                         "passed": passed,
                         "symbol": target_symbol,
@@ -320,9 +311,7 @@ class BinanceTestnetClient:
             "reason": "OK" if passed else f"USDC盤口價差偏高 ({spread_pct:.3f}%)",
         }
 
-    def reconcile_with_exchange(
-        self, local_position: float, symbol: str
-    ) -> dict[str, Any]:
+    def reconcile_with_exchange(self, local_position: float, symbol: str) -> dict[str, Any]:
         """
         Trading state machine idempotency & exchange reconciliation:
         與交易所進行持倉同調對齊，杜絕本地狀態機與遠端帳本不一致 (Ghost Positions / Lost Fills)
@@ -341,11 +330,7 @@ class BinanceTestnetClient:
         remote_amt = (
             matched["contracts"]
             if (matched and matched.get("side") == "LONG")
-            else (
-                -matched["contracts"]
-                if (matched and matched.get("side") == "SHORT")
-                else 0.0
-            )
+            else (-matched["contracts"] if (matched and matched.get("side") == "SHORT") else 0.0)
         )
         discrepancy = round(abs(local_position - remote_amt), 6)
         in_sync = discrepancy < 1e-4
@@ -421,9 +406,7 @@ class BinanceTestnetClient:
                     )
                 else:
                     self._mock_balance[self.settlement] += exec_price * amount
-                    self._mock_positions = [
-                        p for p in self._mock_positions if p["symbol"] != target_symbol
-                    ]
+                    self._mock_positions = [p for p in self._mock_positions if p["symbol"] != target_symbol]
 
             return {
                 "success": True,
@@ -496,26 +479,16 @@ class BinanceTestnetClient:
 
 
 def main_cli():
-    parser = argparse.ArgumentParser(
-        description="Binance Testnet CLI (manual safety guarded)"
-    )
+    parser = argparse.ArgumentParser(description="Binance Testnet CLI (manual safety guarded)")
     parser.add_argument(
         "--create-order",
         action="store_true",
         help="Explicit flag to trigger order creation",
     )
-    parser.add_argument(
-        "--symbol", type=str, default="BTC/USDT", help="Trading pair symbol"
-    )
-    parser.add_argument(
-        "--side", type=str, default="buy", help="Order side: buy or sell"
-    )
-    parser.add_argument(
-        "--type", type=str, default="market", help="Order type: market or limit"
-    )
-    parser.add_argument(
-        "--quantity", type=float, default=0.0, help="Order quantity (default 0.0)"
-    )
+    parser.add_argument("--symbol", type=str, default="BTC/USDT", help="Trading pair symbol")
+    parser.add_argument("--side", type=str, default="buy", help="Order side: buy or sell")
+    parser.add_argument("--type", type=str, default="market", help="Order type: market or limit")
+    parser.add_argument("--quantity", type=float, default=0.0, help="Order quantity (default 0.0)")
     parser.add_argument("--price", type=float, default=None, help="Limit order price")
     args = parser.parse_args()
 
@@ -529,9 +502,7 @@ def main_cli():
     if args.create_order:
         allow_manual = os.getenv("ALLOW_MANUAL_TESTNET_ORDER", "").strip().upper()
         if allow_manual != "YES":
-            print(
-                "[!] 下單被拒絕：未設置 ALLOW_MANUAL_TESTNET_ORDER=YES", file=sys.stderr
-            )
+            print("[!] 下單被拒絕：未設置 ALLOW_MANUAL_TESTNET_ORDER=YES", file=sys.stderr)
             sys.exit(1)
         if args.quantity <= 0.0:
             print("[!] 下單被拒絕：--quantity 必須大於 0", file=sys.stderr)

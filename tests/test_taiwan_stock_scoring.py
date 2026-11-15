@@ -64,7 +64,6 @@ class TestTaiwanStockScoringAndScreener(unittest.TestCase):
         """測試站上 MA5 但受制於 MA20 時標記為空頭反彈格局"""
         analyzer = MarketAnalyzer()
         # 構造特定收盤價數列：MA5 > Close > MA20 等
-        close = [20000] * 60
         # 讓 MA20 較高 (21000)，MA5 較低 (19000)，但最新收盤站上 MA5 卻壓在 MA20 之下
         prices = [21000] * 40 + [19000] * 15 + [19500] * 5
         dates = pd.date_range("2026-01-01", periods=len(prices), freq="1D")
@@ -145,9 +144,7 @@ class TestTaiwanStockScoringAndScreener(unittest.TestCase):
             self.assertGreaterEqual(len(detailed["near_picks"]), 1)
             # 必須包含反向 ETF 或破線防禦標的
             self.assertGreaterEqual(len(detailed["defense_hedges"]), 1)
-            self.assertTrue(
-                any("00632R" in h["symbol"] for h in detailed["defense_hedges"])
-            )
+            self.assertTrue(any("00632R" in h["symbol"] for h in detailed["defense_hedges"]))
 
     def test_report_generator_shared_cache(self):
         """測試 ReportGenerator 接收 cached_market_info，確保與儀表板絕對一致"""
@@ -188,17 +185,13 @@ class TestTaiwanStockScoringAndScreener(unittest.TestCase):
             "defense_hedges": [],
         }
 
-        with patch.object(
-            gen.stock_screener, "run_screener_detailed", return_value=mock_screener_res
-        ):
+        with patch.object(gen.stock_screener, "run_screener_detailed", return_value=mock_screener_res):
             rep = gen.generate(cached_market_info=fixed_market)
             html_rep = gen.generate_html_report(cached_market_info=fixed_market)
 
             # 驗證分數 75 完全同步於兩份報告中
             self.assertIn("75 / 100", rep)
-            self.assertIn(
-                '75 <span class="text-xs text-slate-400">/ 100</span>', html_rep
-            )
+            self.assertIn('75 <span class="text-xs text-slate-400">/ 100</span>', html_rep)
             self.assertIn("多頭排列格局", rep)
             self.assertIn("最後交易日: 2026-11-14", html_rep)
 

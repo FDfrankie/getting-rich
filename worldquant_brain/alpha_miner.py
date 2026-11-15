@@ -69,9 +69,7 @@ class ContinuousAlphaMiner:
 
         return {"name": name, "expression": expr}
 
-    def backtest_alpha_oos(
-        self, expr_dict: dict[str, str], df: pd.DataFrame | None = None
-    ) -> dict[str, Any] | None:
+    def backtest_alpha_oos(self, expr_dict: dict[str, str], df: pd.DataFrame | None = None) -> dict[str, Any] | None:
         """在真實歷史資料上進行樣本外 (OOS) 快速評估"""
         if df is None or len(df) < 100:
             df = self.loader.fetch_ohlcv(limit=250)
@@ -83,10 +81,7 @@ class ContinuousAlphaMiner:
         # 評定模擬夏普、換手率與收益
         base_sharpe = float(np.random.normal(1.35, 0.28))
         base_turnover = float(np.clip(np.random.normal(0.28, 0.12), 0.05, 0.65))
-        base_fitness = float(
-            base_sharpe
-            * np.sqrt(max(0.1, base_sharpe * 0.15) / max(0.05, base_turnover))
-        )
+        base_fitness = float(base_sharpe * np.sqrt(max(0.1, base_sharpe * 0.15) / max(0.05, base_turnover)))
         base_margin = float(np.random.uniform(12.0, 35.0))  # bps
 
         # 嚴格審核門檻

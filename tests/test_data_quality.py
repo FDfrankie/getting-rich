@@ -25,9 +25,7 @@ def test_validate_ohlcv_healthy():
         index=pd.DatetimeIndex(timestamps, tz="UTC"),
     )
 
-    ok, reason = validate_ohlcv(
-        df, timeframe="1h", max_latency_periods=2, now_utc=now_utc
-    )
+    ok, reason = validate_ohlcv(df, timeframe="1h", max_latency_periods=2, now_utc=now_utc)
     assert ok is True
     assert reason == "OK"
 
@@ -69,8 +67,6 @@ def test_validate_ohlcv_stale_data():
         index=pd.DatetimeIndex(timestamps, tz="UTC"),
     )
 
-    ok, reason = validate_ohlcv(
-        df, timeframe="1h", max_latency_periods=2, now_utc=now_utc
-    )
+    ok, reason = validate_ohlcv(df, timeframe="1h", max_latency_periods=2, now_utc=now_utc)
     assert ok is False
     assert "stale" in reason.lower()
