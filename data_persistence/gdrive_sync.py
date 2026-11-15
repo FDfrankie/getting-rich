@@ -3,6 +3,7 @@ import json
 import sqlite3
 import shutil
 import time
+import threading
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -11,6 +12,8 @@ DATA_DIR = os.path.join(BASE_DIR, "data_persistence")
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
 STATE_DB_PATH = os.path.join(DATA_DIR, "system_state.db")
 SNAPSHOT_JSON_PATH = os.path.join(DATA_DIR, "cloud_state_snapshot.json")
+
+_DB_LOCK = threading.RLock()
 
 class GDrivePersistenceSync:
     """
@@ -26,91 +29,96 @@ class GDrivePersistenceSync:
         os.makedirs(BACKUP_DIR, exist_ok=True)
         self.init_db()
 
+    def get_connection(self):
+        """獲取帶有超時與執行緒保護的 SQLite 連線"""
+        return sqlite3.connect(self.db_path, timeout=15.0)
+
     def init_db(self):
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cur = conn.cursor()
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS bot_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT NOT NULL,
-                    message TEXT NOT NULL
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS bot_state (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS post_mortems (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    entry_price REAL,
-                    exit_price REAL,
-                    loss_amount REAL,
-                    loss_pct REAL,
-                    cause_analysis TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS orders (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    exchange_order_id TEXT,
-                    symbol TEXT NOT NULL,
-                    side TEXT NOT NULL,
-                    order_type TEXT NOT NULL,
-                    price REAL NOT NULL,
-                    amount REAL NOT NULL,
-                    cost REAL,
-                    fee REAL,
-                    status TEXT NOT NULL,
-                    reason TEXT,
-                    timestamp TEXT NOT NULL
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS positions (
-                    symbol TEXT PRIMARY KEY,
-                    side TEXT NOT NULL,
-                    contracts REAL NOT NULL,
-                    entry_price REAL NOT NULL,
-                    unrealized_pnl REAL,
-                    leverage INTEGER DEFAULT 1,
-                    updated_at TEXT NOT NULL
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS trade_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    symbol TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    side TEXT NOT NULL,
-                    price REAL NOT NULL,
-                    amount REAL NOT NULL,
-                    pnl REAL,
-                    pnl_pct REAL,
-                    reason TEXT,
-                    timestamp TEXT NOT NULL
-                )
-            """)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS account_equity (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    total_equity REAL NOT NULL,
-                    balance_usdt REAL NOT NULL,
-                    unrealized_pnl REAL NOT NULL,
-                    timestamp TEXT NOT NULL
-                )
-            """)
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print(f"[!] GDrivePersistenceSync 資料庫初始化失敗: {e}")
+        with _DB_LOCK:
+            try:
+                conn = self.get_connection()
+                cur = conn.cursor()
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS bot_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT NOT NULL,
+                        message TEXT NOT NULL
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS bot_state (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS post_mortems (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        date TEXT NOT NULL,
+                        symbol TEXT NOT NULL,
+                        entry_price REAL,
+                        exit_price REAL,
+                        loss_amount REAL,
+                        loss_pct REAL,
+                        cause_analysis TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS orders (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        exchange_order_id TEXT,
+                        symbol TEXT NOT NULL,
+                        side TEXT NOT NULL,
+                        order_type TEXT NOT NULL,
+                        price REAL NOT NULL,
+                        amount REAL NOT NULL,
+                        cost REAL,
+                        fee REAL,
+                        status TEXT NOT NULL,
+                        reason TEXT,
+                        timestamp TEXT NOT NULL
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS positions (
+                        symbol TEXT PRIMARY KEY,
+                        side TEXT NOT NULL,
+                        contracts REAL NOT NULL,
+                        entry_price REAL NOT NULL,
+                        unrealized_pnl REAL,
+                        leverage INTEGER DEFAULT 1,
+                        updated_at TEXT NOT NULL
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS trade_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        symbol TEXT NOT NULL,
+                        action TEXT NOT NULL,
+                        side TEXT NOT NULL,
+                        price REAL NOT NULL,
+                        amount REAL NOT NULL,
+                        pnl REAL,
+                        pnl_pct REAL,
+                        reason TEXT,
+                        timestamp TEXT NOT NULL
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS account_equity (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        total_equity REAL NOT NULL,
+                        balance_usdt REAL NOT NULL,
+                        unrealized_pnl REAL NOT NULL,
+                        timestamp TEXT NOT NULL
+                    )
+                """)
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                print(f"[!] GDrivePersistenceSync 資料庫初始化失敗: {e}")
 
     def save_state(self, key: str, value: Any):
         try:
@@ -377,10 +385,18 @@ class GDrivePersistenceSync:
                 )
                 service = build('drive', 'v3', credentials=credentials)
                 
-                # 同步 system_state.db 與 snapshot
+                # 查詢目標資料夾是否已有同名檔案，避免重複建檔
+                query = f"name = 'system_state.db' and '{folder_id}' in parents and trashed = false"
+                response = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+                files = response.get('files', [])
+
                 media = MediaFileUpload(self.db_path, mimetype='application/x-sqlite3', resumable=True)
-                file_metadata = {'name': 'system_state.db', 'parents': [folder_id]}
-                service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+                if files:
+                    file_id = files[0]['id']
+                    service.files().update(fileId=file_id, media_body=media).execute()
+                else:
+                    file_metadata = {'name': 'system_state.db', 'parents': [folder_id]}
+                    service.files().create(body=file_metadata, media_body=media, fields='id').execute()
                 return {"status": "SUCCESS", "mode": "REMOTE_API", "synced_at": datetime.now().isoformat()}
             except Exception as e:
                 return {"status": "API_ERROR_FALLBACK_LOCAL", "error": str(e), "snapshot": snapshot_file}
