@@ -78,6 +78,7 @@ class BitunixClient:
             if resp.status_code == 200:
                 data = resp.json().get("data", {})
                 return {
+                    "exchange": "bitunix",
                     "symbol": symbol,
                     "last": float(data.get("lastPrice", 0.0)),
                     "high24h": float(data.get("highPrice", 0.0)),
@@ -91,6 +92,7 @@ class BitunixClient:
         # 擬真厚尾 fallback 報價
         last_price = 87450.0 if "BTC" in symbol else 3120.0
         return {
+            "exchange": "bitunix",
             "symbol": symbol,
             "last": last_price,
             "high24h": last_price * 1.025,
