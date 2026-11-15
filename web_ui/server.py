@@ -804,6 +804,9 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
 
         return self._send_error_json("NOT_FOUND", "Endpoint not found", status=404)
 
+# 向後相容測試導入別名
+QuantRequestHandler = AppAPIHandler
+
 def run_server(port: int = 8999, host: str = "0.0.0.0"):
     os.makedirs(STATIC_DIR, exist_ok=True)
     server_address = (host, port)
