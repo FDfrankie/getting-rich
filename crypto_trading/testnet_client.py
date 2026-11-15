@@ -1,4 +1,6 @@
 import os
+import sys
+import argparse
 import time
 from typing import Dict, Any, List, Optional
 try:
@@ -10,6 +12,7 @@ from crypto_trading.config import (
     BINANCE_TESTNET_API_SECRET,
     DEFAULT_SETTLEMENT_CURRENCY
 )
+from crypto_trading.settings import get_settings
 
 class BinanceTestnetClient:
     """
@@ -349,11 +352,6 @@ class BinanceTestnetClient:
                     "spread_pct": guard["spread_pct"],
                     "message": f"🛡️ [USDC Liquidity Guard] 攔截下單: {guard['reason']}"
                 }
-        side = side.upper()
-        order_type = order_type.upper()
-        target_symbol = self.format_symbol(symbol)
-        raw_symbol = self._to_raw_symbol(symbol)
-        fee_rate = 0.0 if self.settlement == "USDC" else 0.0005
 
         if self.mock_mode or not self.is_connected or not self.exchange:
             ticker = self.fetch_ticker(target_symbol)
@@ -447,12 +445,41 @@ class BinanceTestnetClient:
             "message": f"[幣安合約測試網] 已一鍵全數平倉 ({count} 筆持倉已結清)"
         }
 
-if __name__ == "__main__":
+
+def main_cli():
+    parser = argparse.ArgumentParser(description="Binance Testnet CLI (manual safety guarded)")
+    parser.add_argument("--create-order", action="store_true", help="Explicit flag to trigger order creation")
+    parser.add_argument("--symbol", type=str, default="BTC/USDT", help="Trading pair symbol")
+    parser.add_argument("--side", type=str, default="buy", help="Order side: buy or sell")
+    parser.add_argument("--type", type=str, default="market", help="Order type: market or limit")
+    parser.add_argument("--quantity", type=float, default=0.0, help="Order quantity (default 0.0)")
+    parser.add_argument("--price", type=float, default=None, help="Limit order price")
+    args = parser.parse_args()
+
     client = BinanceTestnetClient()
     print("=== Binance Futures Testnet 模組自檢 ===")
-    ticker = client.fetch_ticker("BTC/USDT")
+    ticker = client.fetch_ticker(args.symbol)
     print("即時報價 (USDC合約):", ticker)
     bal = client.fetch_balance()
     print("合約錢包餘額:", bal)
-    res = client.create_order(symbol="BTC/USDT", side="buy", order_type="market", amount=0.01)
-    print("下單回報:", res)
+
+    if args.create_order:
+        allow_manual = os.getenv("ALLOW_MANUAL_TESTNET_ORDER", "").strip().upper()
+        if allow_manual != "YES":
+            print("[!] 下單被拒絕：未設置 ALLOW_MANUAL_TESTNET_ORDER=YES", file=sys.stderr)
+            sys.exit(1)
+        if args.quantity <= 0.0:
+            print("[!] 下單被拒絕：--quantity 必須大於 0", file=sys.stderr)
+            sys.exit(1)
+        res = client.create_order(
+            symbol=args.symbol,
+            side=args.side,
+            order_type=args.type,
+            amount=args.quantity,
+            price=args.price,
+        )
+        print("下單回報:", res)
+
+
+if __name__ == "__main__":
+    main_cli()
