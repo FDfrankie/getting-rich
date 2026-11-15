@@ -10,16 +10,18 @@ Regime types:
 - 'HIGH_VOL_SHOCK': High volatility spike regime, trigger circuit breaker caution.
 """
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, Optional
+
 
 class HierarchicalRegimeFilter:
     def __init__(self, high_tf: str = "1h", low_tf: str = "1m"):
         self.high_tf = high_tf
         self.low_tf = low_tf
 
-    def detect_regime(self, df_high: pd.DataFrame) -> Dict[str, Any]:
+    def detect_regime(self, df_high: pd.DataFrame) -> dict[str, Any]:
         """
         Input df_high: DataFrame of 1h or 1d OHLCV bars.
         Returns regime status, score (-100 to +100), and permission for micro trade direction.
@@ -31,24 +33,27 @@ class HierarchicalRegimeFilter:
                 "allow_long": True,
                 "allow_short": True,
                 "sizing_multiplier": 0.5,
-                "reason": "High-level data insufficient, fallback to conservative range sizing."
+                "reason": "High-level data insufficient, fallback to conservative range sizing.",
             }
 
-        close = df_high['Close']
-        high = df_high['High']
-        low = df_high['Low']
-        
+        close = df_high["Close"]
+        high = df_high["High"]
+        low = df_high["Low"]
+
         # 1. 均線層級
         ma10 = close.rolling(10).mean().iloc[-1]
         ma30 = close.rolling(30).mean().iloc[-1]
         latest_c = close.iloc[-1]
-        
+
         # 2. 趨勢與乖離
-        trend_up = latest_c > ma10 and ma10 > ma30
-        trend_down = latest_c < ma10 and ma10 < ma30
-        
+        trend_up = latest_c > ma10 > ma30
+        trend_down = latest_c < ma10 < ma30
+
         # 3. 波動度與 ATR 異常
-        tr = np.maximum(high - low, np.maximum((high - close.shift(1)).abs(), (low - close.shift(1)).abs()))
+        tr = np.maximum(
+            high - low,
+            np.maximum((high - close.shift(1)).abs(), (low - close.shift(1)).abs()),
+        )
         atr14 = tr.rolling(14).mean().iloc[-1]
         atr_pct = (atr14 / latest_c) * 100
 
@@ -75,7 +80,9 @@ class HierarchicalRegimeFilter:
             allow_long = False
             allow_short = True
             mult = 0.8
-            reason = "高階時框空頭防守格局，微觀時框禁止多頭追價，僅允許防禦性對沖或空手。"
+            reason = (
+                "高階時框空頭防守格局，微觀時框禁止多頭追價，僅允許防禦性對沖或空手。"
+            )
         else:
             regime = "CHOP_RANGE"
             score = 10
@@ -91,10 +98,10 @@ class HierarchicalRegimeFilter:
             "allow_short": allow_short,
             "sizing_multiplier": mult,
             "atr_pct": round(float(atr_pct), 2),
-            "reason": reason
+            "reason": reason,
         }
 
-    def filter_micro_signal(self, raw_signal: int, regime_info: Dict[str, Any]) -> int:
+    def filter_micro_signal(self, raw_signal: int, regime_info: dict[str, Any]) -> int:
         """
         依據高階市場狀態濾波微觀交易信號 (1: Long, -1: Short, 0: Flat)
         """

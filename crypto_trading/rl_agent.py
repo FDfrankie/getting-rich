@@ -9,16 +9,16 @@ Architecture:
 """
 
 import os
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.distributions import Normal
+
 import numpy as np
-from typing import Tuple, List, Dict, Any
+import torch
+from torch import nn, optim
+from torch.distributions import Normal
+
 
 class ActorCritic(nn.Module):
     def __init__(self, state_dim: int, action_dim: int = 1, hidden_dim: int = 128):
-        super(ActorCritic, self).__init__()
+        super().__init__()
 
         # Common feature backbone
         self.shared = nn.Sequential(
@@ -27,33 +27,29 @@ class ActorCritic(nn.Module):
             nn.Mish(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
-            nn.Mish()
+            nn.Mish(),
         )
 
         # Actor head: Outputs continuous mean [-1.0, 1.0]
         self.actor_mean = nn.Sequential(
-            nn.Linear(hidden_dim, 64),
-            nn.Mish(),
-            nn.Linear(64, action_dim),
-            nn.Tanh()
+            nn.Linear(hidden_dim, 64), nn.Mish(), nn.Linear(64, action_dim), nn.Tanh()
         )
         # Learnable log standard deviation for exploration
         self.actor_log_std = nn.Parameter(torch.full((action_dim,), -0.5))
 
         # Critic head: Outputs state value scalar V(s)
         self.critic = nn.Sequential(
-            nn.Linear(hidden_dim, 64),
-            nn.Mish(),
-            nn.Linear(64, 1)
+            nn.Linear(hidden_dim, 64), nn.Mish(), nn.Linear(64, 1)
         )
 
-    def forward(self, state: torch.Tensor) -> Tuple[Normal, torch.Tensor]:
+    def forward(self, state: torch.Tensor) -> tuple[Normal, torch.Tensor]:
         features = self.shared(state)
         mean = self.actor_mean(features)
         std = torch.exp(torch.clamp(self.actor_log_std, -2.0, 0.5))
         dist = Normal(mean, std)
         value = self.critic(features)
         return dist, value
+
 
 class PPOAgent:
     def __init__(
@@ -66,9 +62,11 @@ class PPOAgent:
         clip_epsilon: float = 0.2,
         c_val: float = 0.5,
         c_ent: float = 0.01,
-        device: str = "cpu"
+        device: str = "cpu",
     ):
-        self.device = torch.device(device if torch.cuda.is_available() and device != "cpu" else "cpu")
+        self.device = torch.device(
+            device if torch.cuda.is_available() and device != "cpu" else "cpu"
+        )
         self.gamma = gamma
         self.gae_lambda = gae_lambda
         self.clip_epsilon = clip_epsilon
@@ -80,7 +78,9 @@ class PPOAgent:
         self.policy_old = ActorCritic(state_dim, action_dim).to(self.device)
         self.policy_old.load_state_dict(self.policy.state_dict())
 
-    def select_action(self, state: np.ndarray, evaluate: bool = False) -> Tuple[float, float, float]:
+    def select_action(
+        self, state: np.ndarray, evaluate: bool = False
+    ) -> tuple[float, float, float]:
         """
         Returns (action, log_prob, value)
         If evaluate=True, takes deterministic action (distribution mean).
@@ -95,40 +95,52 @@ class PPOAgent:
             action = torch.clamp(action, -1.0, 1.0)
             log_prob = dist.log_prob(action).sum(dim=-1)
 
-        return float(action.cpu().numpy()[0, 0]), float(log_prob.cpu().numpy()[0]), float(value.cpu().numpy()[0, 0])
+        return (
+            float(action.cpu().numpy()[0, 0]),
+            float(log_prob.cpu().numpy()[0]),
+            float(value.cpu().numpy()[0, 0]),
+        )
 
     def compute_gae(
         self,
-        rewards: List[float],
-        values: List[float],
-        dones: List[bool],
-        next_value: float
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        rewards: list[float],
+        values: list[float],
+        dones: list[bool],
+        next_value: float,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         advantages = []
         gae = 0
         values_ext = values + [next_value]
 
         for step in reversed(range(len(rewards))):
-            delta = rewards[step] + self.gamma * values_ext[step + 1] * (1 - dones[step]) - values_ext[step]
+            delta = (
+                rewards[step]
+                + self.gamma * values_ext[step + 1] * (1 - dones[step])
+                - values_ext[step]
+            )
             gae = delta + self.gamma * self.gae_lambda * (1 - dones[step]) * gae
             advantages.insert(0, gae)
 
         returns = [adv + val for adv, val in zip(advantages, values)]
-        return torch.FloatTensor(advantages).to(self.device), torch.FloatTensor(returns).to(self.device)
+        return torch.FloatTensor(advantages).to(self.device), torch.FloatTensor(
+            returns
+        ).to(self.device)
 
     def train_step(
         self,
-        states: List[np.ndarray],
-        actions: List[float],
-        old_log_probs: List[float],
+        states: list[np.ndarray],
+        actions: list[float],
+        old_log_probs: list[float],
         advantages: torch.Tensor,
         returns: torch.Tensor,
         k_epochs: int = 4,
-        batch_size: int = 64
-    ) -> Dict[str, float]:
+        batch_size: int = 64,
+    ) -> dict[str, float]:
         states_t = torch.FloatTensor(np.array(states)).to(self.device)
         actions_t = torch.FloatTensor(np.array(actions)).unsqueeze(-1).to(self.device)
-        old_log_probs_t = torch.FloatTensor(np.array(old_log_probs)).unsqueeze(-1).to(self.device)
+        old_log_probs_t = (
+            torch.FloatTensor(np.array(old_log_probs)).unsqueeze(-1).to(self.device)
+        )
 
         # Normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -143,7 +155,7 @@ class PPOAgent:
         for _ in range(k_epochs):
             indices = np.random.permutation(n_samples)
             for start in range(0, n_samples, batch_size):
-                idx = indices[start:start + batch_size]
+                idx = indices[start : start + batch_size]
                 b_states = states_t[idx]
                 b_actions = actions_t[idx]
                 b_old_log_probs = old_log_probs_t[idx]
@@ -156,11 +168,18 @@ class PPOAgent:
 
                 ratios = torch.exp(log_prob - b_old_log_probs)
                 surr1 = ratios * b_advantages
-                surr2 = torch.clamp(ratios, 1.0 - self.clip_epsilon, 1.0 + self.clip_epsilon) * b_advantages
+                surr2 = (
+                    torch.clamp(
+                        ratios, 1.0 - self.clip_epsilon, 1.0 + self.clip_epsilon
+                    )
+                    * b_advantages
+                )
 
                 policy_loss = -torch.min(surr1, surr2).mean()
                 value_loss = nn.MSELoss()(value, b_returns)
-                loss = policy_loss + self.c_val * value_loss - self.c_ent * entropy.mean()
+                loss = (
+                    policy_loss + self.c_val * value_loss - self.c_ent * entropy.mean()
+                )
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -177,15 +196,18 @@ class PPOAgent:
         return {
             "loss": total_loss_accum / num_updates,
             "policy_loss": policy_loss_accum / num_updates,
-            "value_loss": value_loss_accum / num_updates
+            "value_loss": value_loss_accum / num_updates,
         }
 
     def save(self, filepath: str):
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
-        torch.save({
-            "policy_state_dict": self.policy.state_dict(),
-            "optimizer_state_dict": self.optimizer.state_dict()
-        }, filepath)
+        torch.save(
+            {
+                "policy_state_dict": self.policy.state_dict(),
+                "optimizer_state_dict": self.optimizer.state_dict(),
+            },
+            filepath,
+        )
 
     def load(self, filepath: str):
         checkpoint = torch.load(filepath, map_location=self.device)

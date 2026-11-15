@@ -1,19 +1,21 @@
-import unittest
-import numpy as np
-import torch
 import os
 import sys
+import unittest
+
+import numpy as np
+import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from crypto_trading.loss_functions import (
-    SoftSharpeLoss,
-    SoftRankICLoss,
     BayesianConditionalLoss,
     LatentRepresentationLoss,
+    SoftRankICLoss,
+    SoftSharpeLoss,
+    numpy_rank_ic,
     numpy_sharpe_ratio,
-    numpy_rank_ic
 )
+
 
 class TestCustomLossFunctions(unittest.TestCase):
     def setUp(self):
@@ -22,15 +24,15 @@ class TestCustomLossFunctions(unittest.TestCase):
 
     def test_soft_sharpe_loss(self):
         loss_fn = SoftSharpeLoss(annualization_factor=252.0)
-        
+
         # Perfect long positions with positive returns
         positions = torch.ones(100, requires_grad=True)
         returns = torch.normal(0.01, 0.005, size=(100,))
-        
+
         loss = loss_fn(positions, returns)
         # Loss is -Sharpe, so it should be negative (Sharpe > 0)
         self.assertLess(loss.item(), 0.0)
-        
+
         # Check backward pass
         loss.backward()
         self.assertIsNotNone(positions.grad)
@@ -38,7 +40,9 @@ class TestCustomLossFunctions(unittest.TestCase):
 
         # Compare with numpy helper
         py_sharpe = -loss.item()
-        np_sharpe = numpy_sharpe_ratio(positions.detach().numpy(), returns.numpy(), annualization_factor=252.0)
+        np_sharpe = numpy_sharpe_ratio(
+            positions.detach().numpy(), returns.numpy(), annualization_factor=252.0
+        )
         self.assertAlmostEqual(py_sharpe, np_sharpe, places=3)
 
     def test_soft_rank_ic_loss(self):
@@ -97,6 +101,7 @@ class TestCustomLossFunctions(unittest.TestCase):
         total_loss.backward()
         self.assertIsNotNone(recon_x.grad)
         self.assertIsNotNone(mu.grad)
+
 
 if __name__ == "__main__":
     unittest.main()

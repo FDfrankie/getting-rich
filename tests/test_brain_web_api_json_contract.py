@@ -2,6 +2,7 @@
 Tests for WorldQuant BRAIN Web API JSON response contract.
 Complies with docs/BRAIN_WEB_API_ASYNC_FIX_SPEC.md.
 """
+
 from __future__ import annotations
 
 import io
@@ -11,21 +12,33 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 # Provide lightweight mock modules for optional heavy dependencies if running in minimal Python env
-for mod in ["yfinance", "pandas", "numpy", "lightgbm", "torch", "joblib", "sklearn", "matplotlib", "mplfinance"]:
+for mod in [
+    "yfinance",
+    "pandas",
+    "numpy",
+    "lightgbm",
+    "torch",
+    "joblib",
+    "sklearn",
+    "matplotlib",
+    "mplfinance",
+]:
     if mod not in sys.modules:
         sys.modules[mod] = MagicMock()
 
-from web_ui.server import AppAPIHandler, APP_STATE
+from web_ui.server import APP_STATE, AppAPIHandler
 
 
 class DummyRequest:
-    def __init__(self, command: str, path: str, body: bytes = b"", headers: dict[str, str] = None):
+    def __init__(
+        self, command: str, path: str, body: bytes = b"", headers: dict[str, str] = None
+    ):
         self.command = command
         self.path = path
         self.body = body
         self.headers = headers or {
             "Content-Length": str(len(body)),
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
     def makefile(self, mode: str, bufsize: int = 0):
@@ -41,7 +54,9 @@ class TestBrainWebAPIJsonContract(unittest.TestCase):
         self.client_address = ("127.0.0.1", 12345)
         self.server = MagicMock()
 
-    def _execute_request(self, command: str, path: str, payload: dict | bytes | None = None) -> tuple[int, dict[str, str], bytes]:
+    def _execute_request(
+        self, command: str, path: str, payload: dict | bytes | None = None
+    ) -> tuple[int, dict[str, str], bytes]:
         if isinstance(payload, dict):
             body = json.dumps(payload).encode("utf-8")
         elif isinstance(payload, bytes):
@@ -61,7 +76,7 @@ class TestBrainWebAPIJsonContract(unittest.TestCase):
         handler.request_version = "HTTP/1.1"
         handler.headers = {
             "Content-Length": str(len(body)),
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
         handler.rfile = req_io
         handler.wfile = resp_io
@@ -94,7 +109,9 @@ class TestBrainWebAPIJsonContract(unittest.TestCase):
     def test_simulations_post_returns_202_with_valid_json(self):
         """1. 202 回應有合法 JSON 且包含 ok, status, job_id, simulation_key, next_poll_seconds"""
         payload = {"expression": "ts_rank(close, 10)"}
-        status, headers, body = self._execute_request("POST", "/api/brain/simulations", payload)
+        status, headers, body = self._execute_request(
+            "POST", "/api/brain/simulations", payload
+        )
 
         self.assertEqual(status, 202)
         self.assertIn("application/json", headers.get("content-type", ""))
@@ -109,8 +126,14 @@ class TestBrainWebAPIJsonContract(unittest.TestCase):
 
     def test_auth_failure_returns_valid_json_error(self):
         """2. Auth failure 有合法 JSON 且絕不洩漏 Secret"""
-        with patch.object(APP_STATE.brain_job_queue, "create_job", side_effect=PermissionError("secret_password_123 invalid")):
-            status, headers, body = self._execute_request("POST", "/api/brain/simulations", {"expression": "open / close"})
+        with patch.object(
+            APP_STATE.brain_job_queue,
+            "create_job",
+            side_effect=PermissionError("secret_password_123 invalid"),
+        ):
+            status, headers, body = self._execute_request(
+                "POST", "/api/brain/simulations", {"expression": "open / close"}
+            )
             self.assertEqual(status, 500)
             self.assertIn("application/json", headers.get("content-type", ""))
             data = json.loads(body.decode("utf-8"))
@@ -120,8 +143,14 @@ class TestBrainWebAPIJsonContract(unittest.TestCase):
 
     def test_timeout_returns_valid_json_error(self):
         """3. Timeout 有合法 JSON"""
-        with patch.object(APP_STATE.brain_job_queue, "create_job", side_effect=TimeoutError("Connection timed out")):
-            status, headers, body = self._execute_request("POST", "/api/brain/simulations", {"expression": "close"})
+        with patch.object(
+            APP_STATE.brain_job_queue,
+            "create_job",
+            side_effect=TimeoutError("Connection timed out"),
+        ):
+            status, headers, body = self._execute_request(
+                "POST", "/api/brain/simulations", {"expression": "close"}
+            )
             self.assertEqual(status, 500)
             data = json.loads(body.decode("utf-8"))
             self.assertFalse(data.get("ok"))
@@ -129,7 +158,9 @@ class TestBrainWebAPIJsonContract(unittest.TestCase):
 
     def test_client_exception_returns_valid_json_error(self):
         """4. Client exception 有合法 JSON"""
-        status, headers, body = self._execute_request("POST", "/api/brain/simulations", {"expression": ""})
+        status, headers, body = self._execute_request(
+            "POST", "/api/brain/simulations", {"expression": ""}
+        )
         self.assertEqual(status, 400)
         data = json.loads(body.decode("utf-8"))
         self.assertFalse(data.get("ok"))
@@ -139,7 +170,9 @@ class TestBrainWebAPIJsonContract(unittest.TestCase):
         """查詢 GET /api/brain/jobs/{job_id} 回傳標準 JSON"""
         # Create a job first
         job, _ = APP_STATE.brain_job_queue.create_job("rank(volume)")
-        status, headers, body = self._execute_request("GET", f"/api/brain/jobs/{job.job_id}")
+        status, headers, body = self._execute_request(
+            "GET", f"/api/brain/jobs/{job.job_id}"
+        )
 
         self.assertEqual(status, 200)
         self.assertIn("application/json", headers.get("content-type", ""))
@@ -150,7 +183,9 @@ class TestBrainWebAPIJsonContract(unittest.TestCase):
 
     def test_not_found_endpoint_returns_json(self):
         """404 endpoint 必須回傳合法 JSON 錯誤"""
-        status, headers, body = self._execute_request("POST", "/api/brain/unknown_route", {})
+        status, headers, body = self._execute_request(
+            "POST", "/api/brain/unknown_route", {}
+        )
         self.assertEqual(status, 404)
         data = json.loads(body.decode("utf-8"))
         self.assertFalse(data.get("ok"))

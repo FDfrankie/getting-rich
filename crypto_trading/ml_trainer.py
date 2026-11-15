@@ -9,10 +9,12 @@ Implements:
 """
 
 import os
+from typing import Any
+
 import joblib
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, List, Tuple, Optional
+
 try:
     import lightgbm as lgb
 except ImportError:
@@ -24,6 +26,7 @@ except ImportError:
     xgb = None
 from crypto_trading.feature_engineer import CryptoFeatureEngineer
 
+
 class CryptoMLTrainer:
     def __init__(self, model_type: str = "lightgbm", task: str = "regression"):
         """
@@ -34,8 +37,8 @@ class CryptoMLTrainer:
         self.task = task.lower()
         self.feature_engineer = CryptoFeatureEngineer()
         self.model = None
-        self.feature_names: List[str] = []
-        self.cv_results: List[Dict[str, float]] = []
+        self.feature_names: list[str] = []
+        self.cv_results: list[dict[str, float]] = []
 
     def _init_model(self):
         if self.model_type == "lightgbm":
@@ -50,7 +53,7 @@ class CryptoMLTrainer:
                     reg_alpha=0.1,
                     reg_lambda=1.0,
                     random_state=42,
-                    verbosity=-1
+                    verbosity=-1,
                 )
             else:
                 return lgb.LGBMClassifier(
@@ -63,7 +66,7 @@ class CryptoMLTrainer:
                     reg_alpha=0.1,
                     reg_lambda=1.0,
                     random_state=42,
-                    verbosity=-1
+                    verbosity=-1,
                 )
         elif self.model_type == "xgboost":
             if self.task == "regression":
@@ -76,7 +79,7 @@ class CryptoMLTrainer:
                     reg_alpha=0.1,
                     reg_lambda=1.0,
                     random_state=42,
-                    verbosity=0
+                    verbosity=0,
                 )
             else:
                 return xgb.XGBClassifier(
@@ -88,17 +91,14 @@ class CryptoMLTrainer:
                     reg_alpha=0.1,
                     reg_lambda=1.0,
                     random_state=42,
-                    verbosity=0
+                    verbosity=0,
                 )
         else:
             raise ValueError(f"Unsupported model_type: {self.model_type}")
 
     def walk_forward_train(
-        self, 
-        df_raw: pd.DataFrame, 
-        n_splits: int = 5,
-        train_ratio: float = 0.7
-    ) -> Dict[str, Any]:
+        self, df_raw: pd.DataFrame, n_splits: int = 5, train_ratio: float = 0.7
+    ) -> dict[str, Any]:
         """
         Executes strict chronological Walk-Forward Validation.
         At each fold k:
@@ -110,14 +110,22 @@ class CryptoMLTrainer:
         features = self.feature_engineer.feature_columns
         self.feature_names = features
 
-        target_col = 'target_fwd_ret_3' if self.task == "regression" else ('target_direction_3' if 'target_direction_3' in processed.columns else 'target_binary')
+        target_col = (
+            "target_fwd_ret_3"
+            if self.task == "regression"
+            else (
+                "target_direction_3"
+                if "target_direction_3" in processed.columns
+                else "target_binary"
+            )
+        )
         X = processed[features].values
         y = processed[target_col].values
-        returns = processed['target_fwd_ret_3'].values
+        returns = processed["target_fwd_ret_3"].values
 
         n_samples = len(X)
         fold_size = int(n_samples / (n_splits + 1))
-        
+
         all_metrics = []
         oof_predictions = np.zeros(n_samples)
         oof_mask = np.zeros(n_samples, dtype=bool)
@@ -141,17 +149,21 @@ class CryptoMLTrainer:
             if self.task == "regression":
                 preds = model.predict(X_test)
                 # Compute Rank IC (Spearman correlation between prediction & realization)
-                rank_ic = pd.Series(preds).corr(pd.Series(y_test), method='spearman')
+                rank_ic = pd.Series(preds).corr(pd.Series(y_test), method="spearman")
                 # Strategy simulated returns based on sign of prediction
                 strat_ret = np.sign(preds) * test_ret
-                sharpe = (np.mean(strat_ret) / (np.std(strat_ret) + 1e-9)) * annual_multiplier
+                sharpe = (
+                    np.mean(strat_ret) / (np.std(strat_ret) + 1e-9)
+                ) * annual_multiplier
                 accuracy = np.mean((preds > 0) == (y_test > 0))
             else:
                 prob = model.predict_proba(X_test)[:, 1]
                 preds = prob - 0.5
-                rank_ic = pd.Series(prob).corr(pd.Series(y_test), method='spearman')
+                rank_ic = pd.Series(prob).corr(pd.Series(y_test), method="spearman")
                 strat_ret = np.sign(preds) * test_ret
-                sharpe = (np.mean(strat_ret) / (np.std(strat_ret) + 1e-9)) * annual_multiplier
+                sharpe = (
+                    np.mean(strat_ret) / (np.std(strat_ret) + 1e-9)
+                ) * annual_multiplier
                 accuracy = np.mean((prob > 0.5) == (y_test == 1))
 
             oof_predictions[train_end:test_end] = preds
@@ -163,7 +175,7 @@ class CryptoMLTrainer:
                 "test_size": len(X_test),
                 "rank_ic": float(rank_ic if not np.isnan(rank_ic) else 0.0),
                 "directional_accuracy": float(accuracy),
-                "annualized_sharpe": float(sharpe)
+                "annualized_sharpe": float(sharpe),
             }
             all_metrics.append(metrics)
 
@@ -175,7 +187,9 @@ class CryptoMLTrainer:
         # Feature Importance
         if hasattr(self.model, "feature_importances_"):
             importances = self.model.feature_importances_
-            feat_imp = sorted(zip(self.feature_names, importances), key=lambda x: x[1], reverse=True)
+            feat_imp = sorted(
+                zip(self.feature_names, importances), key=lambda x: x[1], reverse=True
+            )
         else:
             feat_imp = []
 
@@ -184,10 +198,14 @@ class CryptoMLTrainer:
             "task": self.task,
             "features_count": len(self.feature_names),
             "folds": all_metrics,
-            "mean_rank_ic": float(np.mean([m['rank_ic'] for m in all_metrics])),
-            "mean_accuracy": float(np.mean([m['directional_accuracy'] for m in all_metrics])),
-            "mean_sharpe": float(np.mean([m['annualized_sharpe'] for m in all_metrics])),
-            "top_10_features": feat_imp[:10]
+            "mean_rank_ic": float(np.mean([m["rank_ic"] for m in all_metrics])),
+            "mean_accuracy": float(
+                np.mean([m["directional_accuracy"] for m in all_metrics])
+            ),
+            "mean_sharpe": float(
+                np.mean([m["annualized_sharpe"] for m in all_metrics])
+            ),
+            "top_10_features": feat_imp[:10],
         }
         return summary
 
@@ -199,7 +217,7 @@ class CryptoMLTrainer:
             "model_type": self.model_type,
             "task": self.task,
             "feature_names": self.feature_names,
-            "cv_results": self.cv_results
+            "cv_results": self.cv_results,
         }
         joblib.dump(bundle, path)
 

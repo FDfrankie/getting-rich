@@ -24,16 +24,16 @@ Includes:
    - For autoencoders learning compressed latent states of financial time series.
 """
 
+
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from typing import Optional, Union, Tuple, Dict
-
+from torch import nn
 
 # ==============================================================================
 # 1. Differentiable Sharpe Ratio Loss (Soft Sharpe Loss)
 # ==============================================================================
+
 
 class SoftSharpeLoss(nn.Module):
     """
@@ -50,13 +50,21 @@ class SoftSharpeLoss(nn.Module):
     risk_free_rate : float
         Period risk-free benchmark return (default 0.0).
     """
-    def __init__(self, annualization_factor: float = 252.0, eps: float = 1e-8, risk_free_rate: float = 0.0):
-        super(SoftSharpeLoss, self).__init__()
+
+    def __init__(
+        self,
+        annualization_factor: float = 252.0,
+        eps: float = 1e-8,
+        risk_free_rate: float = 0.0,
+    ):
+        super().__init__()
         self.annualization_factor = annualization_factor
         self.eps = eps
         self.risk_free_rate = risk_free_rate
 
-    def forward(self, positions: torch.Tensor, forward_returns: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, positions: torch.Tensor, forward_returns: torch.Tensor
+    ) -> torch.Tensor:
         """
         Calculates negative Sharpe Ratio of strategy portfolio returns.
 
@@ -87,8 +95,12 @@ class SoftSharpeLoss(nn.Module):
         return -sharpe
 
 
-def numpy_sharpe_ratio(positions: np.ndarray, forward_returns: np.ndarray,
-                       annualization_factor: float = 252.0, eps: float = 1e-8) -> float:
+def numpy_sharpe_ratio(
+    positions: np.ndarray,
+    forward_returns: np.ndarray,
+    annualization_factor: float = 252.0,
+    eps: float = 1e-8,
+) -> float:
     """NumPy evaluation of Sharpe Ratio."""
     pos = np.asarray(positions).flatten()
     ret = np.asarray(forward_returns).flatten()
@@ -102,6 +114,7 @@ def numpy_sharpe_ratio(positions: np.ndarray, forward_returns: np.ndarray,
 # ==============================================================================
 # 2. Differentiable Rank IC Loss (Soft Spearman Rank Correlation)
 # ==============================================================================
+
 
 class SoftRankICLoss(nn.Module):
     """
@@ -117,8 +130,9 @@ class SoftRankICLoss(nn.Module):
     eps : float
         Numerical epsilon. Default is 1e-6.
     """
+
     def __init__(self, temperature: float = 0.1, eps: float = 1e-6):
-        super(SoftRankICLoss, self).__init__()
+        super().__init__()
         self.temperature = temperature
         self.eps = eps
 
@@ -168,8 +182,8 @@ class SoftRankICLoss(nn.Module):
         tgt_diff = tgt_ranks - tgt_mean
 
         cov = torch.sum(pred_diff * tgt_diff)
-        pred_norm = torch.sqrt(torch.sum(pred_diff ** 2) + self.eps)
-        tgt_norm = torch.sqrt(torch.sum(tgt_diff ** 2) + self.eps)
+        pred_norm = torch.sqrt(torch.sum(pred_diff**2) + self.eps)
+        tgt_norm = torch.sqrt(torch.sum(tgt_diff**2) + self.eps)
 
         soft_spearman = cov / (pred_norm * tgt_norm + self.eps)
         return -soft_spearman
@@ -183,6 +197,7 @@ def numpy_rank_ic(predictions: np.ndarray, targets: np.ndarray) -> float:
         return 0.0
     try:
         from scipy.stats import spearmanr
+
         corr, _ = spearmanr(pred, tgt)
         return float(corr) if not np.isnan(corr) else 0.0
     except ImportError:
@@ -192,6 +207,7 @@ def numpy_rank_ic(predictions: np.ndarray, targets: np.ndarray) -> float:
             ranks = np.empty_like(order, dtype=float)
             ranks[order] = np.arange(len(arr))
             return ranks
+
         r_pred = get_ranks(pred)
         r_tgt = get_ranks(tgt)
         r_pred = (r_pred - np.mean(r_pred)) / (np.std(r_pred) + 1e-9)
@@ -203,6 +219,7 @@ def numpy_rank_ic(predictions: np.ndarray, targets: np.ndarray) -> float:
 # ==============================================================================
 # 3. Bayesian Conditional Probability Loss (Regime-Switching Focal Loss)
 # ==============================================================================
+
 
 class BayesianConditionalLoss(nn.Module):
     """
@@ -226,15 +243,26 @@ class BayesianConditionalLoss(nn.Module):
     vol_scale : float
         Scaling for regime volatility modulation. Default is 1.0.
     """
-    def __init__(self, gamma: float = 2.0, alpha: float = 0.5, vol_scale: float = 1.0, eps: float = 1e-7):
-        super(BayesianConditionalLoss, self).__init__()
+
+    def __init__(
+        self,
+        gamma: float = 2.0,
+        alpha: float = 0.5,
+        vol_scale: float = 1.0,
+        eps: float = 1e-7,
+    ):
+        super().__init__()
         self.gamma = gamma
         self.alpha = alpha
         self.vol_scale = vol_scale
         self.eps = eps
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor,
-                regime_volatility: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        regime_volatility: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """
         Parameters
         ----------
@@ -270,7 +298,9 @@ class BayesianConditionalLoss(nn.Module):
         if regime_volatility is not None:
             reg_vol = regime_volatility.view(-1).float()
             # In higher regime volatility, downscale noisy spikes or adapt weights
-            regime_weight = torch.exp(-self.vol_scale * (reg_vol - 1.0).clamp(min=-1.0, max=2.0))
+            regime_weight = torch.exp(
+                -self.vol_scale * (reg_vol - 1.0).clamp(min=-1.0, max=2.0)
+            )
         else:
             regime_weight = 1.0
 
@@ -282,6 +312,7 @@ class BayesianConditionalLoss(nn.Module):
 # 4. Latent Space Representation Autoencoder Loss
 # ==============================================================================
 
+
 class LatentRepresentationLoss(nn.Module):
     """
     Financial Time-Series Latent Space Loss for Variational Autoencoder (VAE) / Transformer.
@@ -290,15 +321,21 @@ class LatentRepresentationLoss(nn.Module):
     2. KL Divergence (Latent Regularization against Prior N(0, I))
     3. Directional Alignment Loss (Ensuring latent embedding z predicts forward returns)
     """
+
     def __init__(self, beta_kl: float = 0.01, lambda_dir: float = 0.5):
-        super(LatentRepresentationLoss, self).__init__()
+        super().__init__()
         self.beta_kl = beta_kl
         self.lambda_dir = lambda_dir
 
-    def forward(self, recon_x: torch.Tensor, x: torch.Tensor,
-                mu: torch.Tensor, logvar: torch.Tensor,
-                pred_ret: Optional[torch.Tensor] = None,
-                target_ret: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, Dict[str, float]]:
+    def forward(
+        self,
+        recon_x: torch.Tensor,
+        x: torch.Tensor,
+        mu: torch.Tensor,
+        logvar: torch.Tensor,
+        pred_ret: torch.Tensor | None = None,
+        target_ret: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, dict[str, float]]:
         """
         Parameters
         ----------
@@ -324,7 +361,7 @@ class LatentRepresentationLoss(nn.Module):
         total_loss = recon_loss + self.beta_kl * kl_loss
         metrics = {
             "recon_loss": float(recon_loss.item()),
-            "kl_loss": float(kl_loss.item())
+            "kl_loss": float(kl_loss.item()),
         }
 
         # 3. Optional directional loss

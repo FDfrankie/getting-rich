@@ -2,15 +2,17 @@
 Brain Job Queue for asynchronous simulation processing and deduplication.
 Complies with docs/BRAIN_WEB_API_ASYNC_FIX_SPEC.md.
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
 import threading
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Mapping, Optional
+from typing import Any
 
 
 class BrainJobStatus(str, Enum):
@@ -27,12 +29,12 @@ class BrainSimulationJob:
         job_id: str,
         simulation_key: str,
         expression: str,
-        settings: Optional[Dict[str, Any]] = None,
+        settings: dict[str, Any] | None = None,
     ) -> None:
         self.job_id: str = job_id
         self.simulation_key: str = simulation_key
         self.expression: str = expression
-        self.settings: Dict[str, Any] = settings or {
+        self.settings: dict[str, Any] = settings or {
             "instrumentType": "EQUITY",
             "region": "USA",
             "universe": "TOP3000",
@@ -48,23 +50,25 @@ class BrainSimulationJob:
         }
         self.status: BrainJobStatus = BrainJobStatus.QUEUED
         self.created_at: str = datetime.now(timezone.utc).isoformat()
-        self.simulation_location: Optional[str] = None
-        self.alpha_id: Optional[str] = None
-        self.last_polled_at: Optional[str] = None
-        self.next_poll_at: Optional[str] = None
-        self.metrics: Dict[str, Optional[float]] = {
+        self.simulation_location: str | None = None
+        self.alpha_id: str | None = None
+        self.last_polled_at: str | None = None
+        self.next_poll_at: str | None = None
+        self.metrics: dict[str, float | None] = {
             "sharpe": None,
             "fitness": None,
             "turnover": None,
             "margin": None,
         }
-        self.safe_error: Optional[str] = None
+        self.safe_error: str | None = None
         self.is_duplicate: bool = False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "job_id": self.job_id,
-            "status": self.status.value if isinstance(self.status, BrainJobStatus) else str(self.status),
+            "status": self.status.value
+            if isinstance(self.status, BrainJobStatus)
+            else str(self.status),
             "simulation_location": self.simulation_location,
             "alpha_id": self.alpha_id,
             "last_polled_at": self.last_polled_at,
@@ -74,11 +78,10 @@ class BrainSimulationJob:
         }
 
 
-def compute_simulation_key(expression: str, settings: Optional[Mapping[str, Any]] = None) -> str:
-    data = {
-        "expression": expression.strip(),
-        "settings": dict(settings or {})
-    }
+def compute_simulation_key(
+    expression: str, settings: Mapping[str, Any] | None = None
+) -> str:
+    data = {"expression": expression.strip(), "settings": dict(settings or {})}
     raw = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -99,10 +102,10 @@ class BrainJobQueue:
     def __init__(self, brain_client: Any, default_poll_interval: float = 2.0) -> None:
         self.brain_client = brain_client
         self.default_poll_interval = float(default_poll_interval)
-        self._jobs: Dict[str, BrainSimulationJob] = {}
-        self._key_to_job_id: Dict[str, str] = {}
+        self._jobs: dict[str, BrainSimulationJob] = {}
+        self._key_to_job_id: dict[str, str] = {}
         self._lock = threading.Lock()
-        self._worker_thread: Optional[threading.Thread] = None
+        self._worker_thread: threading.Thread | None = None
         self._pending_queue: list[str] = []
         self._running: bool = True
 
@@ -115,7 +118,7 @@ class BrainJobQueue:
     def create_job(
         self,
         expression: str,
-        settings: Optional[Mapping[str, Any]] = None,
+        settings: Mapping[str, Any] | None = None,
     ) -> tuple[BrainSimulationJob, bool]:
         key = compute_simulation_key(expression, settings)
         with self._lock:
@@ -136,7 +139,7 @@ class BrainJobQueue:
             self._pending_queue.append(job_id)
             return job, True
 
-    def get_job(self, job_id: str) -> Optional[BrainSimulationJob]:
+    def get_job(self, job_id: str) -> BrainSimulationJob | None:
         with self._lock:
             return self._jobs.get(job_id)
 
@@ -161,7 +164,9 @@ class BrainJobQueue:
         # Handle offline mode immediately
         if getattr(self.brain_client, "offline_mode", True):
             try:
-                res = self.brain_client.simulate_alpha(job.expression, settings=job.settings)
+                res = self.brain_client.simulate_alpha(
+                    job.expression, settings=job.settings
+                )
                 with self._lock:
                     job.status = BrainJobStatus.OFFLINE
                     job.simulation_location = res.get("location")
@@ -223,13 +228,17 @@ class BrainJobQueue:
                     location, timeout=self.brain_client.timeout
                 )
                 if poll_resp.status_code == 429:
-                    retry_after = float(poll_resp.headers.get("Retry-After", poll_interval))
+                    retry_after = float(
+                        poll_resp.headers.get("Retry-After", poll_interval)
+                    )
                     time.sleep(max(poll_interval, retry_after))
                     continue
 
                 poll_resp.raise_for_status()
                 poll_data = poll_resp.json() if poll_resp.content else {}
-                state = str(poll_data.get("status") or poll_data.get("state") or "").upper()
+                state = str(
+                    poll_data.get("status") or poll_data.get("state") or ""
+                ).upper()
 
                 if state == "COMPLETE":
                     with self._lock:
@@ -237,7 +246,9 @@ class BrainJobQueue:
                         job.metrics = {
                             "sharpe": self.brain_client._number(poll_data, "sharpe"),
                             "fitness": self.brain_client._number(poll_data, "fitness"),
-                            "turnover": self.brain_client._number(poll_data, "turnover"),
+                            "turnover": self.brain_client._number(
+                                poll_data, "turnover"
+                            ),
                             "margin": self.brain_client._number(poll_data, "margin"),
                         }
                     return

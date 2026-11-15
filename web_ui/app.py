@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 
 # 確保根目錄可被載入
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

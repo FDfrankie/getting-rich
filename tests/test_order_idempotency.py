@@ -1,7 +1,12 @@
 import os
 import tempfile
-import pytest
-from crypto_trading.order_manager import OrderManager, OrderState, generate_idempotency_key
+
+from crypto_trading.order_manager import (
+    OrderManager,
+    OrderState,
+    generate_idempotency_key,
+)
+
 
 class MockFailingClient:
     def __init__(self, mode="success"):
@@ -14,8 +19,9 @@ class MockFailingClient:
             return {"success": False, "message": "Insufficient balance"}
         return {
             "success": True,
-            "order": {"id": "ex_999888", "status": "closed", "price": 50000.0}
+            "order": {"id": "ex_999888", "status": "closed", "price": 50000.0},
         }
+
 
 def test_order_idempotency_key_generation():
     k1 = generate_idempotency_key("BTC/USDT", "BUY", "LIMIT", 0.1, 60000.0, "tag1")
@@ -23,6 +29,7 @@ def test_order_idempotency_key_generation():
     k3 = generate_idempotency_key("BTC/USDT", "BUY", "LIMIT", 0.1, 60000.0, "tag2")
     assert k1 == k2
     assert k1 != k3
+
 
 def test_order_idempotency_duplicate_claim_prevention():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
@@ -43,6 +50,7 @@ def test_order_idempotency_duplicate_claim_prevention():
         if os.path.exists(db_path):
             os.remove(db_path)
 
+
 def test_order_idempotency_timeout_moves_to_unknown_state():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
         db_path = tf.name
@@ -52,7 +60,15 @@ def test_order_idempotency_timeout_moves_to_unknown_state():
         client = MockFailingClient(mode="timeout")
 
         # 遇到 timeout，必須轉入 UNKNOWN 狀態，嚴禁重送
-        res = om.execute_with_idempotency(client, "ETH/USDC", "SELL", "LIMIT", 1.0, 3000.0, client_tag="order_timeout_test")
+        res = om.execute_with_idempotency(
+            client,
+            "ETH/USDC",
+            "SELL",
+            "LIMIT",
+            1.0,
+            3000.0,
+            client_tag="order_timeout_test",
+        )
         assert res["success"] is False
         assert res["state"] == OrderState.UNKNOWN.value
 
@@ -64,6 +80,7 @@ def test_order_idempotency_timeout_moves_to_unknown_state():
         if os.path.exists(db_path):
             os.remove(db_path)
 
+
 def test_order_idempotency_successful_fill():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
         db_path = tf.name
@@ -72,7 +89,9 @@ def test_order_idempotency_successful_fill():
         om = OrderManager(db_path=db_path)
         client = MockFailingClient(mode="success")
 
-        res = om.execute_with_idempotency(client, "SOL/USDT", "BUY", "MARKET", 10.0, client_tag="order_success_test")
+        res = om.execute_with_idempotency(
+            client, "SOL/USDT", "BUY", "MARKET", 10.0, client_tag="order_success_test"
+        )
         assert res["success"] is True
         assert res["state"] == OrderState.FILLED.value
         assert res["exchange_order_id"] == "ex_999888"

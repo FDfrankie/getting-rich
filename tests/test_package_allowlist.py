@@ -1,11 +1,18 @@
 """
 Tests for package allowlist, forbidden files, SHA-256 manifest, and secret scanning.
 """
+
 import json
 import zipfile
 from pathlib import Path
+
 import pytest
-from scripts.package_for_review import build_package, check_forbidden_rules, scan_for_secrets
+
+from scripts.package_for_review import (
+    build_package,
+    check_forbidden_rules,
+    scan_for_secrets,
+)
 
 
 def test_check_forbidden_rules():
@@ -33,7 +40,9 @@ def test_scan_for_secrets(tmp_path: Path):
     leaky_file = tmp_path / "leak.py"
     # 拆開關鍵字以避免 package_for_review 掃描自身測試檔時誤報
     k_name = "secret" + "_key"
-    leaky_file.write_text(f"{k_name} = 'abcdef1234567890abcdef1234567890'", encoding="utf-8")
+    leaky_file.write_text(
+        f"{k_name} = 'abcdef1234567890abcdef1234567890'", encoding="utf-8"
+    )
     with pytest.raises(ValueError, match="potential secret"):
         scan_for_secrets(leaky_file)
 

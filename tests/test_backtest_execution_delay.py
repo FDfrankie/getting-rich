@@ -1,7 +1,7 @@
-import pytest
 import pandas as pd
-import numpy as np
+
 from crypto_trading.backtest_engine import BacktestEngine, FeeSchedule
+
 
 def test_fee_schedule_defaults_and_metadata():
     fee_sched = FeeSchedule(
@@ -14,12 +14,13 @@ def test_fee_schedule_defaults_and_metadata():
         delay_bars=1,
         tick_size=0.01,
         step_size=0.001,
-        min_notional=5.0
+        min_notional=5.0,
     )
     assert fee_sched.source == "binance_futures_usdc"
     assert fee_sched.delay_bars == 1
     assert fee_sched.min_notional == 5.0
     assert fee_sched.effective_time is not None
+
 
 def test_backtest_execution_delay_t_plus_1():
     # 建立測試資料：5 根 K 棒
@@ -28,7 +29,15 @@ def test_backtest_execution_delay_t_plus_1():
     signals = [1.0, 1.0, 0.0, 0.0, 0.0]
     df = pd.DataFrame({"Close": prices, "signal": signals})
 
-    engine = BacktestEngine(fee_schedule=FeeSchedule(delay_bars=1, taker_fee_rate=0.0, slippage_bps=0.0, spread_bps=0.0, funding_rate_per_bar=0.0))
+    engine = BacktestEngine(
+        fee_schedule=FeeSchedule(
+            delay_bars=1,
+            taker_fee_rate=0.0,
+            slippage_bps=0.0,
+            spread_bps=0.0,
+            funding_rate_per_bar=0.0,
+        )
+    )
     res = engine.run(df, timeframe="1h", data_source="unit_test")
 
     # t+1 執行：
@@ -39,6 +48,7 @@ def test_backtest_execution_delay_t_plus_1():
     assert res["signal_delay"] == 1
     assert res["data_source"] == "unit_test"
     assert res["net_return_pct"] > 15.0
+
 
 def test_cost_breakdown_maker_taker_spread_slippage_funding():
     prices = [100.0, 105.0, 110.0, 115.0]
@@ -52,7 +62,7 @@ def test_cost_breakdown_maker_taker_spread_slippage_funding():
         spread_bps=2.0,
         slippage_bps=4.0,
         funding_rate_per_bar=0.0002,
-        delay_bars=1
+        delay_bars=1,
     )
     engine = BacktestEngine(initial_capital=10000.0, fee_schedule=fee_sched)
     res = engine.run(df, timeframe="1h")

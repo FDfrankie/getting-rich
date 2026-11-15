@@ -2,18 +2,19 @@
 tests/test_web_authz.py - 測試 Web UI 授權、Session 與角色權限控制 (P12)
 """
 
-import pytest
 from web_ui.auth import AuthManager, Role
+
 
 def test_auth_manager_session_lifecycle():
     auth = AuthManager(secret_key="test-secret")
     session_id = auth.create_session("alice", Role.OPERATOR, ttl=3600)
     assert session_id is not None
-    
+
     session = auth.get_session(session_id)
     assert session is not None
     assert session["username"] == "alice"
     assert session["role"] == Role.OPERATOR
+
 
 def test_auth_manager_permissions():
     auth = AuthManager(secret_key="test-secret")
@@ -36,6 +37,7 @@ def test_auth_manager_permissions():
 
     # ADMIN
     assert auth.check_permission(admin_id, Role.ADMIN) is True
+
 
 def test_csrf_token_validation():
     auth = AuthManager()

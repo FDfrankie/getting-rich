@@ -4,17 +4,20 @@ Connects trained PPO Agent into the BacktestEngine and BotRunner.
 Supports continuous position weight [-1.0, 1.0] discretization or direct sizing.
 """
 
-import os
 import json
+import os
+
 import numpy as np
 import pandas as pd
-from typing import Optional
-from crypto_trading.strategies.momentum_breakout import BaseStrategy
+
 from crypto_trading.feature_engineer import CryptoFeatureEngineer
+from crypto_trading.strategies.momentum_breakout import BaseStrategy
+
 try:
     from crypto_trading.rl_agent import PPOAgent
 except ImportError:
     PPOAgent = None
+
 
 class RLAlphaStrategy(BaseStrategy):
     """
@@ -23,7 +26,12 @@ class RLAlphaStrategy(BaseStrategy):
     - 輸出最優持倉權重 [-1.0, 1.0]
     - 自動依據手續費與市場波動度調節換手率
     """
-    def __init__(self, agent_weights_path: Optional[str] = None, feature_engineer: Optional[CryptoFeatureEngineer] = None):
+
+    def __init__(
+        self,
+        agent_weights_path: str | None = None,
+        feature_engineer: CryptoFeatureEngineer | None = None,
+    ):
         self.fe = feature_engineer or CryptoFeatureEngineer()
         self.agent = None
         self.weights_path = agent_weights_path
@@ -57,9 +65,9 @@ class RLAlphaStrategy(BaseStrategy):
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         if not self.is_ready:
-            df['signal'] = 0.0
-            df['rl_action'] = 0.0
-            df['model_status'] = 'MODEL_UNAVAILABLE'
+            df["signal"] = 0.0
+            df["rl_action"] = 0.0
+            df["model_status"] = "MODEL_UNAVAILABLE"
             return df
 
         processed = self.fe.compute_features(df)
@@ -68,14 +76,14 @@ class RLAlphaStrategy(BaseStrategy):
         # State dim = feature_cols + [position, unrealized_pnl]
         state_dim = len(feature_cols) + 2
         if not self._ensure_agent(state_dim):
-            df['signal'] = 0.0
-            df['rl_action'] = 0.0
-            df['model_status'] = 'MODEL_UNAVAILABLE'
+            df["signal"] = 0.0
+            df["rl_action"] = 0.0
+            df["model_status"] = "MODEL_UNAVAILABLE"
             return df
 
         signals = np.zeros(len(df))
         current_pos = 0.0
-        entry_price = df['Close'].iloc[0]
+        entry_price = df["Close"].iloc[0]
 
         # 逐筆模擬決策
         for i in range(len(df)):
@@ -84,7 +92,7 @@ class RLAlphaStrategy(BaseStrategy):
                 signals[i] = 0.0
                 continue
 
-            curr_price = curr_row['Close']
+            curr_price = curr_row["Close"]
             unrealized_pnl = 0.0
             if current_pos != 0 and entry_price > 0:
                 unrealized_pnl = current_pos * (curr_price - entry_price) / entry_price
@@ -95,7 +103,7 @@ class RLAlphaStrategy(BaseStrategy):
 
             # PPO 評估模式生成動作
             action, _, _ = self.agent.select_action(obs, evaluate=True)
-            
+
             # 將連續動作轉換為持倉 (-1, 0, 1) 或依門檻濾波
             if action > 0.3:
                 pos_signal = 1.0
@@ -110,5 +118,5 @@ class RLAlphaStrategy(BaseStrategy):
 
             signals[i] = pos_signal
 
-        df['signal'] = signals
+        df["signal"] = signals
         return df

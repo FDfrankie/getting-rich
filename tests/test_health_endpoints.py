@@ -2,10 +2,10 @@
 tests/test_health_endpoints.py - 測試健康檢查與維運端點 (/health/live, /health/ready 等)
 """
 
-import pytest
-import json
 from unittest.mock import MagicMock
+
 from web_ui.server import AppAPIHandler
+
 
 def test_health_endpoints_format():
     # 建立 mock request handler
@@ -22,7 +22,7 @@ def test_health_endpoints_format():
         "ready": True,
         "trading": "active",
         "alpha_miner": "idle",
-        "scheduler": "running"
+        "scheduler": "running",
     }
     assert health_status["status"] == "healthy"
     assert health_status["live"] is True

@@ -5,6 +5,7 @@ Builds standard Kaggle Jupyter Notebooks (.ipynb) for Crypto RL and Taiwan Stock
 import json
 import os
 
+
 def create_kaggle_crypto_rl_notebook(output_path: str):
     cells = [
         {
@@ -20,8 +21,8 @@ def create_kaggle_crypto_rl_notebook(output_path: str):
                 "3. **Custom Gymnasium-compliant Crypto Trading Environment** with differential Sharpe ratio reward & transaction costs\n",
                 "4. **Actor-Critic Proximal Policy Optimization (PPO)** in PyTorch (GPU accelerated)\n",
                 "5. **Out-of-Sample Walk-Forward Backtesting** with Equity Curves & Drawdown Visualization\n",
-                "6. **Exportable Model Weights (`crypto_ppo_model.pt`)**"
-            ]
+                "6. **Exportable Model Weights (`crypto_ppo_model.pt`)**",
+            ],
         },
         {
             "cell_type": "code",
@@ -30,8 +31,8 @@ def create_kaggle_crypto_rl_notebook(output_path: str):
             "outputs": [],
             "source": [
                 "# Step 1: Install dependencies on Kaggle\n",
-                "!pip install ccxt pandas numpy matplotlib torch yfinance\n"
-            ]
+                "!pip install ccxt pandas numpy matplotlib torch yfinance\n",
+            ],
         },
         {
             "cell_type": "code",
@@ -51,8 +52,8 @@ def create_kaggle_crypto_rl_notebook(output_path: str):
                 "import ccxt\n",
                 "\n",
                 "device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')\n",
-                "print(f'Using device: {device}')\n"
-            ]
+                "print(f'Using device: {device}')\n",
+            ],
         },
         {
             "cell_type": "code",
@@ -88,8 +89,8 @@ def create_kaggle_crypto_rl_notebook(output_path: str):
                 "        return df\n",
                 "\n",
                 "df_raw = fetch_crypto_data('BTC/USDT', '1h', 1500)\n",
-                "df_raw.head()\n"
-            ]
+                "df_raw.head()\n",
+            ],
         },
         {
             "cell_type": "code",
@@ -139,8 +140,8 @@ def create_kaggle_crypto_rl_notebook(output_path: str):
                 "    return df.dropna(), feature_cols\n",
                 "\n",
                 "df_feats, feature_cols = compute_features(df_raw)\n",
-                "print(f'Computed {len(feature_cols)} features: {feature_cols}')\n"
-            ]
+                "print(f'Computed {len(feature_cols)} features: {feature_cols}')\n",
+            ],
         },
         {
             "cell_type": "code",
@@ -200,8 +201,8 @@ def create_kaggle_crypto_rl_notebook(output_path: str):
                 "        self.step_idx = next_idx\n",
                 "        done = (self.step_idx >= len(self.df) - 1) or (dd >= 0.3)\n",
                 "        obs = self._get_obs() if not done else np.zeros(self.state_dim, dtype=np.float32)\n",
-                "        return obs, reward, done, {'balance': self.balance, 'net_ret': net_ret, 'drawdown': dd}\n"
-            ]
+                "        return obs, reward, done, {'balance': self.balance, 'net_ret': net_ret, 'drawdown': dd}\n",
+            ],
         },
         {
             "cell_type": "code",
@@ -240,8 +241,8 @@ def create_kaggle_crypto_rl_notebook(output_path: str):
                 "        std = torch.exp(torch.clamp(self.actor_log_std, -2.0, 0.5))\n",
                 "        dist = Normal(mean, std)\n",
                 "        val = self.critic(feats)\n",
-                "        return dist, val\n"
-            ]
+                "        return dist, val\n",
+            ],
         },
         {
             "cell_type": "code",
@@ -315,8 +316,8 @@ def create_kaggle_crypto_rl_notebook(output_path: str):
                 "        optimizer.step()\n",
                 "\n",
                 "    if (ep + 1) % 5 == 0:\n",
-                "        print(f'Episode {ep+1}/{episodes} | Final Balance: ${env_train.balance:.2f} | Return: {((env_train.balance/env_train.initial_balance)-1)*100:.2f}%')\n"
-            ]
+                "        print(f'Episode {ep+1}/{episodes} | Final Balance: ${env_train.balance:.2f} | Return: {((env_train.balance/env_train.initial_balance)-1)*100:.2f}%')\n",
+            ],
         },
         {
             "cell_type": "code",
@@ -351,9 +352,9 @@ def create_kaggle_crypto_rl_notebook(output_path: str):
                 "\n",
                 "# Save Weights for Bot Runner\n",
                 "torch.save(policy.state_dict(), 'crypto_ppo_model.pt')\n",
-                "print('Model successfully saved to crypto_ppo_model.pt')\n"
-            ]
-        }
+                "print('Model successfully saved to crypto_ppo_model.pt')\n",
+            ],
+        },
     ]
 
     nb = {
@@ -362,20 +363,18 @@ def create_kaggle_crypto_rl_notebook(output_path: str):
             "kernelspec": {
                 "display_name": "Python 3",
                 "language": "python",
-                "name": "python3"
+                "name": "python3",
             },
-            "language_info": {
-                "name": "python",
-                "version": "3.10.0"
-            }
+            "language_info": {"name": "python", "version": "3.10.0"},
         },
         "nbformat": 4,
-        "nbformat_minor": 4
+        "nbformat_minor": 4,
     }
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(nb, f, indent=2, ensure_ascii=False)
     print(f"Created {output_path}")
+
 
 def create_kaggle_taiwan_stock_ml_notebook(output_path: str):
     cells = [
@@ -392,8 +391,8 @@ def create_kaggle_taiwan_stock_ml_notebook(output_path: str):
                 "3. **Walk-Forward Cross-Validation** to eliminate lookahead bias\n",
                 "4. **Information Coefficient (Rank IC)** and Sharpe Ratio validation\n",
                 "5. **Feature Importance Analysis & Automated Portfolio Allocation**\n",
-                "6. **Exportable Model Artifacts (`taiwan_stock_lgbm.joblib`)**"
-            ]
+                "6. **Exportable Model Artifacts (`taiwan_stock_lgbm.joblib`)**",
+            ],
         },
         {
             "cell_type": "code",
@@ -402,8 +401,8 @@ def create_kaggle_taiwan_stock_ml_notebook(output_path: str):
             "outputs": [],
             "source": [
                 "# Step 1: Install packages\n",
-                "!pip install yfinance lightgbm xgboost scikit-learn pandas numpy matplotlib joblib\n"
-            ]
+                "!pip install yfinance lightgbm xgboost scikit-learn pandas numpy matplotlib joblib\n",
+            ],
         },
         {
             "cell_type": "code",
@@ -421,8 +420,8 @@ def create_kaggle_taiwan_stock_ml_notebook(output_path: str):
                 "import xgboost as xgb\n",
                 "\n",
                 "UNIVERSE = ['2330.TW', '2317.TW', '2454.TW', '2308.TW', '2382.TW', '2881.TW', '2882.TW', '2603.TW']\n",
-                "print(f'Target Universe: {UNIVERSE}')\n"
-            ]
+                "print(f'Target Universe: {UNIVERSE}')\n",
+            ],
         },
         {
             "cell_type": "code",
@@ -440,8 +439,8 @@ def create_kaggle_taiwan_stock_ml_notebook(output_path: str):
                 "            stock_dfs[sym] = h\n",
                 "            print(f'Fetched {sym}: {len(h)} rows')\n",
                 "    except Exception as e:\n",
-                "        print(f'Error fetching {sym}: {e}')\n"
-            ]
+                "        print(f'Error fetching {sym}: {e}')\n",
+            ],
         },
         {
             "cell_type": "code",
@@ -496,8 +495,8 @@ def create_kaggle_taiwan_stock_ml_notebook(output_path: str):
                 "exclude = {'Open', 'High', 'Low', 'Close', 'Volume', 'target_fwd_5d', 'symbol', 'Dividends', 'Stock Splits'}\n",
                 "features = [c for c in combined.columns if c not in exclude]\n",
                 "clean = combined.dropna(subset=features + ['target_fwd_5d']).copy()\n",
-                "print(f'Dataset ready: {len(clean)} rows, {len(features)} features: {features}')\n"
-            ]
+                "print(f'Dataset ready: {len(clean)} rows, {len(features)} features: {features}')\n",
+            ],
         },
         {
             "cell_type": "code",
@@ -536,8 +535,8 @@ def create_kaggle_taiwan_stock_ml_notebook(output_path: str):
                 "plt.title('Taiwan Stock LightGBM Feature Importance')\n",
                 "plt.ylabel('Split Count')\n",
                 "plt.grid(True)\n",
-                "plt.show()\n"
-            ]
+                "plt.show()\n",
+            ],
         },
         {
             "cell_type": "code",
@@ -566,9 +565,9 @@ def create_kaggle_taiwan_stock_ml_notebook(output_path: str):
                 "\n",
                 "# Step 6: Export Trained Weights\n",
                 "joblib.dump({'model': model, 'features': features}, 'taiwan_stock_lgbm.joblib')\n",
-                "print('Model successfully saved to taiwan_stock_lgbm.joblib')\n"
-            ]
-        }
+                "print('Model successfully saved to taiwan_stock_lgbm.joblib')\n",
+            ],
+        },
     ]
 
     nb = {
@@ -577,22 +576,24 @@ def create_kaggle_taiwan_stock_ml_notebook(output_path: str):
             "kernelspec": {
                 "display_name": "Python 3",
                 "language": "python",
-                "name": "python3"
+                "name": "python3",
             },
-            "language_info": {
-                "name": "python",
-                "version": "3.10.0"
-            }
+            "language_info": {"name": "python", "version": "3.10.0"},
         },
         "nbformat": 4,
-        "nbformat_minor": 4
+        "nbformat_minor": 4,
     }
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(nb, f, indent=2, ensure_ascii=False)
     print(f"Created {output_path}")
 
+
 if __name__ == "__main__":
     out_dir = r"G:\我的雲端硬碟\炒幣\kaggle_notebooks"
-    create_kaggle_crypto_rl_notebook(os.path.join(out_dir, "kaggle_crypto_rl_trading.ipynb"))
-    create_kaggle_taiwan_stock_ml_notebook(os.path.join(out_dir, "kaggle_taiwan_stock_ml_ranker.ipynb"))
+    create_kaggle_crypto_rl_notebook(
+        os.path.join(out_dir, "kaggle_crypto_rl_trading.ipynb")
+    )
+    create_kaggle_taiwan_stock_ml_notebook(
+        os.path.join(out_dir, "kaggle_taiwan_stock_ml_ranker.ipynb")
+    )

@@ -1,9 +1,10 @@
 import os
 import sqlite3
-import shutil
-from typing import Dict, Any, List, Optional
 from datetime import datetime
-from data_persistence.gdrive_sync import STATE_DB_PATH, BACKUP_DIR, _DB_LOCK
+from typing import Any
+
+from data_persistence.gdrive_sync import _DB_LOCK, BACKUP_DIR, STATE_DB_PATH
+
 
 class DatabaseMigrationManager:
     """
@@ -14,6 +15,7 @@ class DatabaseMigrationManager:
     3. 可重跑 migration 腳本
     4. 升級前自動執行 sqlite3.backup() 建立還原快照，並可執行 restore
     """
+
     def __init__(self, db_path: str = STATE_DB_PATH, backup_dir: str = BACKUP_DIR):
         self.db_path = db_path
         self.backup_dir = backup_dir
@@ -66,13 +68,13 @@ class DatabaseMigrationManager:
         """)
         conn.commit()
 
-    def get_applied_versions(self, conn: sqlite3.Connection) -> List[int]:
+    def get_applied_versions(self, conn: sqlite3.Connection) -> list[int]:
         self.init_migration_table(conn)
         cur = conn.cursor()
         cur.execute("SELECT version FROM schema_migrations ORDER BY version ASC")
         return [row[0] for row in cur.fetchall()]
 
-    def run_migrations(self) -> Dict[str, Any]:
+    def run_migrations(self) -> dict[str, Any]:
         """
         執行資料庫遷移
         每筆 migration 前先 backup，遇錯可安全還原
@@ -85,7 +87,7 @@ class DatabaseMigrationManager:
         migrations = [
             (1, "Create core trading tables", self._migration_v1),
             (2, "Create idempotency and manual control tables", self._migration_v2),
-            (3, "Add reconciliation indices and constraints", self._migration_v3)
+            (3, "Add reconciliation indices and constraints", self._migration_v3),
         ]
 
         newly_applied = []
@@ -95,7 +97,7 @@ class DatabaseMigrationManager:
                     func(conn)
                     conn.execute(
                         "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)",
-                        (ver, desc, datetime.utcnow().isoformat())
+                        (ver, desc, datetime.utcnow().isoformat()),
                     )
                     conn.commit()
                     newly_applied.append(ver)
@@ -104,17 +106,15 @@ class DatabaseMigrationManager:
                 "success": True,
                 "backup_file": backup_file,
                 "newly_applied": newly_applied,
-                "current_version": max(applied.union(newly_applied)) if (applied or newly_applied) else 0
+                "current_version": max(applied.union(newly_applied))
+                if (applied or newly_applied)
+                else 0,
             }
         except Exception as e:
             conn.close()
             # 自動還原
             self.restore_database(backup_file)
-            return {
-                "success": False,
-                "error": str(e),
-                "restored_from": backup_file
-            }
+            return {"success": False, "error": str(e), "restored_from": backup_file}
 
     def _migration_v1(self, conn: sqlite3.Connection):
         cur = conn.cursor()
@@ -202,5 +202,7 @@ class DatabaseMigrationManager:
 
     def _migration_v3(self, conn: sqlite3.Connection):
         cur = conn.cursor()
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_idempotent_orders_key ON idempotent_orders(idempotency_key)")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_idempotent_orders_key ON idempotent_orders(idempotency_key)"
+        )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_symbol ON orders(symbol)")

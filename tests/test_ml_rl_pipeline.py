@@ -1,20 +1,22 @@
+import os
+import shutil
+import sys
 import unittest
+
 import numpy as np
 import pandas as pd
-import os
-import sys
-import shutil
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from crypto_trading.backtest_engine import BacktestEngine
 from crypto_trading.feature_engineer import CryptoFeatureEngineer
 from crypto_trading.ml_trainer import CryptoMLTrainer
-from crypto_trading.rl_env import CryptoTradingEnv
 from crypto_trading.rl_agent import PPOAgent
+from crypto_trading.rl_env import CryptoTradingEnv
 from crypto_trading.strategies.ml_strategy import MLAlphaStrategy
 from crypto_trading.strategies.rl_strategy import RLAlphaStrategy
-from crypto_trading.backtest_engine import BacktestEngine
 from taiwan_stock.ml_ranker import TaiwanStockMLRanker
+
 
 def generate_mock_crypto_df(bars: int = 250) -> pd.DataFrame:
     np.random.seed(42)
@@ -26,14 +28,12 @@ def generate_mock_crypto_df(bars: int = 250) -> pd.DataFrame:
     open_p = price * (1.0 + np.random.normal(0, 0.002, size=bars))
     vol = np.random.uniform(100, 1000, size=bars)
 
-    df = pd.DataFrame({
-        "Open": open_p,
-        "High": high,
-        "Low": low,
-        "Close": price,
-        "Volume": vol
-    }, index=dates)
+    df = pd.DataFrame(
+        {"Open": open_p, "High": high, "Low": low, "Close": price, "Volume": vol},
+        index=dates,
+    )
     return df
+
 
 class TestMLRLTradingInfrastructure(unittest.TestCase):
     def setUp(self):
@@ -81,7 +81,7 @@ class TestMLRLTradingInfrastructure(unittest.TestCase):
         fe = CryptoFeatureEngineer()
         df_feats = fe.compute_features(self.df).dropna()
         env = CryptoTradingEnv(df_feats, fe.feature_columns, initial_balance=10000.0)
-        
+
         obs = env.reset()
         self.assertEqual(len(obs), env.state_dim)
 
@@ -95,7 +95,7 @@ class TestMLRLTradingInfrastructure(unittest.TestCase):
         state_dim = 20
         agent = PPOAgent(state_dim=state_dim, action_dim=1, device="cpu")
         dummy_state = np.zeros(state_dim, dtype=np.float32)
-        
+
         action, log_prob, value = agent.select_action(dummy_state)
         self.assertGreaterEqual(action, -1.0)
         self.assertLessEqual(action, 1.0)
@@ -126,7 +126,7 @@ class TestMLRLTradingInfrastructure(unittest.TestCase):
     def test_taiwan_stock_ml_ranker(self):
         mock_universe = {
             "2330.TW": generate_mock_crypto_df(350),
-            "2454.TW": generate_mock_crypto_df(350)
+            "2454.TW": generate_mock_crypto_df(350),
         }
         ranker = TaiwanStockMLRanker(model_type="lightgbm")
         clean_ds, feat_cols = ranker.prepare_dataset(mock_universe)
@@ -136,6 +136,7 @@ class TestMLRLTradingInfrastructure(unittest.TestCase):
         rank_df = ranker.predict_rankings(mock_universe)
         self.assertEqual(len(rank_df), 2)
         self.assertIn("predicted_fwd_5d_ret_pct", rank_df.columns)
+
 
 if __name__ == "__main__":
     unittest.main()

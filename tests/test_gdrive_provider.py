@@ -1,7 +1,8 @@
 import os
 import tempfile
-import pytest
-from data_persistence.gdrive_sync import LocalPersistenceService, GDrivePersistenceSync
+
+from data_persistence.gdrive_sync import GDrivePersistenceSync, LocalPersistenceService
+
 
 def test_honest_naming_and_local_provider_fallback():
     with tempfile.TemporaryDirectory() as tmpdir:

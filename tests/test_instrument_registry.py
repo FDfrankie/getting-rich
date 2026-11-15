@@ -1,8 +1,11 @@
 """
 Tests for Instrument and InstrumentRegistry.
 """
-import pytest
-from crypto_trading.instrument_registry import Instrument, InstrumentRegistry, get_instrument_registry
+
+from crypto_trading.instrument_registry import (
+    Instrument,
+    InstrumentRegistry,
+)
 
 
 def test_instrument_canonical_id():

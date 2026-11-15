@@ -1,8 +1,8 @@
 import os
 import tempfile
-import sqlite3
-import pytest
+
 from data_persistence.database_migration import DatabaseMigrationManager
+
 
 def test_backup_and_restore_cycle():
     with tempfile.TemporaryDirectory() as tmpdir:

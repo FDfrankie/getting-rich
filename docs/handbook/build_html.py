@@ -5,6 +5,7 @@ try:
 except ImportError:
     markdown = None
 
+
 def convert_md_to_html():
     current_dir = os.path.dirname(os.path.abspath(__file__))
     md_path = os.path.join(current_dir, "QUANT_HANDBOOK.md")
@@ -14,15 +15,16 @@ def convert_md_to_html():
         md_text = f.read()
 
     if markdown:
-        body = markdown.markdown(md_text, extensions=['tables', 'fenced_code', 'toc'])
+        body = markdown.markdown(md_text, extensions=["tables", "fenced_code", "toc"])
     else:
         # 簡易 Markdown 解析備援
         import re
+
         body = md_text
-        body = re.sub(r'^# (.*?)$', r'<h1>\1</h1>', body, flags=re.M)
-        body = re.sub(r'^## (.*?)$', r'<h2>\1</h2>', body, flags=re.M)
-        body = re.sub(r'^### (.*?)$', r'<h3>\1</h3>', body, flags=re.M)
-        body = re.sub(r'^#### (.*?)$', r'<h4>\1</h4>', body, flags=re.M)
+        body = re.sub(r"^# (.*?)$", r"<h1>\1</h1>", body, flags=re.MULTILINE)
+        body = re.sub(r"^## (.*?)$", r"<h2>\1</h2>", body, flags=re.MULTILINE)
+        body = re.sub(r"^### (.*?)$", r"<h3>\1</h3>", body, flags=re.MULTILINE)
+        body = re.sub(r"^#### (.*?)$", r"<h4>\1</h4>", body, flags=re.MULTILINE)
         body = body.replace("\n\n", "<br><br>")
 
     html_content = f"""<!DOCTYPE html>
@@ -153,6 +155,7 @@ def convert_md_to_html():
         f.write(html_content)
 
     print(f"[✓] 講義 HTML 已生成: {html_path}")
+
 
 if __name__ == "__main__":
     convert_md_to_html()

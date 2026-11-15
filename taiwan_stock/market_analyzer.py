@@ -1,15 +1,18 @@
-import yfinance as yf
-import pandas as pd
+from typing import Any
+
 import numpy as np
-from datetime import datetime, timedelta
-from typing import Dict, Any
+import pandas as pd
+import yfinance as yf
+
 from taiwan_stock.config import MARKET_INDEX_SYMBOL
+
 
 class MarketAnalyzer:
     """
     台股大盤環境分析器
     負責評估當前加權指數趨勢、均線架構、波動率與市場多空溫度
     """
+
     def __init__(self, symbol: str = MARKET_INDEX_SYMBOL):
         self.symbol = symbol
 
@@ -26,7 +29,7 @@ class MarketAnalyzer:
             print(f"[錯誤] 獲取大盤歷史數據失敗: {e}")
             return pd.DataFrame()
 
-    def analyze(self) -> Dict[str, Any]:
+    def analyze(self) -> dict[str, Any]:
         """
         執行大盤多空結構綜合判斷
         重構透明且精準的 0-100 分數公式：
@@ -58,11 +61,13 @@ class MarketAnalyzer:
                 "status": "數據不足",
                 "score": 50,
                 "regime": "震盪觀望",
-                "summary": "大盤數據取得不足，建議保守觀望。"
+                "summary": "大盤數據取得不足，建議保守觀望。",
             }
 
-        close = df['Close']
-        volume = df['Volume'] if 'Volume' in df.columns else pd.Series(0, index=df.index)
+        close = df["Close"]
+        volume = (
+            df["Volume"] if "Volume" in df.columns else pd.Series(0, index=df.index)
+        )
         latest_close = float(close.iloc[-1])
         prev_close = float(close.iloc[-2])
         change_pct = (latest_close - prev_close) / prev_close * 100
@@ -73,8 +78,8 @@ class MarketAnalyzer:
         ma60 = float(close.rolling(60).mean().iloc[-1])
 
         # 均線架構與型態說明
-        bullish_alignment = (ma5 > ma20) and (ma20 > ma60)
-        bearish_alignment = (ma5 < ma20) and (ma20 < ma60)
+        bullish_alignment = (ma5 > ma20 > ma60)
+        bearish_alignment = (ma5 < ma20 < ma60)
         above_ma5 = latest_close > ma5
         above_ma20 = latest_close > ma20
         above_ma60 = latest_close > ma60
@@ -98,7 +103,11 @@ class MarketAnalyzer:
             ma_pattern = "全面空頭破線格局"
 
         # 2. 短期動能分 (25 分)
-        ret_5d = float((close.iloc[-1] - close.iloc[-6]) / close.iloc[-6] * 100) if len(close) >= 6 else change_pct
+        ret_5d = (
+            float((close.iloc[-1] - close.iloc[-6]) / close.iloc[-6] * 100)
+            if len(close) >= 6
+            else change_pct
+        )
         if ret_5d >= 2.0:
             momentum_score = 25
         elif ret_5d >= 0.0:
@@ -149,16 +158,24 @@ class MarketAnalyzer:
         # 評定市場狀態與建議
         if score >= 75:
             regime = "強烈看多 (積極做多)"
-            suggestion = "大盤均線呈多頭排列且站穩月季線，適合提高多單持股水位，鎖定強勢題材股。"
+            suggestion = (
+                "大盤均線呈多頭排列且站穩月季線，適合提高多單持股水位，鎖定強勢題材股。"
+            )
         elif score >= 60:
             regime = "謹慎偏多 (順勢操作)"
-            suggestion = "指數偏多但可能面臨震盪，建議精選個股、不盲目追高，設好動態移動停利。"
+            suggestion = (
+                "指數偏多但可能面臨震盪，建議精選個股、不盲目追高，設好動態移動停利。"
+            )
         elif score <= 35:
             regime = "空頭防禦 (嚴格減倉/避險)"
-            suggestion = "指數跌破關鍵均線，下行風險加大，建議降低持股成數或布局避險空單。"
+            suggestion = (
+                "指數跌破關鍵均線，下行風險加大，建議降低持股成數或布局避險空單。"
+            )
         else:
             regime = "區間震盪 (觀望或高拋低吸)"
-            suggestion = "均線糾結且方向不明，控制部位至三成以內，等待明確放量突破信號。"
+            suggestion = (
+                "均線糾結且方向不明，控制部位至三成以內，等待明確放量突破信號。"
+            )
 
         return {
             "status": "正常",
@@ -180,12 +197,13 @@ class MarketAnalyzer:
                 "trend": trend_score,
                 "momentum": momentum_score,
                 "volatility": vol_score,
-                "breadth": breadth_score
+                "breadth": breadth_score,
             },
             "score": score,
             "regime": regime,
-            "suggestion": suggestion
+            "suggestion": suggestion,
         }
+
 
 if __name__ == "__main__":
     analyzer = MarketAnalyzer()

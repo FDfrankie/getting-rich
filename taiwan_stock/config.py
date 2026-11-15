@@ -1,11 +1,10 @@
 import os
-from typing import List
 
 # 台股大盤與標的監控清單 (Yahoo Finance 代碼格式)
 MARKET_INDEX_SYMBOL = "^TWII"  # 加權指數
 
 # 預設自選監控池 (涵蓋半導體、AI伺服器、蘋概股、電子權值與人氣熱門股)
-DEFAULT_WATCHLIST: List[str] = [
+DEFAULT_WATCHLIST: list[str] = [
     "2330.TW",  # 台積電
     "2454.TW",  # 聯發科
     "2317.TW",  # 鴻海
@@ -36,7 +35,7 @@ PARAMS = {
     "bbands_period": 20,
     "bbands_std": 2.0,
     "atr_period": 14,
-    "atr_stop_loss_multiplier": 2.0  # ATR 停損距離乘數
+    "atr_stop_loss_multiplier": 2.0,  # ATR 停損距離乘數
 }
 
 # 每日排程時間 (24小時制)
@@ -50,5 +49,5 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 WEBHOOK_SETTINGS = {
     "enable_push": False,
     "line_notify_token": os.getenv("LINE_NOTIFY_TOKEN", ""),
-    "discord_webhook_url": os.getenv("DISCORD_WEBHOOK_URL", "")
+    "discord_webhook_url": os.getenv("DISCORD_WEBHOOK_URL", ""),
 }

@@ -1,17 +1,20 @@
 import os
+import random
 import sys
 import time
-import random
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, List, Optional
-from worldquant_brain.alpha_vault import AlphaVault
+
 from crypto_trading.data_loader import CryptoDataLoader
+from worldquant_brain.alpha_vault import AlphaVault
+
 
 class ContinuousAlphaMiner:
     """
@@ -23,6 +26,7 @@ class ContinuousAlphaMiner:
     4. 自動篩選 Sharpe >= 1.25, Fitness >= 1.0, Turnover 在 1%~70% 的優質 Alpha 存入 Vault 並同步 Google Drive
     5. 控制 CPU/記憶體佔用率 (每次迭代微休眠)，保障 Render 512MB RAM 不發生 OOM
     """
+
     def __init__(self, symbol: str = "BTC/USDT"):
         self.symbol = symbol
         self.loader = CryptoDataLoader(symbol=symbol)
@@ -30,7 +34,7 @@ class ContinuousAlphaMiner:
         self.is_running = True
         self.total_mined = 0
         self.total_accepted = 0
-        self.last_mined_alpha: Optional[Dict[str, Any]] = None
+        self.last_mined_alpha: dict[str, Any] | None = None
 
         # 基礎算子與數據欄位基因池
         self.fields = ["close", "open", "high", "low", "volume", "vwap", "returns"]
@@ -39,10 +43,10 @@ class ContinuousAlphaMiner:
             ("ts_rank", [5, 10, 20]),
             ("ts_std_dev", [10, 20]),
             ("ts_mean", [5, 10, 20]),
-            ("ts_delta", [1, 3, 5])
+            ("ts_delta", [1, 3, 5]),
         ]
 
-    def generate_candidate_expression(self) -> Dict[str, str]:
+    def generate_candidate_expression(self) -> dict[str, str]:
         """基因變異生成新的 Alpha 表達式"""
         field_a = random.choice(self.fields)
         field_b = random.choice(["volume", "vwap", "returns"])
@@ -65,7 +69,9 @@ class ContinuousAlphaMiner:
 
         return {"name": name, "expression": expr}
 
-    def backtest_alpha_oos(self, expr_dict: Dict[str, str], df: Optional[pd.DataFrame] = None) -> Optional[Dict[str, Any]]:
+    def backtest_alpha_oos(
+        self, expr_dict: dict[str, str], df: pd.DataFrame | None = None
+    ) -> dict[str, Any] | None:
         """在真實歷史資料上進行樣本外 (OOS) 快速評估"""
         if df is None or len(df) < 100:
             df = self.loader.fetch_ohlcv(limit=250)
@@ -77,7 +83,10 @@ class ContinuousAlphaMiner:
         # 評定模擬夏普、換手率與收益
         base_sharpe = float(np.random.normal(1.35, 0.28))
         base_turnover = float(np.clip(np.random.normal(0.28, 0.12), 0.05, 0.65))
-        base_fitness = float(base_sharpe * np.sqrt(max(0.1, base_sharpe * 0.15) / max(0.05, base_turnover)))
+        base_fitness = float(
+            base_sharpe
+            * np.sqrt(max(0.1, base_sharpe * 0.15) / max(0.05, base_turnover))
+        )
         base_margin = float(np.random.uniform(12.0, 35.0))  # bps
 
         # 嚴格審核門檻
@@ -90,11 +99,11 @@ class ContinuousAlphaMiner:
                 "turnover": round(base_turnover, 2),
                 "margin_bps": round(base_margin, 1),
                 "status": "VERIFIED_QUALIFIED",
-                "category": "Price-Volume / Continuous Mined"
+                "category": "Price-Volume / Continuous Mined",
             }
         return None
 
-    def mine_cycle(self) -> Optional[Dict[str, Any]]:
+    def mine_cycle(self) -> dict[str, Any] | None:
         """執行一次自動挖掘與篩選步進"""
         self.total_mined += 1
         cand = self.generate_candidate_expression()
@@ -109,11 +118,12 @@ class ContinuousAlphaMiner:
                 sharpe=result["sharpe"],
                 fitness=result["fitness"],
                 turnover=result["turnover"],
-                category=result["category"]
+                category=result["category"],
             )
             self.last_mined_alpha = result
             return result
         return None
+
 
 if __name__ == "__main__":
     miner = ContinuousAlphaMiner()
@@ -121,5 +131,7 @@ if __name__ == "__main__":
     for _ in range(10):
         res = miner.mine_cycle()
         if res:
-            print(f"🎉 成功挖掘並自動入庫高分 Alpha: {res['name']} | Sharpe: {res['sharpe']} | Fitness: {res['fitness']}")
+            print(
+                f"🎉 成功挖掘並自動入庫高分 Alpha: {res['name']} | Sharpe: {res['sharpe']} | Fitness: {res['fitness']}"
+            )
             break

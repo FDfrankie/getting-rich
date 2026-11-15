@@ -3,10 +3,10 @@ Timeframe status and policy manager.
 Governs timeframe operational states, including flagging 15s as EXPERIMENTAL_RESEARCH_ONLY
 and strictly disallowing live trading without real aggTrade WebSocket aggregation.
 """
+
 from __future__ import annotations
 
 from enum import Enum
-from typing import Tuple
 
 
 class TimeframeStatus(str, Enum):
@@ -31,15 +31,19 @@ class TimeframePolicy:
     @classmethod
     def get_status(cls, timeframe: str) -> TimeframeStatus:
         key = timeframe.strip().lower()
-        return cls._TIMEFRAME_STATUS.get(key, TimeframeStatus.EXPERIMENTAL_RESEARCH_ONLY)
+        return cls._TIMEFRAME_STATUS.get(
+            key, TimeframeStatus.EXPERIMENTAL_RESEARCH_ONLY
+        )
 
     @classmethod
-    def can_live_trade(cls, timeframe: str, has_aggtrade_feed: bool = False) -> Tuple[bool, str]:
+    def can_live_trade(
+        cls, timeframe: str, has_aggtrade_feed: bool = False
+    ) -> tuple[bool, str]:
         status = cls.get_status(timeframe)
         if status == TimeframeStatus.EXPERIMENTAL_RESEARCH_ONLY:
             if not has_aggtrade_feed:
                 return (
                     False,
-                    f"Timeframe '{timeframe}' is EXPERIMENTAL_RESEARCH_ONLY: Live orders forbidden without real aggTrade feed aggregation."
+                    f"Timeframe '{timeframe}' is EXPERIMENTAL_RESEARCH_ONLY: Live orders forbidden without real aggTrade feed aggregation.",
                 )
         return True, "OK"

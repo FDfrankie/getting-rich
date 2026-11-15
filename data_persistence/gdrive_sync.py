@@ -1,11 +1,10 @@
-import os
 import json
-import sqlite3
+import os
 import shutil
-import time
+import sqlite3
 import threading
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Any
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data_persistence")
@@ -14,6 +13,7 @@ STATE_DB_PATH = os.path.join(DATA_DIR, "system_state.db")
 SNAPSHOT_JSON_PATH = os.path.join(DATA_DIR, "cloud_state_snapshot.json")
 
 _DB_LOCK = threading.RLock()
+
 
 class LocalPersistenceService:
     """
@@ -25,6 +25,7 @@ class LocalPersistenceService:
     2. 自動產生 JSON 狀態快照 (cloud_state_snapshot.json)
     3. 自動歷史備份 (sqlite3.backup())，杜絕狀態遺失
     """
+
     def __init__(self, db_path: str = STATE_DB_PATH):
         self.db_path = db_path
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -129,13 +130,17 @@ class LocalPersistenceService:
 
     def save_state(self, key: str, value: Any):
         try:
-            val_str = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
+            val_str = (
+                json.dumps(value, ensure_ascii=False)
+                if not isinstance(value, str)
+                else value
+            )
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn = self.get_connection()
             cur = conn.cursor()
             cur.execute(
                 "REPLACE INTO bot_state (key, value, updated_at) VALUES (?, ?, ?)",
-                (key, val_str, now_str)
+                (key, val_str, now_str),
             )
             conn.commit()
             conn.close()
@@ -163,7 +168,10 @@ class LocalPersistenceService:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn = self.get_connection()
             cur = conn.cursor()
-            cur.execute("INSERT INTO bot_logs (timestamp, message) VALUES (?, ?)", (now_str, message))
+            cur.execute(
+                "INSERT INTO bot_logs (timestamp, message) VALUES (?, ?)",
+                (now_str, message),
+            )
             conn.commit()
             conn.close()
         except Exception as e:
@@ -173,24 +181,46 @@ class LocalPersistenceService:
         try:
             conn = self.get_connection()
             cur = conn.cursor()
-            cur.execute("SELECT timestamp, message FROM bot_logs ORDER BY id DESC LIMIT ?", (limit,))
+            cur.execute(
+                "SELECT timestamp, message FROM bot_logs ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
             rows = cur.fetchall()
             conn.close()
             return [f"[{r[0]}] {r[1]}" for r in reversed(rows)]
         except Exception:
             return []
 
-    def record_post_mortem(self, symbol: str, entry_price: float, exit_price: float,
-                           loss_amount: float, loss_pct: float, cause_analysis: str):
+    def record_post_mortem(
+        self,
+        symbol: str,
+        entry_price: float,
+        exit_price: float,
+        loss_amount: float,
+        loss_pct: float,
+        cause_analysis: str,
+    ):
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             today_str = datetime.now().strftime("%Y-%m-%d")
             conn = self.get_connection()
             cur = conn.cursor()
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO post_mortems (date, symbol, entry_price, exit_price, loss_amount, loss_pct, cause_analysis, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (today_str, symbol, entry_price, exit_price, loss_amount, loss_pct, cause_analysis, now_str))
+            """,
+                (
+                    today_str,
+                    symbol,
+                    entry_price,
+                    exit_price,
+                    loss_amount,
+                    loss_pct,
+                    cause_analysis,
+                    now_str,
+                ),
+            )
             conn.commit()
             conn.close()
         except Exception as e:
@@ -200,38 +230,82 @@ class LocalPersistenceService:
         try:
             conn = self.get_connection()
             cur = conn.cursor()
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id, date, symbol, entry_price, exit_price, loss_amount, loss_pct, cause_analysis, created_at
                 FROM post_mortems ORDER BY id DESC LIMIT ?
-            """, (limit,))
+            """,
+                (limit,),
+            )
             rows = cur.fetchall()
             conn.close()
-            return [{
-                "id": r[0], "date": r[1], "symbol": r[2], "entry_price": r[3],
-                "exit_price": r[4], "loss_amount": r[5], "loss_pct": r[6],
-                "cause_analysis": r[7], "created_at": r[8]
-            } for r in rows]
+            return [
+                {
+                    "id": r[0],
+                    "date": r[1],
+                    "symbol": r[2],
+                    "entry_price": r[3],
+                    "exit_price": r[4],
+                    "loss_amount": r[5],
+                    "loss_pct": r[6],
+                    "cause_analysis": r[7],
+                    "created_at": r[8],
+                }
+                for r in rows
+            ]
         except Exception:
             return []
 
-    def record_order(self, symbol: str, side: str, order_type: str, price: float, amount: float,
-                     status: str, exchange_order_id: Optional[str] = None, cost: Optional[float] = None,
-                     fee: Optional[float] = None, reason: Optional[str] = None):
+    def record_order(
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,
+        price: float,
+        amount: float,
+        status: str,
+        exchange_order_id: str | None = None,
+        cost: float | None = None,
+        fee: float | None = None,
+        reason: str | None = None,
+    ):
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn = self.get_connection()
             cur = conn.cursor()
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO orders (exchange_order_id, symbol, side, order_type, price, amount, cost, fee, status, reason, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (exchange_order_id, symbol, side, order_type, price, amount, cost, fee, status, reason, now_str))
+            """,
+                (
+                    exchange_order_id,
+                    symbol,
+                    side,
+                    order_type,
+                    price,
+                    amount,
+                    cost,
+                    fee,
+                    status,
+                    reason,
+                    now_str,
+                ),
+            )
             conn.commit()
             conn.close()
         except Exception as e:
             print(f"[!] 記錄訂單失敗: {e}")
 
-    def update_position(self, symbol: str, side: str, contracts: float, entry_price: float,
-                        unrealized_pnl: float = 0.0, leverage: int = 1):
+    def update_position(
+        self,
+        symbol: str,
+        side: str,
+        contracts: float,
+        entry_price: float,
+        unrealized_pnl: float = 0.0,
+        leverage: int = 1,
+    ):
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn = self.get_connection()
@@ -239,7 +313,8 @@ class LocalPersistenceService:
             if contracts <= 0:
                 cur.execute("DELETE FROM positions WHERE symbol = ?", (symbol,))
             else:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO positions (symbol, side, contracts, entry_price, unrealized_pnl, leverage, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(symbol) DO UPDATE SET
@@ -249,7 +324,17 @@ class LocalPersistenceService:
                         unrealized_pnl = excluded.unrealized_pnl,
                         leverage = excluded.leverage,
                         updated_at = excluded.updated_at
-                """, (symbol, side, contracts, entry_price, unrealized_pnl, leverage, now_str))
+                """,
+                    (
+                        symbol,
+                        side,
+                        contracts,
+                        entry_price,
+                        unrealized_pnl,
+                        leverage,
+                        now_str,
+                    ),
+                )
             conn.commit()
             conn.close()
         except Exception as e:
@@ -262,26 +347,48 @@ class LocalPersistenceService:
         try:
             conn = self.get_connection()
             cur = conn.cursor()
-            cur.execute("SELECT symbol, side, contracts, entry_price, unrealized_pnl, leverage, updated_at FROM positions")
+            cur.execute(
+                "SELECT symbol, side, contracts, entry_price, unrealized_pnl, leverage, updated_at FROM positions"
+            )
             rows = cur.fetchall()
             conn.close()
-            return [{
-                "symbol": r[0], "side": r[1], "contracts": r[2], "entry_price": r[3],
-                "unrealized_pnl": r[4], "leverage": r[5], "updated_at": r[6]
-            } for r in rows]
+            return [
+                {
+                    "symbol": r[0],
+                    "side": r[1],
+                    "contracts": r[2],
+                    "entry_price": r[3],
+                    "unrealized_pnl": r[4],
+                    "leverage": r[5],
+                    "updated_at": r[6],
+                }
+                for r in rows
+            ]
         except Exception:
             return []
 
-    def record_trade_log(self, symbol: str, action: str, side: str, price: float, amount: float,
-                         pnl: Optional[float] = None, pnl_pct: Optional[float] = None, reason: Optional[str] = None):
+    def record_trade_log(
+        self,
+        symbol: str,
+        action: str,
+        side: str,
+        price: float,
+        amount: float,
+        pnl: float | None = None,
+        pnl_pct: float | None = None,
+        reason: str | None = None,
+    ):
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn = self.get_connection()
             cur = conn.cursor()
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO trade_logs (symbol, action, side, price, amount, pnl, pnl_pct, reason, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (symbol, action, side, price, amount, pnl, pnl_pct, reason, now_str))
+            """,
+                (symbol, action, side, price, amount, pnl, pnl_pct, reason, now_str),
+            )
             conn.commit()
             conn.close()
         except Exception as e:
@@ -291,28 +398,47 @@ class LocalPersistenceService:
         try:
             conn = self.get_connection()
             cur = conn.cursor()
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id, symbol, action, side, price, amount, pnl, pnl_pct, reason, timestamp
                 FROM trade_logs ORDER BY id DESC LIMIT ?
-            """, (limit,))
+            """,
+                (limit,),
+            )
             rows = cur.fetchall()
             conn.close()
-            return [{
-                "id": r[0], "symbol": r[1], "action": r[2], "side": r[3], "price": r[4],
-                "amount": r[5], "pnl": r[6], "pnl_pct": r[7], "reason": r[8], "timestamp": r[9]
-            } for r in rows]
+            return [
+                {
+                    "id": r[0],
+                    "symbol": r[1],
+                    "action": r[2],
+                    "side": r[3],
+                    "price": r[4],
+                    "amount": r[5],
+                    "pnl": r[6],
+                    "pnl_pct": r[7],
+                    "reason": r[8],
+                    "timestamp": r[9],
+                }
+                for r in rows
+            ]
         except Exception:
             return []
 
-    def record_equity(self, total_equity: float, balance_usdt: float, unrealized_pnl: float = 0.0):
+    def record_equity(
+        self, total_equity: float, balance_usdt: float, unrealized_pnl: float = 0.0
+    ):
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             conn = self.get_connection()
             cur = conn.cursor()
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO account_equity (total_equity, balance_usdt, unrealized_pnl, timestamp)
                 VALUES (?, ?, ?, ?)
-            """, (total_equity, balance_usdt, unrealized_pnl, now_str))
+            """,
+                (total_equity, balance_usdt, unrealized_pnl, now_str),
+            )
             conn.commit()
             conn.close()
         except Exception as e:
@@ -322,15 +448,24 @@ class LocalPersistenceService:
         try:
             conn = self.get_connection()
             cur = conn.cursor()
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT total_equity, balance_usdt, unrealized_pnl, timestamp
                 FROM account_equity ORDER BY id DESC LIMIT ?
-            """, (limit,))
+            """,
+                (limit,),
+            )
             rows = cur.fetchall()
             conn.close()
-            return [{
-                "total_equity": r[0], "balance_usdt": r[1], "unrealized_pnl": r[2], "timestamp": r[3]
-            } for r in reversed(rows)]
+            return [
+                {
+                    "total_equity": r[0],
+                    "balance_usdt": r[1],
+                    "unrealized_pnl": r[2],
+                    "timestamp": r[3],
+                }
+                for r in reversed(rows)
+            ]
         except Exception:
             return []
 
@@ -338,17 +473,32 @@ class LocalPersistenceService:
         try:
             conn = self.get_connection()
             cur = conn.cursor()
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id, exchange_order_id, symbol, side, order_type, price, amount, cost, fee, status, reason, timestamp
                 FROM orders ORDER BY id DESC LIMIT ?
-            """, (limit,))
+            """,
+                (limit,),
+            )
             rows = cur.fetchall()
             conn.close()
-            return [{
-                "id": r[0], "exchange_order_id": r[1], "symbol": r[2], "side": r[3],
-                "order_type": r[4], "price": r[5], "amount": r[6], "cost": r[7],
-                "fee": r[8], "status": r[9], "reason": r[10], "timestamp": r[11]
-            } for r in rows]
+            return [
+                {
+                    "id": r[0],
+                    "exchange_order_id": r[1],
+                    "symbol": r[2],
+                    "side": r[3],
+                    "order_type": r[4],
+                    "price": r[5],
+                    "amount": r[6],
+                    "cost": r[7],
+                    "fee": r[8],
+                    "status": r[9],
+                    "reason": r[10],
+                    "timestamp": r[11],
+                }
+                for r in rows
+            ]
         except Exception:
             return []
 
@@ -360,8 +510,12 @@ class LocalPersistenceService:
             conn = self.get_connection()
             cur = conn.cursor()
             cur.execute("SELECT key, value, updated_at FROM bot_state")
-            state_dict = {r[0]: {"value": r[1], "updated_at": r[2]} for r in cur.fetchall()}
-            cur.execute("SELECT timestamp, message FROM bot_logs ORDER BY id DESC LIMIT 100")
+            state_dict = {
+                r[0]: {"value": r[1], "updated_at": r[2]} for r in cur.fetchall()
+            }
+            cur.execute(
+                "SELECT timestamp, message FROM bot_logs ORDER BY id DESC LIMIT 100"
+            )
             logs = [{"timestamp": r[0], "message": r[1]} for r in cur.fetchall()]
             conn.close()
 
@@ -369,7 +523,7 @@ class LocalPersistenceService:
                 "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "state": state_dict,
                 "recent_logs": logs,
-                "recent_post_mortems": self.get_recent_post_mortems(10)
+                "recent_post_mortems": self.get_recent_post_mortems(10),
             }
             with open(SNAPSHOT_JSON_PATH, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -391,7 +545,13 @@ class LocalPersistenceService:
                     src_conn.close()
                 except Exception:
                     shutil.copy2(self.db_path, backup_file)
-                existing = sorted([os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR) if f.endswith(".db")])
+                existing = sorted(
+                    [
+                        os.path.join(BACKUP_DIR, f)
+                        for f in os.listdir(BACKUP_DIR)
+                        if f.endswith(".db")
+                    ]
+                )
                 if len(existing) > 10:
                     for old_file in existing[:-10]:
                         try:
@@ -401,45 +561,73 @@ class LocalPersistenceService:
         except Exception as e:
             print(f"[!] 建立自動備份失敗: {e}")
 
-    def sync_to_gdrive(self) -> Dict[str, Any]:
+    def sync_to_gdrive(self) -> dict[str, Any]:
         """
         支援 Google Drive API 雙向同調：
         檢查環境變數 GOOGLE_DRIVE_CREDENTIALS 與 GOOGLE_DRIVE_FOLDER_ID。
         若無真實 OAuth/服務帳戶，則誠實以 LOCAL_PERSISTENCE 運作。
         """
-        creds_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS", "") or os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON", "")
+        creds_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS", "") or os.getenv(
+            "GOOGLE_DRIVE_CREDENTIALS_JSON", ""
+        )
         folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
         snapshot_file = self.export_snapshot_json()
-        
+
         if creds_json and folder_id:
             try:
                 from google.oauth2 import service_account
                 from googleapiclient.discovery import build
                 from googleapiclient.http import MediaFileUpload
-                
-                info = json.loads(creds_json) if creds_json.startswith("{") else json.load(open(creds_json))
-                credentials = service_account.Credentials.from_service_account_info(
-                    info, scopes=['https://www.googleapis.com/auth/drive']
-                )
-                service = build('drive', 'v3', credentials=credentials)
-                
-                query = f"name = 'system_state.db' and '{folder_id}' in parents and trashed = false"
-                response = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
-                files = response.get('files', [])
 
-                media = MediaFileUpload(self.db_path, mimetype='application/x-sqlite3', resumable=True)
+                info = (
+                    json.loads(creds_json)
+                    if creds_json.startswith("{")
+                    else json.load(open(creds_json))
+                )
+                credentials = service_account.Credentials.from_service_account_info(
+                    info, scopes=["https://www.googleapis.com/auth/drive"]
+                )
+                service = build("drive", "v3", credentials=credentials)
+
+                query = f"name = 'system_state.db' and '{folder_id}' in parents and trashed = false"
+                response = (
+                    service.files()
+                    .list(q=query, spaces="drive", fields="files(id, name)")
+                    .execute()
+                )
+                files = response.get("files", [])
+
+                media = MediaFileUpload(
+                    self.db_path, mimetype="application/x-sqlite3", resumable=True
+                )
                 if files:
-                    file_id = files[0]['id']
+                    file_id = files[0]["id"]
                     service.files().update(fileId=file_id, media_body=media).execute()
                 else:
-                    file_metadata = {'name': 'system_state.db', 'parents': [folder_id]}
-                    service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-                return {"status": "SUCCESS", "mode": "REMOTE_API", "synced_at": datetime.now().isoformat()}
+                    file_metadata = {"name": "system_state.db", "parents": [folder_id]}
+                    service.files().create(
+                        body=file_metadata, media_body=media, fields="id"
+                    ).execute()
+                return {
+                    "status": "SUCCESS",
+                    "mode": "REMOTE_API",
+                    "synced_at": datetime.now().isoformat(),
+                }
             except Exception as e:
-                return {"status": "API_ERROR_FALLBACK_LOCAL", "error": str(e), "snapshot": snapshot_file}
+                return {
+                    "status": "API_ERROR_FALLBACK_LOCAL",
+                    "error": str(e),
+                    "snapshot": snapshot_file,
+                }
         else:
             self.create_rolling_backup()
-            return {"status": "SUCCESS", "mode": "LOCAL_PERSISTENCE", "snapshot": snapshot_file, "synced_at": datetime.now().isoformat()}
+            return {
+                "status": "SUCCESS",
+                "mode": "LOCAL_PERSISTENCE",
+                "snapshot": snapshot_file,
+                "synced_at": datetime.now().isoformat(),
+            }
+
 
 # 相容舊版名稱別名
 GDrivePersistenceSync = LocalPersistenceService

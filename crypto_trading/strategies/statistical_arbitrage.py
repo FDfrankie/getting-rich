@@ -1,6 +1,8 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
+
 from crypto_trading.config import STRATEGY_PARAMS
+
 
 class StatisticalArbitrageStrategy:
     """
@@ -9,27 +11,33 @@ class StatisticalArbitrageStrategy:
     - 價格偏離滾動均值達極端統計顯著性時 (Z-score > 2.0 或 < -2.0) 進行反向均值回歸交易
     - 價格收斂至中樞帶 (Z-score 接近 0) 時獲利平倉
     """
-    def __init__(self, window: int = 30, entry_z: float = STRATEGY_PARAMS['zscore_entry_threshold'], exit_z: float = STRATEGY_PARAMS['zscore_exit_threshold']):
+
+    def __init__(
+        self,
+        window: int = 30,
+        entry_z: float = STRATEGY_PARAMS["zscore_entry_threshold"],
+        exit_z: float = STRATEGY_PARAMS["zscore_exit_threshold"],
+    ):
         self.window = window
         self.entry_z = entry_z
         self.exit_z = exit_z
 
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
-        close = df['Close']
+        close = df["Close"]
 
         # 計算滾動均值與標準差
         rolling_mean = close.rolling(self.window).mean()
         rolling_std = close.rolling(self.window).std()
 
         # 標準化 Z-Score: (Price - Mean) / Std
-        df['ZSCORE'] = (close - rolling_mean) / (rolling_std + 1e-9)
+        df["ZSCORE"] = (close - rolling_mean) / (rolling_std + 1e-9)
 
         signals = np.zeros(len(df))
         position = 0
 
         for i in range(self.window, len(df)):
-            z = df['ZSCORE'].iloc[i]
+            z = df["ZSCORE"].iloc[i]
             if position == 0:
                 if z < -self.entry_z:
                     # 價格極度超跌 (偏離超過 -2 個標準差)，做多博取均值回歸
@@ -47,14 +55,16 @@ class StatisticalArbitrageStrategy:
                     position = 0
             signals[i] = position
 
-        df['signal'] = signals
+        df["signal"] = signals
         return df
+
 
 if __name__ == "__main__":
     from crypto_trading.data_loader import CryptoDataLoader
+
     loader = CryptoDataLoader()
     data = loader.fetch_ohlcv(limit=200)
     strat = StatisticalArbitrageStrategy()
     res = strat.generate_signals(data)
     print("=== 統計套利 Z-Score 策略信號統計 ===")
-    print(res['signal'].value_counts())
+    print(res["signal"].value_counts())

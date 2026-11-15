@@ -1,7 +1,7 @@
 """
 Tests for multi-timeframe causality and operational restrictions (15s status).
 """
-import pytest
+
 from crypto_trading.timeframe_policy import TimeframePolicy, TimeframeStatus
 
 

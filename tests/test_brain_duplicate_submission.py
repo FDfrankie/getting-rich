@@ -2,10 +2,12 @@
 Tests for WorldQuant BRAIN duplicate submission idempotency.
 Complies with docs/BRAIN_WEB_API_ASYNC_FIX_SPEC.md.
 """
+
 from __future__ import annotations
 
 import unittest
 from unittest.mock import MagicMock
+
 from worldquant_brain.brain_job_queue import BrainJobQueue, compute_simulation_key
 
 
@@ -18,7 +20,7 @@ class TestBrainDuplicateSubmission(unittest.TestCase):
             "sharpe": None,
             "fitness": None,
             "turnover": None,
-            "margin": None
+            "margin": None,
         }
         self.queue = BrainJobQueue(self.mock_client, default_poll_interval=0.1)
 

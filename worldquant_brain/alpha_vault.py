@@ -1,8 +1,9 @@
-import os
 import json
+import os
 import sqlite3
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Any
+
 
 class AlphaVault:
     """
@@ -13,10 +14,13 @@ class AlphaVault:
     3. 自動保存表達式、回測指標、市場設定與時間戳記
     4. 批量匯入、匯出 (JSON / CSV) 與查詢統計
     """
-    DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "alpha_vault.db")
-    DEFAULT_EXPORT_JSON = os.path.join(os.path.dirname(__file__), "verified_alphas.json")
 
-    def __init__(self, db_path: Optional[str] = None):
+    DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "alpha_vault.db")
+    DEFAULT_EXPORT_JSON = os.path.join(
+        os.path.dirname(__file__), "verified_alphas.json"
+    )
+
+    def __init__(self, db_path: str | None = None):
         self.db_path = db_path or self.DEFAULT_DB_PATH
         self._shared_conn = None
         if self.db_path == ":memory:":
@@ -98,15 +102,15 @@ class AlphaVault:
         margin: float = 0.0,
         tags: str = "",
         notes: str = "",
-        force: bool = False
-    ) -> Dict[str, Any]:
+        force: bool = False,
+    ) -> dict[str, Any]:
         """儲存 Alpha。若未達標且 force=False，則拒絕存入"""
         is_qualified = self.passes_qualification(sharpe, fitness, turnover)
         if not is_qualified and not force:
             return {
                 "success": False,
                 "message": f"未達 BRAIN 官方審核門檻 (Sharpe>=1.25, Fitness>=1.0, Turnover 1%~70%)。目前: Sharpe={sharpe}, Fitness={fitness}, Turnover={turnover}",
-                "qualified": False
+                "qualified": False,
             }
 
         if 2.0 < turnover <= 70.0:
@@ -117,19 +121,33 @@ class AlphaVault:
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO alphas (
                     name, expression, category, universe, decay, delay,
                     sharpe, fitness, turnover, returns, drawdown, margin,
                     status, tags, notes, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                name, expression.strip(), category, universe, decay, delay,
-                round(sharpe, 4), round(fitness, 4), round(norm_turnover, 4),
-                round(returns, 4), round(drawdown, 4), round(margin, 4),
-                "VERIFIED" if is_qualified else "SUB_THRESHOLD",
-                tags, notes, now_str
-            ))
+            """,
+                (
+                    name,
+                    expression.strip(),
+                    category,
+                    universe,
+                    decay,
+                    delay,
+                    round(sharpe, 4),
+                    round(fitness, 4),
+                    round(norm_turnover, 4),
+                    round(returns, 4),
+                    round(drawdown, 4),
+                    round(margin, 4),
+                    "VERIFIED" if is_qualified else "SUB_THRESHOLD",
+                    tags,
+                    notes,
+                    now_str,
+                ),
+            )
             alpha_id = cursor.lastrowid
             conn.commit()
 
@@ -140,10 +158,12 @@ class AlphaVault:
             "success": True,
             "alpha_id": alpha_id,
             "qualified": is_qualified,
-            "message": "Alpha 已成功登記入庫！"
+            "message": "Alpha 已成功登記入庫！",
         }
 
-    def list_alphas(self, status: Optional[str] = None, category: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_alphas(
+        self, status: str | None = None, category: str | None = None
+    ) -> list[dict[str, Any]]:
         """查詢已保存的 Alpha 清單"""
         query = "SELECT * FROM alphas WHERE 1=1"
         params = []
@@ -172,7 +192,7 @@ class AlphaVault:
             self.export_to_json(self.DEFAULT_EXPORT_JSON)
         return deleted
 
-    def export_to_json(self, file_path: Optional[str] = None) -> str:
+    def export_to_json(self, file_path: str | None = None) -> str:
         """將倉庫 Alpha 導出為標準 JSON"""
         target = file_path or self.DEFAULT_EXPORT_JSON
         alphas = self.list_alphas()
@@ -180,7 +200,7 @@ class AlphaVault:
             json.dump(alphas, f, indent=2, ensure_ascii=False)
         return target
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """統計目前倉庫指標與分佈"""
         alphas = self.list_alphas()
         if not alphas:
@@ -189,7 +209,7 @@ class AlphaVault:
                 "verified_count": 0,
                 "avg_sharpe": 0.0,
                 "avg_fitness": 0.0,
-                "avg_turnover": 0.0
+                "avg_turnover": 0.0,
             }
 
         verified = [a for a in alphas if a["status"] == "VERIFIED"]
@@ -202,7 +222,7 @@ class AlphaVault:
             "verified_count": len(verified),
             "avg_sharpe": round(avg_sharpe, 2),
             "avg_fitness": round(avg_fitness, 2),
-            "avg_turnover_pct": round(avg_turnover * 100, 2)
+            "avg_turnover_pct": round(avg_turnover * 100, 2),
         }
 
     def seed_initial_verified_alphas(self):
@@ -221,7 +241,7 @@ class AlphaVault:
                 "returns": 0.185,
                 "drawdown": 0.062,
                 "tags": "Price, Reversion, USA",
-                "notes": "經典 10 日短期超買超賣反轉因子，在 S&P 500 / Russell 3000 均具有穩定夏普"
+                "notes": "經典 10 日短期超買超賣反轉因子，在 S&P 500 / Russell 3000 均具有穩定夏普",
             },
             {
                 "name": "Volume_Weighted_Breakout_Alpha",
@@ -233,7 +253,7 @@ class AlphaVault:
                 "returns": 0.224,
                 "drawdown": 0.071,
                 "tags": "Volume, Volatility, Breakout",
-                "notes": "成交量與振幅雙加權動量因子，捕捉量價齊揚的強勢噴出段"
+                "notes": "成交量與振幅雙加權動量因子，捕捉量價齊揚的強勢噴出段",
             },
             {
                 "name": "Subindustry_Neutral_MultiScale_RSI",
@@ -245,8 +265,8 @@ class AlphaVault:
                 "returns": 0.268,
                 "drawdown": 0.054,
                 "tags": "Neutralization, MultiScale, Stochastic",
-                "notes": "細分行業中性化的隨機擺動因子，對沖行業系統性風險，品質極高"
-            }
+                "notes": "細分行業中性化的隨機擺動因子，對沖行業系統性風險，品質極高",
+            },
         ]
 
         for p in presets:
@@ -260,7 +280,7 @@ class AlphaVault:
                 returns=p["returns"],
                 drawdown=p["drawdown"],
                 tags=p["tags"],
-                notes=p["notes"]
+                notes=p["notes"],
             )
 
     @staticmethod
@@ -268,8 +288,8 @@ class AlphaVault:
         quarterly_pnl_usd: float,
         sharpe: float,
         turnover_pct: float,
-        is_consultant: bool = True
-    ) -> Dict[str, Any]:
+        is_consultant: bool = True,
+    ) -> dict[str, Any]:
         """
         WorldQuant BRAIN 量化顧問季度分潤與獎金計算公式 (Quant PnL & Payouts Calculation):
         公式原則：
@@ -288,7 +308,7 @@ class AlphaVault:
                 "sharpe": sharpe,
                 "payout_usd": 0.0,
                 "formula_notes": "未達 BRAIN 顧問資格或 Sharpe < 1.25，無季度提成。",
-                "status": "QUALIFIED" if sharpe >= 1.25 else "UNQUALIFIED"
+                "status": "QUALIFIED" if sharpe >= 1.25 else "UNQUALIFIED",
             }
 
         # 基礎提成率 8%
@@ -319,11 +339,11 @@ class AlphaVault:
             "sharpe_multiplier": sharpe_mult,
             "turnover_penalty": round(to_penalty, 3),
             "final_estimated_payout_usd": round(final_payout, 2),
-            "status": "CONSULTANT_TIER_PAYOUT"
+            "status": "CONSULTANT_TIER_PAYOUT",
         }
 
     @staticmethod
-    def get_brain_roadmap_guide() -> List[Dict[str, Any]]:
+    def get_brain_roadmap_guide() -> list[dict[str, Any]]:
         """
         WorldQuant BRAIN 變現與提交標準完整步驟 (從 Simulation 到 Submit 再到 Consultant):
         """
@@ -332,21 +352,22 @@ class AlphaVault:
                 "step": 1,
                 "title": "Alpha 設計與模擬回測 (Simulation)",
                 "description": "於平台輸入表達式，設定 Universe (如 USA TOP3000), Delay=1, Decay=4~8, Neutralization=Subindustry。點擊 Simulate 跑出 5 年以上樣本內外 (In/Out Sample) 績效。",
-                "thresholds": "Sharpe >= 1.25, Fitness >= 1.0, Turnover 1% ~ 70%, Margin > 10 bps, Drawdown < 10%"
+                "thresholds": "Sharpe >= 1.25, Fitness >= 1.0, Turnover 1% ~ 70%, Margin > 10 bps, Drawdown < 10%",
             },
             {
                 "step": 2,
                 "title": "相關性檢測與正式提交 (Check Correlation & Submit)",
                 "description": "點擊 Check Correlation，比對個人與全平台庫存的 Self-Correlation (須 < 0.70)。通過後點擊 Submit Alpha 進入官方評審庫，每通過一顆累積相應積分 (Points)。",
-                "thresholds": "Self Correlation < 0.70, Submissions limit: 依用戶等級每日 10~50 顆"
+                "thresholds": "Self Correlation < 0.70, Submissions limit: 依用戶等級每日 10~50 顆",
             },
             {
                 "step": 3,
                 "title": "晉升 Research Consultant (簽約與季度分潤)",
                 "description": "當積分達到 Gold 階級 (累積達標 Alphas 並穩定產出)，WorldQuant 官方將寄發合約邀請簽署成為 Research Consultant。提交被評選為 Verified / Prod 的 Alpha 將進入真實基金交易池，每季根據貢獻度與 PnL 結算美金分潤至國際外幣帳戶！",
-                "thresholds": "Gold / Platinum 階級, 簽署國際量化顧問保密合約"
-            }
+                "thresholds": "Gold / Platinum 階級, 簽署國際量化顧問保密合約",
+            },
         ]
+
 
 if __name__ == "__main__":
     vault = AlphaVault()
@@ -354,4 +375,6 @@ if __name__ == "__main__":
     print("=== WorldQuant BRAIN Alpha 倉庫自檢 ===")
     print("統計數據:", vault.get_stats())
     for a in vault.list_alphas():
-        print(f"[{a['status']}] ID={a['id']} | {a['name']} | Sharpe: {a['sharpe']} | Fitness: {a['fitness']}")
+        print(
+            f"[{a['status']}] ID={a['id']} | {a['name']} | Sharpe: {a['sharpe']} | Fitness: {a['fitness']}"
+        )

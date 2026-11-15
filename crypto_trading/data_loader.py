@@ -1,20 +1,24 @@
 """
 CryptoDataLoader: provides real and synthetic OHLCV data under explicit causal policies.
 """
+
 from __future__ import annotations
 
-import os
 import hashlib
-import time
-from enum import Enum
-from datetime import datetime, timezone
+import os
 from dataclasses import dataclass
-from typing import Optional, Union
+from datetime import datetime, timezone
+from enum import Enum
+
 import numpy as np
 import pandas as pd
 
 from crypto_trading.config import DEFAULT_SYMBOL, DEFAULT_TIMEFRAME
-from crypto_trading.data_quality import validate_ohlcv, DataQualityError, parse_timeframe_delta
+from crypto_trading.data_quality import (
+    DataQualityError,
+    parse_timeframe_delta,
+    validate_ohlcv,
+)
 
 
 class DataSource(str, Enum):
@@ -26,7 +30,7 @@ class DataSource(str, Enum):
 
 class DataUnavailableError(Exception):
     """Raised when data cannot be retrieved and synthetic fallback is disallowed."""
-    pass
+
 
 
 @dataclass
@@ -46,7 +50,10 @@ class CryptoDataLoader:
     2. timestamp 一律為 UTC-aware，並嚴格排除未收盤的當前即時 candle。
     3. 合成數據 seed 改用 hashlib.sha256 具備確定性與統計可重現性。
     """
-    def __init__(self, symbol: str = DEFAULT_SYMBOL, timeframe: str = DEFAULT_TIMEFRAME):
+
+    def __init__(
+        self, symbol: str = DEFAULT_SYMBOL, timeframe: str = DEFAULT_TIMEFRAME
+    ):
         self.symbol = symbol
         self.timeframe = timeframe
         self.cache_dir = os.path.join(os.path.dirname(__file__), "data_cache")
@@ -55,10 +62,10 @@ class CryptoDataLoader:
     def fetch_ohlcv_result(
         self,
         limit: int = 500,
-        symbol: Optional[str] = None,
-        timeframe: Optional[str] = None,
+        symbol: str | None = None,
+        timeframe: str | None = None,
         allow_synthetic: bool = False,
-        validate: bool = False
+        validate: bool = False,
     ) -> OHLCVResult:
         """獲取 OHLCVResult 包含結構與來源元資料"""
         target_symbol = symbol or self.symbol
@@ -70,12 +77,20 @@ class CryptoDataLoader:
         ccxt_err = None
         try:
             import ccxt
-            exchange_class = getattr(ccxt, 'binance')({'enableRateLimit': True, 'timeout': 5000})
-            ohlcv = exchange_class.fetch_ohlcv(target_symbol, timeframe=target_timeframe, limit=limit + 1)
+
+            exchange_class = ccxt.binance(
+                {"enableRateLimit": True, "timeout": 5000}
+            )
+            ohlcv = exchange_class.fetch_ohlcv(
+                target_symbol, timeframe=target_timeframe, limit=limit + 1
+            )
             if ohlcv and len(ohlcv) > 0:
-                df = pd.DataFrame(ohlcv, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume'])
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
-                df.set_index('timestamp', inplace=True)
+                df = pd.DataFrame(
+                    ohlcv,
+                    columns=["timestamp", "Open", "High", "Low", "Close", "Volume"],
+                )
+                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+                df.set_index("timestamp", inplace=True)
 
                 # 排除未收盤 candle (若最新 candle close > now_utc，將其剃除)
                 if len(df) > 0:
@@ -91,15 +106,19 @@ class CryptoDataLoader:
 
                 if len(df) > 0:
                     if validate:
-                        ok, reason = validate_ohlcv(df, timeframe=target_timeframe, now_utc=now_utc)
+                        ok, reason = validate_ohlcv(
+                            df, timeframe=target_timeframe, now_utc=now_utc
+                        )
                         if not ok:
-                            raise DataQualityError(f"Remote OHLCV failed data quality check: {reason}")
+                            raise DataQualityError(
+                                f"Remote OHLCV failed data quality check: {reason}"
+                            )
                     return OHLCVResult(
                         df=df,
                         source=DataSource.LIVE,
                         symbol=target_symbol,
                         timeframe=target_timeframe,
-                        is_synthetic=False
+                        is_synthetic=False,
                     )
         except Exception as e:
             ccxt_err = e
@@ -115,27 +134,31 @@ class CryptoDataLoader:
             limit=limit,
             symbol=target_symbol,
             timeframe=target_timeframe,
-            now_utc=now_utc
+            now_utc=now_utc,
         )
         if validate:
-            ok, reason = validate_ohlcv(synth_df, timeframe=target_timeframe, now_utc=now_utc)
+            ok, reason = validate_ohlcv(
+                synth_df, timeframe=target_timeframe, now_utc=now_utc
+            )
             if not ok:
-                raise DataQualityError(f"Synthetic OHLCV failed data quality check: {reason}")
+                raise DataQualityError(
+                    f"Synthetic OHLCV failed data quality check: {reason}"
+                )
 
         return OHLCVResult(
             df=synth_df,
             source=DataSource.SYNTHETIC,
             symbol=target_symbol,
             timeframe=target_timeframe,
-            is_synthetic=True
+            is_synthetic=True,
         )
 
     def fetch_ohlcv(
         self,
         limit: int = 500,
-        symbol: Optional[str] = None,
-        timeframe: Optional[str] = None,
-        allow_synthetic: bool = True
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        allow_synthetic: bool = True,
     ) -> pd.DataFrame:
         """
         向後相容接口：預設 allow_synthetic=True (若回測/離線研究未特別要求)
@@ -145,23 +168,23 @@ class CryptoDataLoader:
             limit=limit,
             symbol=symbol,
             timeframe=timeframe,
-            allow_synthetic=allow_synthetic
+            allow_synthetic=allow_synthetic,
         )
         return res.df
 
     def _generate_synthetic_ohlcv(
         self,
         limit: int = 500,
-        symbol: Optional[str] = None,
-        timeframe: Optional[str] = None,
-        now_utc: Optional[datetime] = None
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        now_utc: datetime | None = None,
     ) -> pd.DataFrame:
         """使用 hashlib.sha256 確定性 seed 生成幾何布朗運動 (GBM) 與厚尾特徵的量化測試數據"""
         target_symbol = symbol or self.symbol
         target_tf = timeframe or self.timeframe
 
         seed_str = f"{target_symbol}_{target_tf}"
-        seed_hash = hashlib.sha256(seed_str.encode('utf-8')).hexdigest()
+        seed_hash = hashlib.sha256(seed_str.encode("utf-8")).hexdigest()
         seed_int = int(seed_hash[:8], 16)
         rng = np.random.RandomState(seed_int)
 
@@ -171,11 +194,11 @@ class CryptoDataLoader:
             now_utc = now_utc.replace(tzinfo=timezone.utc)
 
         delta = parse_timeframe_delta(target_tf)
-        if 's' in target_tf:
+        if "s" in target_tf:
             dt = delta.total_seconds() / (365 * 24 * 3600)
-        elif 'm' in target_tf:
+        elif "m" in target_tf:
             dt = (delta.total_seconds() / 60) / (365 * 24 * 60)
-        elif 'd' in target_tf:
+        elif "d" in target_tf:
             dt = (delta.total_seconds() / 86400) / 365
         else:
             dt = (delta.total_seconds() / 3600) / (365 * 24)
@@ -204,7 +227,9 @@ class CryptoDataLoader:
             shock = rng.normal(0, 1)
             if rng.rand() < 0.05:
                 shock *= 2.5
-            p = prices[-1] * np.exp((mu - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * shock)
+            p = prices[-1] * np.exp(
+                (mu - 0.5 * sigma**2) * dt + sigma * np.sqrt(dt) * shock
+            )
             prices.append(max(p, 0.01))
 
         df_list = []
@@ -218,17 +243,19 @@ class CryptoDataLoader:
             low = min(low, open_p, close_p)
             vol = rng.uniform(50, 500) * (p / 1000)
 
-            df_list.append({
-                'timestamp': timestamps[i],
-                'Open': round(open_p, 2),
-                'High': round(high, 2),
-                'Low': round(low, 2),
-                'Close': round(close_p, 2),
-                'Volume': round(vol, 2)
-            })
+            df_list.append(
+                {
+                    "timestamp": timestamps[i],
+                    "Open": round(open_p, 2),
+                    "High": round(high, 2),
+                    "Low": round(low, 2),
+                    "Close": round(close_p, 2),
+                    "Volume": round(vol, 2),
+                }
+            )
 
         df = pd.DataFrame(df_list)
-        df.set_index('timestamp', inplace=True)
+        df.set_index("timestamp", inplace=True)
         return df
 
 

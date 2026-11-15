@@ -1,9 +1,9 @@
-import time
 import sqlite3
-import threading
-from typing import Dict, Any, Optional
 from datetime import datetime
-from data_persistence.gdrive_sync import STATE_DB_PATH, _DB_LOCK
+from typing import Any
+
+from data_persistence.gdrive_sync import _DB_LOCK, STATE_DB_PATH
+
 
 class ManualPositionController:
     """
@@ -16,6 +16,7 @@ class ManualPositionController:
     5. Bot cycle 不得覆蓋被人工接管的倉位
     6. 所有手動操作走結構化事件與風控檢驗
     """
+
     def __init__(self, db_path: str = STATE_DB_PATH):
         self.db_path = db_path
         self._init_db()
@@ -50,13 +51,21 @@ class ManualPositionController:
             conn.commit()
             conn.close()
 
-    def lock_symbol(self, symbol: str, reason: str = "manual_intervention", ttl_seconds: int = 3600, sl_price: Optional[float] = None, tp_price: Optional[float] = None) -> Dict[str, Any]:
+    def lock_symbol(
+        self,
+        symbol: str,
+        reason: str = "manual_intervention",
+        ttl_seconds: int = 3600,
+        sl_price: float | None = None,
+        tp_price: float | None = None,
+    ) -> dict[str, Any]:
         """鎖定幣種倉位為手動接管"""
         now = datetime.utcnow().isoformat()
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             cur = conn.cursor()
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO manual_overrides (symbol, is_locked, lock_reason, locked_at, ttl_seconds, stop_loss_price, take_profit_price, updated_at)
                 VALUES (?, 1, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(symbol) DO UPDATE SET
@@ -67,11 +76,15 @@ class ManualPositionController:
                     stop_loss_price = COALESCE(excluded.stop_loss_price, manual_overrides.stop_loss_price),
                     take_profit_price = COALESCE(excluded.take_profit_price, manual_overrides.take_profit_price),
                     updated_at = excluded.updated_at
-            """, (symbol, reason, now, ttl_seconds, sl_price, tp_price, now))
-            
+            """,
+                (symbol, reason, now, ttl_seconds, sl_price, tp_price, now),
+            )
+
             # 記錄結構化事件
-            cur.execute("INSERT INTO manual_events (symbol, action, amount, price, metadata, timestamp) VALUES (?, 'LOCK', NULL, NULL, ?, ?)",
-                        (symbol, f"Locked with reason: {reason}, TTL: {ttl_seconds}", now))
+            cur.execute(
+                "INSERT INTO manual_events (symbol, action, amount, price, metadata, timestamp) VALUES (?, 'LOCK', NULL, NULL, ?, ?)",
+                (symbol, f"Locked with reason: {reason}, TTL: {ttl_seconds}", now),
+            )
             conn.commit()
             conn.close()
 
@@ -80,17 +93,23 @@ class ManualPositionController:
             "symbol": symbol,
             "is_locked": True,
             "ttl_seconds": ttl_seconds,
-            "reason": reason
+            "reason": reason,
         }
 
-    def unlock_symbol(self, symbol: str) -> Dict[str, Any]:
+    def unlock_symbol(self, symbol: str) -> dict[str, Any]:
         """解除手動鎖定，交還給 Bot 自動交易"""
         now = datetime.utcnow().isoformat()
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             cur = conn.cursor()
-            cur.execute("UPDATE manual_overrides SET is_locked = 0, updated_at = ? WHERE symbol = ?", (now, symbol))
-            cur.execute("INSERT INTO manual_events (symbol, action, amount, price, metadata, timestamp) VALUES (?, 'UNLOCK', NULL, NULL, 'Manual unlock', ?)", (symbol, now))
+            cur.execute(
+                "UPDATE manual_overrides SET is_locked = 0, updated_at = ? WHERE symbol = ?",
+                (now, symbol),
+            )
+            cur.execute(
+                "INSERT INTO manual_events (symbol, action, amount, price, metadata, timestamp) VALUES (?, 'UNLOCK', NULL, NULL, 'Manual unlock', ?)",
+                (symbol, now),
+            )
             conn.commit()
             conn.close()
 
@@ -101,7 +120,10 @@ class ManualPositionController:
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             cur = conn.cursor()
-            cur.execute("SELECT is_locked, locked_at, ttl_seconds FROM manual_overrides WHERE symbol = ?", (symbol,))
+            cur.execute(
+                "SELECT is_locked, locked_at, ttl_seconds FROM manual_overrides WHERE symbol = ?",
+                (symbol,),
+            )
             row = cur.fetchone()
             if not row:
                 conn.close()
@@ -118,7 +140,10 @@ class ManualPositionController:
                 elapsed = (datetime.utcnow() - locked_dt).total_seconds()
                 if elapsed > ttl:
                     # TTL 已過期，自動解鎖
-                    cur.execute("UPDATE manual_overrides SET is_locked = 0, updated_at = ? WHERE symbol = ?", (datetime.utcnow().isoformat(), symbol))
+                    cur.execute(
+                        "UPDATE manual_overrides SET is_locked = 0, updated_at = ? WHERE symbol = ?",
+                        (datetime.utcnow().isoformat(), symbol),
+                    )
                     conn.commit()
                     conn.close()
                     return False
@@ -128,23 +153,33 @@ class ManualPositionController:
             conn.close()
             return True
 
-    def set_sl_tp(self, symbol: str, stop_loss: Optional[float] = None, take_profit: Optional[float] = None) -> Dict[str, Any]:
+    def set_sl_tp(
+        self,
+        symbol: str,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+    ) -> dict[str, Any]:
         """設定或更新停損停利保護單"""
         now = datetime.utcnow().isoformat()
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             cur = conn.cursor()
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO manual_overrides (symbol, is_locked, lock_reason, locked_at, ttl_seconds, stop_loss_price, take_profit_price, updated_at)
                 VALUES (?, 1, 'sl_tp_updated', ?, 3600, ?, ?, ?)
                 ON CONFLICT(symbol) DO UPDATE SET
                     stop_loss_price = excluded.stop_loss_price,
                     take_profit_price = excluded.take_profit_price,
                     updated_at = excluded.updated_at
-            """, (symbol, now, stop_loss, take_profit, now))
+            """,
+                (symbol, now, stop_loss, take_profit, now),
+            )
 
-            cur.execute("INSERT INTO manual_events (symbol, action, amount, price, metadata, timestamp) VALUES (?, 'SET_SL_TP', NULL, NULL, ?, ?)",
-                        (symbol, f"SL={stop_loss}, TP={take_profit}", now))
+            cur.execute(
+                "INSERT INTO manual_events (symbol, action, amount, price, metadata, timestamp) VALUES (?, 'SET_SL_TP', NULL, NULL, ?, ?)",
+                (symbol, f"SL={stop_loss}, TP={take_profit}", now),
+            )
             conn.commit()
             conn.close()
 
@@ -152,10 +187,12 @@ class ManualPositionController:
             "success": True,
             "symbol": symbol,
             "stop_loss": stop_loss,
-            "take_profit": take_profit
+            "take_profit": take_profit,
         }
 
-    def manual_close_position(self, client, symbol: str, current_position: Dict[str, Any]) -> Dict[str, Any]:
+    def manual_close_position(
+        self, client, symbol: str, current_position: dict[str, Any]
+    ) -> dict[str, Any]:
         """單筆全平"""
         now = datetime.utcnow().isoformat()
         contracts = float(current_position.get("contracts", 0.0))
@@ -163,15 +200,19 @@ class ManualPositionController:
         close_side = "SELL" if side == "LONG" else "BUY"
 
         if hasattr(client, "create_order"):
-            res = client.create_order(symbol=symbol, side=close_side, order_type="MARKET", amount=contracts)
+            res = client.create_order(
+                symbol=symbol, side=close_side, order_type="MARKET", amount=contracts
+            )
         else:
             res = {"success": True, "message": "Simulated close"}
 
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             cur = conn.cursor()
-            cur.execute("INSERT INTO manual_events (symbol, action, amount, price, metadata, timestamp) VALUES (?, 'CLOSE_POSITION', ?, NULL, ?, ?)",
-                        (symbol, contracts, f"Full close of {side} {contracts}", now))
+            cur.execute(
+                "INSERT INTO manual_events (symbol, action, amount, price, metadata, timestamp) VALUES (?, 'CLOSE_POSITION', ?, NULL, ?, ?)",
+                (symbol, contracts, f"Full close of {side} {contracts}", now),
+            )
             conn.commit()
             conn.close()
 
@@ -181,25 +222,43 @@ class ManualPositionController:
             "success": res.get("success", True),
             "symbol": symbol,
             "closed_contracts": contracts,
-            "raw_response": res
+            "raw_response": res,
         }
 
-    def manual_reduce_position(self, client, symbol: str, current_position: Dict[str, Any], reduce_amount: float) -> Dict[str, Any]:
+    def manual_reduce_position(
+        self,
+        client,
+        symbol: str,
+        current_position: dict[str, Any],
+        reduce_amount: float,
+    ) -> dict[str, Any]:
         """部分減倉"""
         now = datetime.utcnow().isoformat()
         side = current_position.get("side", "LONG").upper()
         close_side = "SELL" if side == "LONG" else "BUY"
 
         if hasattr(client, "create_order"):
-            res = client.create_order(symbol=symbol, side=close_side, order_type="MARKET", amount=reduce_amount)
+            res = client.create_order(
+                symbol=symbol,
+                side=close_side,
+                order_type="MARKET",
+                amount=reduce_amount,
+            )
         else:
             res = {"success": True, "message": "Simulated reduce"}
 
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             cur = conn.cursor()
-            cur.execute("INSERT INTO manual_events (symbol, action, amount, price, metadata, timestamp) VALUES (?, 'REDUCE_POSITION', ?, NULL, ?, ?)",
-                        (symbol, reduce_amount, f"Partial reduce of {side} by {reduce_amount}", now))
+            cur.execute(
+                "INSERT INTO manual_events (symbol, action, amount, price, metadata, timestamp) VALUES (?, 'REDUCE_POSITION', ?, NULL, ?, ?)",
+                (
+                    symbol,
+                    reduce_amount,
+                    f"Partial reduce of {side} by {reduce_amount}",
+                    now,
+                ),
+            )
             conn.commit()
             conn.close()
 
@@ -209,5 +268,5 @@ class ManualPositionController:
             "success": res.get("success", True),
             "symbol": symbol,
             "reduced_amount": reduce_amount,
-            "raw_response": res
+            "raw_response": res,
         }
