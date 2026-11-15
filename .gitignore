@@ -51,6 +51,7 @@ cover/
 
 # Environments
 .env
+!.env.example
 .venv
 env/
 venv/
@@ -59,8 +60,15 @@ env.bak/
 venv.bak/
 
 # Database files
-*.db
-*.sqlite3
+*.db*
+*.sqlite*
+
+# Models and state
+*.joblib
+*.pt
+cloud_state_snapshot.json
+data_persistence/cloud_state_snapshot.json
+data_persistence/backups/
 
 # OS / Editor specific
 .DS_Store
@@ -73,8 +81,3 @@ Thumbs.db
 # Data & cache
 data_cache/
 reports/*.html
-
-# Runtime persistence and state
-data_persistence/*.db
-data_persistence/*.sqlite3
-data_persistence/backups/

@@ -1,0 +1,16 @@
+[allowlist]
+description = "Permitted paths and secret exceptions"
+paths = [
+  '''^\.env\.example$''',
+  '''^tests/.*''',
+]
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic API Key rule"
+regex = '''(?i)(api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token)[\s]*[=:]\s*['\"][0-9a-zA-Z\-_]{16,}['\"]'''
+
+[[rules]]
+id = "sec-private-key"
+description = "Private Key rule"
+regex = '''-----BEGIN ((EC|RSA|DSA|OPENSSH) )?PRIVATE KEY-----'''
