@@ -17,6 +17,9 @@
 .
 ├── README.md                      # [當前文件] 專案總覽、架構與 AI 協同開發協議
 ├── requirements.txt               # 全專案 Python 依賴清單
+├── pyproject.toml                         # 專案標準封裝與相依定義 (PEP 517/621)
+├── .env.example                           # 安全環境變數空值範本
+├── .gitleaks.toml                         # 機密資訊洩漏掃描規則
 ├── Dockerfile                     # 🐳 輕量雲端容器封裝檔 (支援 24h 免電腦常駐)
 ├── render.yaml                    # ☁️ Render.com 一鍵自動部署設定
 ├── GEMINI.md                      # 📜 量化操盤與工程開發規範指南
