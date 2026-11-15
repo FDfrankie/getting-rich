@@ -4,8 +4,14 @@ from typing import Optional, Any
 from crypto_trading.config import PAPER_TRADING, DEFAULT_SYMBOL, INITIAL_BALANCE_USDT
 from crypto_trading.data_loader import CryptoDataLoader
 from crypto_trading.strategies.momentum_breakout import MomentumBreakoutStrategy, BaseStrategy
-from crypto_trading.strategies.ml_strategy import MLAlphaStrategy
-from crypto_trading.strategies.rl_strategy import RLAlphaStrategy
+try:
+    from crypto_trading.strategies.ml_strategy import MLAlphaStrategy
+except ImportError:
+    MLAlphaStrategy = None
+try:
+    from crypto_trading.strategies.rl_strategy import RLAlphaStrategy
+except ImportError:
+    RLAlphaStrategy = None
 from crypto_trading.risk_manager import RiskManager
 from crypto_trading.order_manager import OrderManager
 from crypto_trading.manual_controller import ManualPositionController

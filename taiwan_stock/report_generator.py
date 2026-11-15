@@ -87,31 +87,52 @@ class ReportGenerator:
             for d in defense_hedges:
                 report_lines.append(f"| **{d['symbol']}** | {d['close']} | {d['change_pct']:+0.2f}% | {d['reason']} |")
 
-        # 區塊 3: 機器學習多因子 Alpha 排名
-        print("[*] 正在運行 ML 多因子預測排序模型...")
+        # 區塊 3: 機器學習多因子 Alpha 排名 (讀取已訓練之 taiwan_stock_ranker.joblib，禁止 HTTP request 現場重訓)
+        print("[*] 正在載入 ML 多因子預測排序模型...")
+        model_saved_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data_persistence", "models", "taiwan_stock_ranker.joblib")
+        ml_rankings = []
+        is_fallback = False
         try:
             stock_data_map = {}
             for sym in DEFAULT_WATCHLIST[:8]:
                 t = yf.Ticker(sym)
-                h = t.history(period="1y")
-                if len(h) >= 80:
+                h = t.history(period="6mo")
+                if len(h) >= 30:
                     stock_data_map[sym] = h
 
             if stock_data_map:
-                clean_ds, _ = self.ml_ranker.prepare_dataset(stock_data_map)
-                self.ml_ranker.train_model(clean_ds)
-                rank_df = self.ml_ranker.predict_rankings(stock_data_map)
+                if os.path.exists(model_saved_path):
+                    ranker = TaiwanStockMLRanker.load_model(model_saved_path)
+                    rank_df = ranker.predict_rankings(stock_data_map)
+                else:
+                    is_fallback = True
+                    # RULE_BASED fallback
+                    rows = []
+                    for s, df_s in stock_data_map.items():
+                        c = float(df_s['Close'].iloc[-1])
+                        ma20 = float(df_s['Close'].rolling(20).mean().iloc[-1])
+                        bias = (c - ma20) / ma20 if ma20 > 0 else 0.0
+                        delta = df_s['Close'].diff()
+                        gain = delta.clip(lower=0).rolling(14).mean().iloc[-1]
+                        loss = (-delta.clip(upper=0)).rolling(14).mean().iloc[-1]
+                        rsi = 100.0 - (100.0 / (1.0 + (gain / (loss + 1e-9))))
+                        fwd_ret = bias * 0.5
+                        rows.append({"symbol": s, "current_price": c, "predicted_fwd_5d_ret_pct": fwd_ret * 100.0, "bias_ma20": bias * 100.0, "rsi_14": rsi})
+                    rank_df = pd.DataFrame(rows).sort_values("predicted_fwd_5d_ret_pct", ascending=False).reset_index(drop=True)
+                    rank_df["rank"] = range(1, len(rank_df) + 1)
 
+                badge_str = "【RULE_BASED fallback】" if is_fallback else "【LightGBM ML 預測】"
                 report_lines.extend([
                     "",
                     "---",
-                    "## 🤖 3. AI / ML 多因子未來 5 日超額報酬排序榜",
+                    f"## 🤖 3. AI / ML 多因子未來 5 日超額報酬排序榜 {badge_str}",
                     "| 排名 | 標的 | 最新收盤 | 預測 5 日報酬 (%) | 月線乖離率 (%) | RSI(14) |",
                     "| :---: | :--- | :--- | :---: | :---: | :---: |"
                 ])
                 for _, row in rank_df.head(5).iterrows():
+                    ml_rankings.append(row.to_dict())
                     report_lines.append(
-                        f"| #{int(row['rank'])} | **{row['symbol']}** | {row['current_price']} | **{row['predicted_fwd_5d_ret_pct']:+0.2f}%** | {row['bias_ma20']:+0.2f}% | {row['rsi_14']} |"
+                        f"| #{int(row['rank'])} | **{row['symbol']}** | {row['current_price']} | **{row['predicted_fwd_5d_ret_pct']:+0.2f}%** | {row['bias_ma20']:+0.2f}% | {row['rsi_14']:.1f} |"
                     )
         except Exception as e:
             report_lines.append(f"\n> ℹ️ ML 多因子預測模型運行略過: {str(e)}")
@@ -331,6 +352,95 @@ class ReportGenerator:
                                 <td class="py-2.5 px-3 text-slate-300 font-sans">{d['reason']}</td>
                             </tr>
                 """
+            html += """
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            """
+
+        # 區塊 3: ML 多因子排序榜 (HTML 視圖)
+        model_saved_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data_persistence", "models", "taiwan_stock_ranker.joblib")
+        html_rankings = []
+        is_html_fallback = False
+        try:
+            stock_data_map = {}
+            for sym in DEFAULT_WATCHLIST[:8]:
+                t = yf.Ticker(sym)
+                h = t.history(period="6mo")
+                if len(h) >= 30:
+                    stock_data_map[sym] = h
+
+            if stock_data_map:
+                if os.path.exists(model_saved_path):
+                    ranker = TaiwanStockMLRanker.load_model(model_saved_path)
+                    rank_df = ranker.predict_rankings(stock_data_map)
+                else:
+                    is_html_fallback = True
+                    rows = []
+                    for s, df_s in stock_data_map.items():
+                        c = float(df_s['Close'].iloc[-1])
+                        ma20 = float(df_s['Close'].rolling(20).mean().iloc[-1])
+                        bias = (c - ma20) / ma20 if ma20 > 0 else 0.0
+                        delta = df_s['Close'].diff()
+                        gain = delta.clip(lower=0).rolling(14).mean().iloc[-1]
+                        loss = (-delta.clip(upper=0)).rolling(14).mean().iloc[-1]
+                        rsi = 100.0 - (100.0 / (1.0 + (gain / (loss + 1e-9))))
+                        fwd_ret = bias * 0.5
+                        rows.append({"symbol": s, "current_price": c, "predicted_fwd_5d_ret_pct": fwd_ret * 100.0, "bias_ma20": bias * 100.0, "rsi_14": rsi})
+                    rank_df = pd.DataFrame(rows).sort_values("predicted_fwd_5d_ret_pct", ascending=False).reset_index(drop=True)
+                    rank_df["rank"] = range(1, len(rank_df) + 1)
+                
+                badge_tag = '<span class="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold">RULE_BASED fallback</span>' if is_html_fallback else '<span class="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold">LightGBM ML Verified</span>'
+                html += f"""
+                <!-- 第 3 區塊：ML 多因子排序榜 -->
+                <div class="bg-slate-900/90 border border-indigo-500/30 rounded-xl p-4">
+                    <div class="flex items-center justify-between mb-3">
+                        <h3 class="font-bold text-sm text-indigo-300 flex items-center space-x-2">
+                            <i class="fa-solid fa-robot text-indigo-400"></i>
+                            <span>🤖 3. AI / ML 多因子未來 5 日超額報酬排序榜</span>
+                        </h3>
+                        {badge_tag}
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-xs">
+                            <thead class="text-slate-400 border-b border-slate-800 bg-slate-950/50">
+                                <tr>
+                                    <th class="py-2.5 px-3">排名</th>
+                                    <th class="py-2.5 px-3">標的代碼</th>
+                                    <th class="py-2.5 px-3">最新股價</th>
+                                    <th class="py-2.5 px-3">預測 5 日報酬</th>
+                                    <th class="py-2.5 px-3">月線乖離率</th>
+                                    <th class="py-2.5 px-3">RSI(14)</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-800/60 font-mono">
+                """
+                for _, r in rank_df.head(5).iterrows():
+                    ret_val = float(r['predicted_fwd_5d_ret_pct'])
+                    ret_color = "text-rose-400" if ret_val >= 0 else "text-emerald-400"
+                    html += f"""
+                                <tr class="hover:bg-slate-800/40 transition">
+                                    <td class="py-2.5 px-3 font-bold text-indigo-400 font-sans">#{int(r['rank'])}</td>
+                                    <td class="py-2.5 px-3 font-bold text-white font-sans">{r['symbol']}</td>
+                                    <td class="py-2.5 px-3 text-slate-200">${r['current_price']}</td>
+                                    <td class="py-2.5 px-3 {ret_color} font-bold">{ret_val:+0.2f}%</td>
+                                    <td class="py-2.5 px-3 text-slate-300">{float(r['bias_ma20']):+0.2f}%</td>
+                                    <td class="py-2.5 px-3 text-slate-300">{float(r['rsi_14']):.1f}</td>
+                                </tr>
+                    """
+                html += """
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                """
+        except Exception as e:
+            html += f"""
+            <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-4 text-xs text-slate-500">
+                ML 多因子排序榜載入略過: {str(e)}
+            </div>
+            """
 
         post_mortems = self.sync.get_recent_post_mortems(limit=5)
         html += """

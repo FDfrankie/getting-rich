@@ -252,28 +252,53 @@
 
           <div class="space-y-3">
             <div>
-              <label class="text-xs text-slate-400">下單數量 (BTC)</label>
+              <label class="text-xs text-slate-400">當前標的下單數量 (<span id="orderSymbolLabel">BTC/USDT</span>)</label>
               <div class="flex items-center space-x-2 mt-1">
-                <input type="number" id="orderAmount" step="0.01" value="0.02" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
-                <span class="text-xs text-slate-400 font-bold">BTC</span>
+                <input type="number" id="orderAmount" step="0.001" value="0.01" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
+                <span id="orderAssetUnit" class="text-xs text-slate-400 font-bold">BTC</span>
               </div>
             </div>
 
-            <div class="grid grid-cols-2 gap-2 pt-2">
-              <button onclick="executeOrder('BUY')" class="w-full py-2.5 rounded-xl font-bold text-xs md:text-sm bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/30 transition flex items-center justify-center space-x-1">
+            <!-- 持倉精細控制：50% 減倉、手動鎖定開關、SL/TP 設定 -->
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <label class="text-[10px] text-slate-400">停損 (SL)</label>
+                <input type="number" id="inputSL" placeholder="價格" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white">
+              </div>
+              <div>
+                <label class="text-[10px] text-slate-400">停利 (TP)</label>
+                <input type="number" id="inputTP" placeholder="價格" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white">
+              </div>
+            </div>
+
+            <div class="flex items-center justify-between text-xs py-1 px-1">
+              <label class="text-slate-400 flex items-center space-x-1.5 cursor-pointer">
+                <input type="checkbox" id="manualOverrideCheckbox" class="rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
+                <span class="font-bold text-amber-300">手動鎖定開關 (Manual Override)</span>
+              </label>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 pt-1">
+              <button onclick="executeOrder('BUY')" class="w-full py-2 rounded-xl font-bold text-xs bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition flex items-center justify-center space-x-1">
                 <i class="fa-solid fa-arrow-trend-up"></i>
-                <span>市價買進/做多</span>
+                <span>市價做多 (Long)</span>
               </button>
-              <button onclick="executeOrder('SELL')" class="w-full py-2.5 rounded-xl font-bold text-xs md:text-sm bg-rose-600 hover:bg-rose-500 text-white shadow-lg shadow-rose-600/30 transition flex items-center justify-center space-x-1">
+              <button onclick="executeOrder('SELL')" class="w-full py-2 rounded-xl font-bold text-xs bg-rose-600 hover:bg-rose-500 text-white shadow-lg transition flex items-center justify-center space-x-1">
                 <i class="fa-solid fa-arrow-trend-down"></i>
-                <span>市價賣出/平倉</span>
+                <span>市價做空 (Short)</span>
               </button>
             </div>
 
-            <button onclick="closeAllPositions()" class="w-full py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-400/20 transition flex items-center justify-center space-x-1">
-              <i class="fa-solid fa-hand"></i>
-              <span>🚨 一鍵全數平倉清空部位</span>
-            </button>
+            <div class="grid grid-cols-2 gap-2 pt-1">
+              <button onclick="closePartialPosition(0.5)" class="w-full py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-sky-400 border border-sky-400/20 transition flex items-center justify-center space-x-1">
+                <i class="fa-solid fa-scissors"></i>
+                <span>50% 部分減倉</span>
+              </button>
+              <button onclick="closeAllPositions()" class="w-full py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-400/20 transition flex items-center justify-center space-x-1">
+                <i class="fa-solid fa-hand"></i>
+                <span>🚨 一鍵全平倉</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -575,7 +600,7 @@
               <span>2. Kaggle 雲端免費 GPU 訓練步驟</span>
             </div>
             <p class="text-xs text-slate-400 leading-relaxed">
-              Notebook 檔案位於本機 <code>kaggle_notebooks/01_crypto_feature_and_ml_training.ipynb</code> 與 <code>02_ppo_reinforcement_learning_agent.ipynb</code>。
+              訓練腳本位於本機 <code>scripts/train_models.py</code>（支援 LightGBM、PPO 與台股多因子排序模型訓練與因果驗證）。
             </p>
             <div class="text-[11px] bg-slate-950 p-2.5 rounded-lg space-y-1 font-mono text-purple-300">
               <div>1. 瀏覽器開啟 <a href="https://www.kaggle.com" target="_blank" class="text-white underline">kaggle.com</a> 點擊 <strong>+ Create New Notebook</strong></div>
@@ -679,7 +704,6 @@
         <iframe id="handbookIframe" src="/handbook" class="w-full h-full rounded-xl border border-slate-800 bg-white" title="量化講義閱讀器"></iframe>
       </div>
     </section>
-  </main>
   </main>
 
   <!-- 手機版底部導航欄 (Mobile Bottom Tab Bar) -->
@@ -921,6 +945,10 @@
       currentChartSymbol = sym;
       const select = document.getElementById('chartSymbolSelect');
       if (select) select.value = sym;
+      const orderSymLabel = document.getElementById('orderSymbolLabel');
+      if (orderSymLabel) orderSymLabel.innerText = sym;
+      const orderUnit = document.getElementById('orderAssetUnit');
+      if (orderUnit) orderUnit.innerText = sym.split('/')[0].split('.')[0];
       loadChartData();
     }
 
@@ -1010,6 +1038,21 @@
           document.getElementById('cryptoEquity').innerHTML = `${d.total_equity.toLocaleString()} <span class="text-xs font-normal text-slate-400">USDT</span>`;
           document.getElementById('cryptoPrice').innerHTML = `${d.current_price.toLocaleString()} <span class="text-xs font-normal text-slate-400">USDT</span>`;
 
+          // 綁定未平倉損益 (#cryptoPnL) 更新 (正值綠字、負值紅字、未知顯示 unavailable)
+          const pnlElem = document.getElementById('cryptoPnL');
+          if (pnlElem) {
+            if (d.unrealized_pnl !== undefined && d.unrealized_pnl !== null) {
+              const pnlVal = parseFloat(d.unrealized_pnl);
+              const sign = pnlVal > 0 ? '+' : '';
+              const colorClass = pnlVal > 0 ? 'text-emerald-400' : (pnlVal < 0 ? 'text-rose-400' : 'text-slate-400');
+              pnlElem.className = `text-lg md:text-2xl font-black ${colorClass} mt-1`;
+              pnlElem.innerHTML = `${sign}${pnlVal.toFixed(2)} <span class="text-xs font-normal text-slate-400">USDT</span>`;
+            } else {
+              pnlElem.className = "text-lg md:text-2xl font-black text-slate-500 mt-1";
+              pnlElem.innerHTML = `unavailable <span class="text-xs font-normal text-slate-400">USDT</span>`;
+            }
+          }
+
           const pBadge = document.getElementById('cryptoModeBadge');
           if (d.mode === 'PAPER_SANDBOX') {
             pBadge.className = "text-xs font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400";
@@ -1067,13 +1110,38 @@
 
     async function executeOrder(side) {
       const amount = parseFloat(document.getElementById('orderAmount').value) || 0.01;
+      const isManual = document.getElementById('manualOverrideCheckbox')?.checked || false;
+      const sl = document.getElementById('inputSL')?.value;
+      const tp = document.getElementById('inputTP')?.value;
       const res = await fetch('/api/crypto/order', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ side, amount, symbol: 'BTC/USDT' })
+        body: JSON.stringify({
+          side,
+          amount,
+          symbol: currentChartSymbol,
+          manual_override: isManual,
+          stop_loss: sl ? parseFloat(sl) : null,
+          take_profit: tp ? parseFloat(tp) : null
+        })
       });
       const d = await res.json();
       alert(d.message || (d.success ? "下單成功！" : "下單失敗"));
+      fetchCryptoData();
+    }
+
+    async function closePartialPosition(pct) {
+      const res = await fetch('/api/crypto/order', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          action: 'partial_close',
+          pct: pct || 0.5,
+          symbol: currentChartSymbol
+        })
+      });
+      const d = await res.json();
+      alert(d.message || "部分平倉指令已送出！");
       fetchCryptoData();
     }
 
@@ -1287,10 +1355,7 @@
                   <i class="fa-solid fa-paper-plane"></i>
                   <span>🚀 送出至 WorldQuant 回測</span>
                 </button>
-                <button onclick="testAlpha('${a.id}', '${encodeURIComponent(a.expression)}', 'crypto_bot')" class="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold transition flex items-center space-x-1">
-                  <i class="fa-solid fa-bolt"></i>
-                  <span>⚡ 注入 Binance 模擬盤實戰</span>
-                </button>
+                <span class="text-[10px] text-slate-500 italic ml-2">註：FASTEXPR 橫截面因子專屬美股回測</span>
               </div>
             </div>
           `).join('');
@@ -1317,30 +1382,166 @@
       if (d.success) fetchAlphas();
     }
 
+    // 安全 Fetch JSON 輔助函式（嚴格防護 Unexpected end of JSON input 與憑證洩漏）
+    async function safeFetchJson(url, options = {}) {
+      try {
+        const response = await fetch(url, options);
+        const text = await response.text();
+        const contentType = response.headers.get("content-type") || "";
+
+        if (!text || text.trim() === "") {
+          return {
+            ok: false,
+            status: response.status,
+            error: {
+              code: "EMPTY_RESPONSE",
+              message: `伺服器回傳空內容 (HTTP ${response.status})`,
+              retryable: false
+            }
+          };
+        }
+
+        if (!contentType.includes("application/json")) {
+          return {
+            ok: false,
+            status: response.status,
+            error: {
+              code: "INVALID_CONTENT_TYPE",
+              message: `伺服器回應非 JSON 格式 (HTTP ${response.status})`,
+              retryable: false
+            }
+          };
+        }
+
+        try {
+          const parsed = JSON.parse(text);
+          return {
+            ok: response.ok,
+            status: response.status,
+            data: parsed
+          };
+        } catch (parseErr) {
+          return {
+            ok: false,
+            status: response.status,
+            error: {
+              code: "JSON_PARSE_ERROR",
+              message: `JSON 解析失敗 (HTTP ${response.status})`,
+              retryable: false
+            }
+          };
+        }
+      } catch (networkErr) {
+        return {
+          ok: false,
+          status: 0,
+          error: {
+            code: "NETWORK_ERROR",
+            message: "網路連線中斷或伺服器未回應",
+            retryable: true
+          }
+        };
+      }
+    }
+
     async function testAlpha(alphaId, encodedExpr, targetEngine) {
       const expr = decodeURIComponent(encodedExpr);
       try {
-        const res = await fetch('/api/brain/test_alpha', {
+        // 使用非同步 POST /api/brain/simulations
+        const result = await safeFetchJson('/api/brain/simulations', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ alpha_id: alphaId, expression: expr, target_engine: targetEngine })
+          body: JSON.stringify({ expression: expr })
         });
-        const d = await res.json();
-        alert(`[${d.target_engine}] ${d.message}`);
-        fetchCryptoData();
+
+        if (!result.ok || !result.data) {
+          const err = result.error || (result.data && result.data.error) || {};
+          alert(`送測失敗 [${err.code || 'HTTP_' + result.status}]: ${err.message || '未知錯誤'}`);
+          return;
+        }
+
+        const job = result.data;
+        const jobId = job.job_id;
+        const nextPoll = (job.next_poll_seconds || 2.0) * 1000;
+        alert(`Alpha 已排入送測佇列 (Job: ${jobId})，系統將在背景進行非同步計算！`);
+
+        // 非同步輪詢 Job 狀態
+        let attempts = 0;
+        const maxAttempts = 30;
+        const pollInterval = setInterval(async () => {
+          attempts++;
+          if (attempts > maxAttempts) {
+            clearInterval(pollInterval);
+            console.log(`[Brain Polling] Job ${jobId} 輪詢逾時，背景將持續運算。`);
+            return;
+          }
+
+          const pollRes = await safeFetchJson(`/api/brain/jobs/${jobId}`);
+          if (pollRes.ok && pollRes.data && pollRes.data.job) {
+            const j = pollRes.data.job;
+            if (j.status === 'COMPLETE' || j.status === 'OFFLINE') {
+              clearInterval(pollInterval);
+              const m = j.metrics || {};
+              alert(`🎉 Alpha 模擬完成！\n狀態: ${j.status}\nSharpe: ${m.sharpe ?? 'N/A'}\nFitness: ${m.fitness ?? 'N/A'}`);
+              fetchAlphas();
+            } else if (j.status === 'FAILED') {
+              clearInterval(pollInterval);
+              alert(`❌ Alpha 模擬失敗: ${j.safe_error || '未知錯誤'}`);
+            }
+          }
+        }, nextPoll);
+
       } catch (e) {
-        alert("送測連線異常: " + e);
+        alert("送測連線異常，請稍後重試。");
+      }
+    }
+
+    // 系統健康狀態輪詢 Watchdog 心跳
+    async function checkSystemHealth() {
+      try {
+        const res = await fetch('/api/status');
+        const d = await res.json();
+        const statusSpan = document.getElementById('headerStatus');
+        const statusDot = statusSpan?.previousElementSibling;
+        const statusContainer = statusSpan?.parentElement;
+
+        if (d && d.status === 'online') {
+          const wd = d.watchdog || {};
+          const isLagging = Object.values(wd).some(v => v === 'LAGGING');
+          if (isLagging) {
+            if (statusSpan) statusSpan.innerText = "系統延遲 (DEGRADED)";
+            if (statusContainer) statusContainer.className = "flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs";
+            if (statusDot) statusDot.className = "w-2 h-2 rounded-full bg-amber-400 animate-pulse";
+          } else {
+            if (statusSpan) statusSpan.innerText = "系統在線 (ONLINE)";
+            if (statusContainer) statusContainer.className = "flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs";
+            if (statusDot) statusDot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
+          }
+        } else {
+          if (statusSpan) statusSpan.innerText = "連線異常 (OFFLINE)";
+          if (statusContainer) statusContainer.className = "flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs";
+          if (statusDot) statusDot.className = "w-2 h-2 rounded-full bg-rose-400";
+        }
+      } catch (e) {
+        const statusSpan = document.getElementById('headerStatus');
+        const statusDot = statusSpan?.previousElementSibling;
+        const statusContainer = statusSpan?.parentElement;
+        if (statusSpan) statusSpan.innerText = "核心離線 (OFFLINE)";
+        if (statusContainer) statusContainer.className = "flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs";
+        if (statusDot) statusDot.className = "w-2 h-2 rounded-full bg-rose-400";
       }
     }
 
     // 定期輪巡
     setInterval(() => {
       if (currentTab === 'crypto') fetchCryptoData();
+      checkSystemHealth();
     }, 4000);
 
     // 初始載入
     window.onload = () => {
       fetchCryptoData();
+      checkSystemHealth();
       startChartPolling();
       fetchTaiwanMarket();
       fetchTaiwanReport();

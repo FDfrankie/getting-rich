@@ -24,14 +24,25 @@ from crypto_trading.config import (
 from crypto_trading.data_loader import CryptoDataLoader
 from crypto_trading.testnet_client import BinanceTestnetClient
 from crypto_trading.bitunix_client import BitunixClient
-from crypto_trading.bot_runner import CryptoTradingBot
+try:
+    from crypto_trading.bot_runner import CryptoTradingBot
+except ImportError:
+    CryptoTradingBot = None
+
 from crypto_trading.strategies.momentum_breakout import MomentumBreakoutStrategy
-from crypto_trading.strategies.ml_strategy import MLAlphaStrategy
-from crypto_trading.strategies.rl_strategy import RLAlphaStrategy
+try:
+    from crypto_trading.strategies.ml_strategy import MLAlphaStrategy
+except ImportError:
+    MLAlphaStrategy = None
+try:
+    from crypto_trading.strategies.rl_strategy import RLAlphaStrategy
+except ImportError:
+    RLAlphaStrategy = None
 
 from worldquant_brain.alpha_vault import AlphaVault
 from worldquant_brain.brain_client import BrainClient
 from worldquant_brain.alpha_miner import ContinuousAlphaMiner
+from worldquant_brain.brain_job_queue import BrainJobQueue, compute_simulation_key
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -50,11 +61,27 @@ class QuantAppContext:
         self.alpha_vault = AlphaVault()
         self.alpha_vault.seed_initial_verified_alphas()
         self.brain_client = BrainClient()
+        self.brain_job_queue = BrainJobQueue(self.brain_client)
         self.alpha_miner = ContinuousAlphaMiner(symbol=DEFAULT_SYMBOL)
 
         self.testnet_client = BinanceTestnetClient(settlement="USDC")
         self.bitunix_client = BitunixClient()
-        self.active_bot = CryptoTradingBot(symbol=DEFAULT_SYMBOL, exchange_adapter=self.testnet_client)
+        if CryptoTradingBot is not None:
+            self.active_bot = CryptoTradingBot(symbol=DEFAULT_SYMBOL, exchange_adapter=self.testnet_client)
+        else:
+            # Fallback placeholder when heavy ML/RL bot is unavailable
+            class _DummyBot:
+                def __init__(self, symbol):
+                    self.symbol = symbol
+                    self.position = 0.0
+                    self.position_side = "FLAT"
+                    self.balance_usdt = INITIAL_BALANCE_USDT
+                    self.entry_price = 0.0
+                    self.exchange_adapter = None
+                def step(self): pass
+                def get_equity(self, price): return self.balance_usdt
+                def execute_paper_order(self, *args, **kwargs): pass
+            self.active_bot = _DummyBot(symbol=DEFAULT_SYMBOL)
         self.bot_running = True  # 雲端 OnRender 背景預設常駐開啟
         self.bot_thread = None
         self.miner_thread = None
@@ -188,13 +215,14 @@ class QuantAppContext:
         lgbm_path = os.path.join(DATA_DIR, "models", "crypto_lgbm_weights.joblib")
         ppo_path = os.path.join(DATA_DIR, "models", "crypto_ppo_agent.pt")
         
-        if strat_name == "ml":
+        if strat_name == "ml" and MLAlphaStrategy is not None:
             strat = MLAlphaStrategy(model_path=lgbm_path if os.path.exists(lgbm_path) else None)
-        elif strat_name == "rl":
+        elif strat_name == "rl" and RLAlphaStrategy is not None:
             strat = RLAlphaStrategy(agent_weights_path=ppo_path if os.path.exists(ppo_path) else None)
         else:
             strat = MomentumBreakoutStrategy()
-        self.active_bot = CryptoTradingBot(symbol=self.active_bot.symbol, strategy=strat, exchange_adapter=adapter)
+        if CryptoTradingBot is not None:
+            self.active_bot = CryptoTradingBot(symbol=self.active_bot.symbol, strategy=strat, exchange_adapter=adapter)
         self.add_log(f"已切換操盤策略至: 【{strat_name.upper()} 策略】(自動掛載優化權重)")
 
     def _background_alpha_miner_loop(self):
@@ -289,12 +317,23 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_error_json(self, code: str, message: str, status: int = 400, retryable: bool = False):
+        return self._send_json_response({
+            "ok": False,
+            "error": {
+                "code": code,
+                "message": message,
+                "retryable": retryable
+            }
+        }, status=status)
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -324,6 +363,19 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             else:
                 self.send_error(404, "Handbook not found")
                 return
+
+        # API: 查詢 Brain 模擬 Job 狀態 (GET /api/brain/jobs/{job_id})
+        if path.startswith("/api/brain/jobs/"):
+            job_id = path[len("/api/brain/jobs/"):]
+            if not job_id:
+                return self._send_error_json("MISSING_JOB_ID", "Job ID 未指定", status=400)
+            job = APP_STATE.brain_job_queue.get_job(job_id)
+            if not job:
+                return self._send_error_json("JOB_NOT_FOUND", f"找不到指定的工作: {job_id}", status=404)
+            return self._send_json_response({
+                "ok": True,
+                "job": job.to_dict()
+            }, status=200)
 
         # API: 系統總覽與健康度 (含 Watchdog 四大核心心跳)
         if path == "/api/status" or path == "/health":
@@ -400,6 +452,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     bal = APP_STATE.bitunix_client.fetch_balance()
                     positions = APP_STATE.bitunix_client.fetch_positions()
                     curr_price = ticker.get("last", 68500.0)
+                    unrealized_pnl = sum([float(p.get("unrealized_pnl", 0.0)) for p in positions]) if positions else 0.0
                     return self._send_json_response({
                         "success": True,
                         "mode": "BITUNIX_LIVE",
@@ -408,6 +461,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                         "current_price": curr_price,
                         "total_equity": bal.get("total_equity", 20000.0),
                         "free_balance": bal.get("free_balance", 17000.0),
+                        "unrealized_pnl": unrealized_pnl,
                         "positions": positions,
                         "bot_running": APP_STATE.bot_running,
                         "strategy": APP_STATE.bot_strategy_name,
@@ -418,6 +472,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     curr_price = ticker.get("last", 68500.0)
                     bal = APP_STATE.testnet_client.fetch_balance()
                     positions = APP_STATE.testnet_client.fetch_positions()
+                    unrealized_pnl = sum([float(p.get("unrealized_pnl", 0.0)) for p in positions]) if positions else 0.0
                     return self._send_json_response({
                         "success": True,
                         "mode": "BINANCE_TESTNET",
@@ -426,6 +481,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                         "current_price": curr_price,
                         "total_equity": bal.get("total_equity", 15000.0),
                         "free_balance": bal.get("free_balance", 12000.0),
+                        "unrealized_pnl": unrealized_pnl,
                         "settlement_currency": bal.get("settlement_currency", "USDC"),
                         "zero_fee_usdc": bal.get("zero_fee_usdc", True),
                         "positions": positions,
@@ -437,7 +493,14 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     ticker = APP_STATE.testnet_client.fetch_ticker(APP_STATE.active_bot.symbol)
                     curr_price = ticker.get("last", 68500.0)
                     bot = APP_STATE.active_bot
-                    equity = bot.balance_usdt + (bot.position * curr_price)
+                    equity = bot.get_equity(curr_price)
+                    if bot.position_side == "LONG" and bot.entry_price > 0:
+                        unrealized_pnl = (curr_price - bot.entry_price) * bot.position
+                    elif bot.position_side == "SHORT" and bot.entry_price > 0:
+                        unrealized_pnl = (bot.entry_price - curr_price) * bot.position
+                    else:
+                        unrealized_pnl = 0.0
+
                     return self._send_json_response({
                         "success": True,
                         "mode": "PAPER_SANDBOX",
@@ -445,6 +508,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                         "current_price": curr_price,
                         "total_equity": round(equity, 2),
                         "balance_usdt": round(bot.balance_usdt, 2),
+                        "unrealized_pnl": round(unrealized_pnl, 2),
                         "position_side": bot.position_side,
                         "position_amount": round(bot.position, 4),
                         "entry_price": bot.entry_price,
@@ -684,36 +748,63 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             )
             return self._send_json_response(res)
 
-        # 🚀 一鍵自動送出至 Quant 測試 (支援 WorldQuant 平台 API 回測 與 自家模擬盤實戰跑分)
-        if path == "/api/brain/test_alpha":
-            alpha_id = post_data.get("alpha_id")
-            expr = post_data.get("expression", "")
-            target_engine = post_data.get("target_engine", "worldquant")  # "worldquant" or "crypto_bot"
+        # 🚀 POST /api/brain/simulations：建立非同步送測 job (符合 docs/BRAIN_WEB_API_ASYNC_FIX_SPEC.md)
+        if path == "/api/brain/simulations":
+            try:
+                expr = post_data.get("expression") or post_data.get("regular") or ""
+                if not expr or not expr.strip():
+                    return self._send_error_json("INVALID_EXPRESSION", "Alpha 表達式不可為空", status=400)
 
-            if target_engine == "worldquant":
-                # 對接 WorldQuant BRAIN API
-                test_res = APP_STATE.brain_client.simulate_alpha(expr)
-                APP_STATE.add_log(f"🚀 [Quant 測試送出] WorldQuant 回測請求: {test_res.get('status', 'SENT')}")
+                settings = post_data.get("settings")
+                job, is_new = APP_STATE.brain_job_queue.create_job(expr, settings)
+                APP_STATE.add_log(f"🚀 [Quant 測試佇列] Alpha Job {job.job_id} ({'新增' if is_new else '去重複用'}) 已排入")
+
                 return self._send_json_response({
+                    "ok": True,
+                    "status": job.status.value if hasattr(job.status, "value") else str(job.status),
+                    "job_id": job.job_id,
+                    "simulation_key": job.simulation_key,
+                    "next_poll_seconds": APP_STATE.brain_job_queue.default_poll_interval
+                }, status=202)
+            except Exception as e:
+                return self._send_error_json("INTERNAL_SERVER_ERROR", "建立送測作業失敗", status=500)
+
+        # 🚀 一鍵自動送出至 Quant 測試 (向後相容舊端點，升級為 202 非同步 job 回應)
+        if path == "/api/brain/test_alpha":
+            try:
+                alpha_id = post_data.get("alpha_id")
+                expr = post_data.get("expression", "")
+                target_engine = post_data.get("target_engine", "worldquant")
+
+                if target_engine == "crypto_bot":
+                    return self._send_error_json(
+                        "UNSUPPORTED_ENGINE",
+                        "股票橫截面 FASTEXPR 因子不適用於單一加密貨幣時間序列，該功能已禁用。",
+                        status=400
+                    )
+
+                if not expr or not expr.strip():
+                    return self._send_error_json("INVALID_EXPRESSION", "Alpha 表達式不可為空", status=400)
+
+                job, is_new = APP_STATE.brain_job_queue.create_job(expr)
+                APP_STATE.add_log(f"🚀 [Quant 測試送出] Job {job.job_id} 已排入非同步背景輪詢")
+
+                return self._send_json_response({
+                    "ok": True,
                     "success": True,
                     "target_engine": "WorldQuant BRAIN",
-                    "status": test_res.get("status", "SUCCESS"),
-                    "details": test_res,
-                    "message": "已成功將該 Alpha 送出至 WorldQuant 雲端模擬佇列！" if APP_STATE.brain_client.is_authenticated else "已完成語法防瞻檢查。提示：配置 BRAIN_CREDENTIALS 可直接抓回遠端實時 Fitness 指標。"
-                })
-            else:
-                # 直接推送進自家加密貨幣模擬盤實戰跑分
-                APP_STATE.add_log(f"⚡ [Quant 測試部署] 已將 Alpha 表達式直接部署進自家 Binance 模擬盤即時驗證: {expr[:40]}...")
-                return self._send_json_response({
-                    "success": True,
-                    "target_engine": "Binance Demo Engine",
-                    "status": "RUNNING",
-                    "message": "已成功將該因子動態注入 Binance 合約模擬盤引擎，立即啟動真實盤口滑點與獲利檢定！"
-                })
+                    "status": job.status.value if hasattr(job.status, "value") else str(job.status),
+                    "job_id": job.job_id,
+                    "simulation_key": job.simulation_key,
+                    "next_poll_seconds": APP_STATE.brain_job_queue.default_poll_interval,
+                    "message": "已成功將該 Alpha 送出至非同步模擬佇列！"
+                }, status=202)
+            except Exception as e:
+                return self._send_error_json("INTERNAL_SERVER_ERROR", f"WorldQuant 模擬請求處理失敗: {type(e).__name__}", status=500)
 
-        return self._send_json_response({"error": "Endpoint not found"}, status=404)
+        return self._send_error_json("NOT_FOUND", "Endpoint not found", status=404)
 
-def run_server(port: int = 8000, host: str = "0.0.0.0"):
+def run_server(port: int = 8999, host: str = "0.0.0.0"):
     os.makedirs(STATIC_DIR, exist_ok=True)
     server_address = (host, port)
     httpd = ThreadingHTTPServer(server_address, AppAPIHandler)

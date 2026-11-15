@@ -6,7 +6,7 @@ services:
     region: singapore
     envVars:
       - key: PORT
-        value: 10000
+        value: 8999
       - key: HOST
         value: 0.0.0.0
       - key: PAPER_TRADING

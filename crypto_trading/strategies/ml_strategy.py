@@ -44,8 +44,11 @@ class MLAlphaStrategy(BaseStrategy):
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
         if self.trainer is None:
-            # 若尚未給予已訓練模型，先在現有數據上進行自適應擬合
-            self.fit_on_data(df)
+            # 未載入合格模型與 manifest 時，回傳 0 (Hold) 並標記 MODEL_UNAVAILABLE，禁止現場 fit_on_data 偷看數據
+            df['signal'] = 0.0
+            df['ml_prediction'] = 0.0
+            df['model_status'] = 'MODEL_UNAVAILABLE'
+            return df
 
         predictions = self.trainer.predict(df)
         

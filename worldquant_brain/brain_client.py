@@ -13,6 +13,8 @@ class BrainClient:
         self.authenticated=False; self._submitted: Dict[str,Dict[str,Any]]={}
     @property
     def offline_mode(self)->bool: return not bool(self.email and self.password)
+    @property
+    def is_authenticated(self)->bool: return bool(self.authenticated and not self.offline_mode)
     def authenticate(self)->bool:
         if self.offline_mode: return False
         r=self.session.post(f"{self.BASE_URL}/authentication",auth=(self.email,self.password),timeout=self.timeout)

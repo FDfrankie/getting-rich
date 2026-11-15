@@ -255,6 +255,9 @@ class LocalPersistenceService:
         except Exception as e:
             print(f"[!] 更新部位失敗: {e}")
 
+    # 相容別名
+    update_position_record = update_position
+
     def get_positions(self) -> list:
         try:
             conn = self.get_connection()
@@ -348,6 +351,9 @@ class LocalPersistenceService:
             } for r in rows]
         except Exception:
             return []
+
+    # 相容別名
+    get_recent_orders = get_orders
 
     def export_snapshot_json(self) -> str:
         try:

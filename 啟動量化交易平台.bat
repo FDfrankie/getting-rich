@@ -1,18 +1,18 @@
 @echo off
 chcp 65001 >nul
-title Antigravity ¶q¤Æ¾Þ½L¥­¥x¤@Áä±Ò°Ê
+title Antigravity é‡åŒ–æ“ç›¤å¹³å°ä¸€éµå•Ÿå‹•
 echo ========================================================
-echo   Antigravity ¦Û°Ê¤Æ¶q¤Æ¾Þ½L¥­¥x (¥xªÑ + ¥[±K¦X¬ù + WorldQuant)
+echo   Antigravity è‡ªå‹•åŒ–é‡åŒ–æ“ç›¤å¹³å° (å°è‚¡ + åŠ å¯†åˆç´„ + WorldQuant)
 echo ========================================================
 echo.
-echo [1] ¥¿¦b¶}±Ò¶³ºÝ OnRender Web ¤¶­±...
+echo [1] æ­£åœ¨é–‹å•Ÿé›²ç«¯ OnRender Web ä»‹é¢...
 start https://getting-rich.onrender.com/
 echo.
-echo [2] ¥¿¦bÀË¬d¥»¾÷ Python ¾Þ½L®Ö¤ß¦øªA¾¹...
+echo [2] æ­£åœ¨æª¢æŸ¥æœ¬æ©Ÿ Python æ“ç›¤æ ¸å¿ƒä¼ºæœå™¨...
 timeout /t 2 >nul
 echo.
-echo ­Y»Ý©ó¥»¾÷¹B¦æ¥»¦a¦øªA¾¹¡A½Ð«ö¥ô·NÁä±Ò°Ê¥»¦a Web ªA°È (³s±µ°ð 8999)¡G
+echo è‹¥éœ€æ–¼æœ¬æ©Ÿé‹è¡Œæœ¬åœ°ä¼ºæœå™¨ï¼Œè«‹æŒ‰ä»»æ„éµå•Ÿå‹•æœ¬åœ° Web æœå‹™ (é€£æŽ¥åŸ  8999)ï¼š
 pause >nul
 start http://localhost:8999
-C:\Users\mis\miniconda3\envs\dlcv\python.exe web_ui/app.py
+python web_ui/app.py
 pause
