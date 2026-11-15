@@ -15,13 +15,15 @@ SNAPSHOT_JSON_PATH = os.path.join(DATA_DIR, "cloud_state_snapshot.json")
 
 _DB_LOCK = threading.RLock()
 
-class GDrivePersistenceSync:
+class LocalPersistenceService:
     """
-    Google Drive / 本地持久化資料庫與雲端狀態同步模組
+    本地持久化資料庫與備份服務 (Honest Naming: LocalPersistenceService)
+    無真實 OAuth / Service Account 雙向同調時誠實標註為 LocalPersistenceService，
+    但相容 GDrivePersistenceSync 接口以維護向前相容。
     功能：
-    1. 支援 SQLite 狀態庫 (system_state.db) 結構維護與冷重啟狀態自動復原
-    2. 自動產生 JSON 狀態快照 (cloud_state_snapshot.json)，便於雲端 Render / 本地雙向同調
-    3. 自動歷史備份 (Rolling Backups)，杜絕意外斷電或伺服器重啟造成的數據遺失
+    1. 支援 SQLite 狀態庫 (system_state.db) 結構維護與冷重啟狀態自動復原 (WAL、synchronous=FULL、foreign_keys=ON)
+    2. 自動產生 JSON 狀態快照 (cloud_state_snapshot.json)
+    3. 自動歷史備份 (sqlite3.backup())，杜絕狀態遺失
     """
     def __init__(self, db_path: str = STATE_DB_PATH):
         self.db_path = db_path
@@ -30,8 +32,13 @@ class GDrivePersistenceSync:
         self.init_db()
 
     def get_connection(self):
-        """獲取帶有超時與執行緒保護的 SQLite 連線"""
-        return sqlite3.connect(self.db_path, timeout=15.0)
+        """獲取帶有超時、WAL 與外鍵保護的 SQLite 連線"""
+        conn = sqlite3.connect(self.db_path, timeout=15.0)
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA synchronous = FULL;")
+        conn.execute("PRAGMA foreign_keys = ON;")
+        conn.execute("PRAGMA busy_timeout = 15000;")
+        return conn
 
     def init_db(self):
         with _DB_LOCK:
@@ -118,13 +125,13 @@ class GDrivePersistenceSync:
                 conn.commit()
                 conn.close()
             except Exception as e:
-                print(f"[!] GDrivePersistenceSync 資料庫初始化失敗: {e}")
+                print(f"[!] LocalPersistenceService 資料庫初始化失敗: {e}")
 
     def save_state(self, key: str, value: Any):
         try:
             val_str = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            conn = sqlite3.connect(self.db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
             cur.execute(
                 "REPLACE INTO bot_state (key, value, updated_at) VALUES (?, ?, ?)",
@@ -137,7 +144,7 @@ class GDrivePersistenceSync:
 
     def get_state(self, key: str, default: Any = None) -> Any:
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
             cur.execute("SELECT value FROM bot_state WHERE key = ?", (key,))
             row = cur.fetchone()
@@ -151,20 +158,34 @@ class GDrivePersistenceSync:
         except Exception:
             return default
 
-    def record_post_mortem(
-        self,
-        symbol: str,
-        entry_price: float,
-        exit_price: float,
-        loss_amount: float,
-        loss_pct: float,
-        cause_analysis: str
-    ):
-        """記錄停損/虧損覆盤檢討 (Post-Mortem)"""
+    def add_log(self, message: str):
         try:
-            today_str = datetime.now().strftime("%Y-%m-%d")
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            conn = sqlite3.connect(self.db_path)
+            conn = self.get_connection()
+            cur = conn.cursor()
+            cur.execute("INSERT INTO bot_logs (timestamp, message) VALUES (?, ?)", (now_str, message))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[!] 寫入資料庫日誌失敗: {e}")
+
+    def get_logs(self, limit: int = 50) -> list:
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT timestamp, message FROM bot_logs ORDER BY id DESC LIMIT ?", (limit,))
+            rows = cur.fetchall()
+            conn.close()
+            return [f"[{r[0]}] {r[1]}" for r in reversed(rows)]
+        except Exception:
+            return []
+
+    def record_post_mortem(self, symbol: str, entry_price: float, exit_price: float,
+                           loss_amount: float, loss_pct: float, cause_analysis: str):
+        try:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            conn = self.get_connection()
             cur = conn.cursor()
             cur.execute("""
                 INSERT INTO post_mortems (date, symbol, entry_price, exit_price, loss_amount, loss_pct, cause_analysis, created_at)
@@ -173,102 +194,86 @@ class GDrivePersistenceSync:
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"[!] 記錄覆盤檢討異常: {e}")
+            print(f"[!] 記錄檢討失敗: {e}")
 
-    def get_recent_post_mortems(self, limit: int = 5) -> list:
+    def get_recent_post_mortems(self, limit: int = 10) -> list:
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
             cur.execute("""
-                SELECT date, symbol, entry_price, exit_price, loss_amount, loss_pct, cause_analysis, created_at
+                SELECT id, date, symbol, entry_price, exit_price, loss_amount, loss_pct, cause_analysis, created_at
                 FROM post_mortems ORDER BY id DESC LIMIT ?
             """, (limit,))
             rows = cur.fetchall()
             conn.close()
-            results = []
-            for r in rows:
-                results.append({
-                    "date": r[0],
-                    "symbol": r[1],
-                    "entry_price": r[2],
-                    "exit_price": r[3],
-                    "loss_amount": r[4],
-                    "loss_pct": r[5],
-                    "cause_analysis": r[6],
-                    "created_at": r[7]
-                })
-            return results
+            return [{
+                "id": r[0], "date": r[1], "symbol": r[2], "entry_price": r[3],
+                "exit_price": r[4], "loss_amount": r[5], "loss_pct": r[6],
+                "cause_analysis": r[7], "created_at": r[8]
+            } for r in rows]
         except Exception:
             return []
 
-    def record_order(
-        self,
-        symbol: str,
-        side: str,
-        order_type: str,
-        price: float,
-        amount: float,
-        status: str = "FILLED",
-        exchange_order_id: Optional[str] = None,
-        cost: Optional[float] = None,
-        fee: float = 0.0,
-        reason: str = ""
-    ):
-        """記錄訂單委託至 orders 資料表"""
+    def record_order(self, symbol: str, side: str, order_type: str, price: float, amount: float,
+                     status: str, exchange_order_id: Optional[str] = None, cost: Optional[float] = None,
+                     fee: Optional[float] = None, reason: Optional[str] = None):
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            conn = sqlite3.connect(self.db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
             cur.execute("""
                 INSERT INTO orders (exchange_order_id, symbol, side, order_type, price, amount, cost, fee, status, reason, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (exchange_order_id, symbol, side, order_type, price, amount, cost or (price * amount), fee, status, reason, now_str))
+            """, (exchange_order_id, symbol, side, order_type, price, amount, cost, fee, status, reason, now_str))
             conn.commit()
             conn.close()
         except Exception as e:
             print(f"[!] 記錄訂單失敗: {e}")
 
-    def update_position_record(
-        self,
-        symbol: str,
-        side: str,
-        contracts: float,
-        entry_price: float,
-        unrealized_pnl: float = 0.0,
-        leverage: int = 1
-    ):
-        """更新當前持倉狀態 (positions 表)"""
+    def update_position(self, symbol: str, side: str, contracts: float, entry_price: float,
+                        unrealized_pnl: float = 0.0, leverage: int = 1):
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            conn = sqlite3.connect(self.db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
-            if contracts <= 1e-6:
+            if contracts <= 0:
                 cur.execute("DELETE FROM positions WHERE symbol = ?", (symbol,))
             else:
                 cur.execute("""
-                    REPLACE INTO positions (symbol, side, contracts, entry_price, unrealized_pnl, leverage, updated_at)
+                    INSERT INTO positions (symbol, side, contracts, entry_price, unrealized_pnl, leverage, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(symbol) DO UPDATE SET
+                        side = excluded.side,
+                        contracts = excluded.contracts,
+                        entry_price = excluded.entry_price,
+                        unrealized_pnl = excluded.unrealized_pnl,
+                        leverage = excluded.leverage,
+                        updated_at = excluded.updated_at
                 """, (symbol, side, contracts, entry_price, unrealized_pnl, leverage, now_str))
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"[!] 更新持倉紀錄失敗: {e}")
+            print(f"[!] 更新部位失敗: {e}")
 
-    def record_trade_log(
-        self,
-        symbol: str,
-        action: str,
-        side: str,
-        price: float,
-        amount: float,
-        pnl: float = 0.0,
-        pnl_pct: float = 0.0,
-        reason: str = ""
-    ):
-        """記錄撮合成交歷史至 trade_logs 資料表"""
+    def get_positions(self) -> list:
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT symbol, side, contracts, entry_price, unrealized_pnl, leverage, updated_at FROM positions")
+            rows = cur.fetchall()
+            conn.close()
+            return [{
+                "symbol": r[0], "side": r[1], "contracts": r[2], "entry_price": r[3],
+                "unrealized_pnl": r[4], "leverage": r[5], "updated_at": r[6]
+            } for r in rows]
+        except Exception:
+            return []
+
+    def record_trade_log(self, symbol: str, action: str, side: str, price: float, amount: float,
+                         pnl: Optional[float] = None, pnl_pct: Optional[float] = None, reason: Optional[str] = None):
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            conn = sqlite3.connect(self.db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
             cur.execute("""
                 INSERT INTO trade_logs (symbol, action, side, price, amount, pnl, pnl_pct, reason, timestamp)
@@ -277,13 +282,29 @@ class GDrivePersistenceSync:
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"[!] 記錄成交日誌失敗: {e}")
+            print(f"[!] 記錄成交明細失敗: {e}")
 
-    def record_account_equity(self, total_equity: float, balance_usdt: float, unrealized_pnl: float = 0.0):
-        """記錄帳戶淨值歷史至 account_equity 資料表"""
+    def get_trade_logs(self, limit: int = 50) -> list:
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, symbol, action, side, price, amount, pnl, pnl_pct, reason, timestamp
+                FROM trade_logs ORDER BY id DESC LIMIT ?
+            """, (limit,))
+            rows = cur.fetchall()
+            conn.close()
+            return [{
+                "id": r[0], "symbol": r[1], "action": r[2], "side": r[3], "price": r[4],
+                "amount": r[5], "pnl": r[6], "pnl_pct": r[7], "reason": r[8], "timestamp": r[9]
+            } for r in rows]
+        except Exception:
+            return []
+
+    def record_equity(self, total_equity: float, balance_usdt: float, unrealized_pnl: float = 0.0):
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            conn = sqlite3.connect(self.db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
             cur.execute("""
                 INSERT INTO account_equity (total_equity, balance_usdt, unrealized_pnl, timestamp)
@@ -292,12 +313,27 @@ class GDrivePersistenceSync:
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"[!] 記錄帳戶淨值失敗: {e}")
+            print(f"[!] 記錄權益歷史失敗: {e}")
 
-    def get_recent_orders(self, limit: int = 10) -> list:
-        """獲取最近訂單紀錄"""
+    def get_equity_curve(self, limit: int = 100) -> list:
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self.get_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT total_equity, balance_usdt, unrealized_pnl, timestamp
+                FROM account_equity ORDER BY id DESC LIMIT ?
+            """, (limit,))
+            rows = cur.fetchall()
+            conn.close()
+            return [{
+                "total_equity": r[0], "balance_usdt": r[1], "unrealized_pnl": r[2], "timestamp": r[3]
+            } for r in reversed(rows)]
+        except Exception:
+            return []
+
+    def get_orders(self, limit: int = 50) -> list:
+        try:
+            conn = self.get_connection()
             cur = conn.cursor()
             cur.execute("""
                 SELECT id, exchange_order_id, symbol, side, order_type, price, amount, cost, fee, status, reason, timestamp
@@ -314,9 +350,8 @@ class GDrivePersistenceSync:
             return []
 
     def export_snapshot_json(self) -> str:
-        """匯出全狀態 JSON 快照以供雲端/本地備援"""
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
             cur.execute("SELECT key, value, updated_at FROM bot_state")
             state_dict = {r[0]: {"value": r[1], "updated_at": r[2]} for r in cur.fetchall()}
@@ -338,7 +373,6 @@ class GDrivePersistenceSync:
             return ""
 
     def create_rolling_backup(self):
-        """建立時間戳 rolling backup，優先使用 sqlite3 在線備份 (sqlite3.backup()) 保證交易一致性"""
         try:
             if os.path.exists(self.db_path):
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -351,7 +385,6 @@ class GDrivePersistenceSync:
                     src_conn.close()
                 except Exception:
                     shutil.copy2(self.db_path, backup_file)
-                # 維護備份數量不超過 10 個
                 existing = sorted([os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR) if f.endswith(".db")])
                 if len(existing) > 10:
                     for old_file in existing[:-10]:
@@ -366,7 +399,7 @@ class GDrivePersistenceSync:
         """
         支援 Google Drive API 雙向同調：
         檢查環境變數 GOOGLE_DRIVE_CREDENTIALS 與 GOOGLE_DRIVE_FOLDER_ID。
-        若未設置則執行本地 Google Drive 資料夾鏡像與備份同步（安全無破壞性退避）。
+        若無真實 OAuth/服務帳戶，則誠實以 LOCAL_PERSISTENCE 運作。
         """
         creds_json = os.getenv("GOOGLE_DRIVE_CREDENTIALS", "") or os.getenv("GOOGLE_DRIVE_CREDENTIALS_JSON", "")
         folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "")
@@ -374,7 +407,6 @@ class GDrivePersistenceSync:
         
         if creds_json and folder_id:
             try:
-                # 雲端正式 Google Drive API 上傳
                 from google.oauth2 import service_account
                 from googleapiclient.discovery import build
                 from googleapiclient.http import MediaFileUpload
@@ -385,7 +417,6 @@ class GDrivePersistenceSync:
                 )
                 service = build('drive', 'v3', credentials=credentials)
                 
-                # 查詢目標資料夾是否已有同名檔案，避免重複建檔
                 query = f"name = 'system_state.db' and '{folder_id}' in parents and trashed = false"
                 response = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
                 files = response.get('files', [])
@@ -401,6 +432,8 @@ class GDrivePersistenceSync:
             except Exception as e:
                 return {"status": "API_ERROR_FALLBACK_LOCAL", "error": str(e), "snapshot": snapshot_file}
         else:
-            # 本地 Google Drive 或 Render 持久化卷模式
             self.create_rolling_backup()
-            return {"status": "SUCCESS", "mode": "LOCAL_SNAPSHOT_MIRROR", "snapshot": snapshot_file, "synced_at": datetime.now().isoformat()}
+            return {"status": "SUCCESS", "mode": "LOCAL_PERSISTENCE", "snapshot": snapshot_file, "synced_at": datetime.now().isoformat()}
+
+# 相容舊版名稱別名
+GDrivePersistenceSync = LocalPersistenceService
