@@ -111,9 +111,9 @@
 ### Step 2. 配置環境變數
 在專案根目錄 `.env` 檔案中加入您的幣安實盤 Key：
 ```bash
-# 實盤專用設定
-CRYPTO_API_KEY="您的真實幣安_API_KEY"
-CRYPTO_API_SECRET="您的真實幣安_SECRET_KEY"
+# 實盤專用設定 (由使用者於本機 .env 自行配置，嚴禁提交至倉庫)
+BINANCE_API_KEY="<YOUR_BINANCE_API_KEY>"
+BINANCE_API_SECRET="<YOUR_BINANCE_API_SECRET>"
 ```
 
 ### Step 3. 修改設定開關
