@@ -419,10 +419,12 @@ class BinanceTestnetClient:
             }
 
     def close_all_positions(self) -> Dict[str, Any]:
-        """一鍵平掉所有未平倉部位"""
-        count = len(self._mock_positions)
-        self._mock_positions.clear()
-        if self.exchange and self.is_connected:
+        """一鍵平掉所有未平倉部位 (平倉委託必須附帶 reduceOnly=True)"""
+        count = 0
+        if self.mock_mode or not self.is_connected or not self.exchange:
+            count = len(self._mock_positions)
+            self._mock_positions.clear()
+        else:
             try:
                 positions = self.fetch_positions()
                 for pos in positions:
@@ -436,8 +438,9 @@ class BinanceTestnetClient:
                         'quantity': amt,
                         'reduceOnly': True
                     })
-            except Exception:
-                pass
+                    count += 1
+            except Exception as e:
+                print(f"[!] 幣安合約測試網一鍵平倉異常: {e}")
 
         return {
             "success": True,

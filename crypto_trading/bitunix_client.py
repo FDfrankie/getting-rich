@@ -265,20 +265,25 @@ class BitunixClient:
 
     def close_all_positions(self) -> Dict[str, Any]:
         """Bitunix 一鍵平倉所有持倉 (平倉委託必須附帶 reduceOnly=True 防反向開倉)"""
-        count = len(self._simulated_positions)
-        self._simulated_positions.clear()
-        if self.is_live:
+        count = 0
+        if not self.is_live:
+            count = len(self._simulated_positions)
+            self._simulated_positions.clear()
+        else:
             try:
                 positions = self.fetch_positions()
                 for p in positions:
                     side = "sell" if p["side"] == "LONG" else "buy"
-                    self.create_order(p["symbol"], side=side, order_type="market", amount=p["contracts"], reduce_only=True)
+                    res = self.create_order(p["symbol"], side=side, order_type="market", amount=p["contracts"], reduce_only=True)
+                    if res.get("success"):
+                        count += 1
             except Exception:
                 pass
 
         return {
             "success": True,
             "exchange": "bitunix",
+            "closed_count": count,
             "message": f"[Bitunix 實盤] 已結清所有部位 ({count} 筆持倉已處理)"
         }
 
