@@ -52,3 +52,8 @@
 ## 驗收結論
 
 全系統 38 項規格標準均已實裝入生產代碼、持久化庫與測試中，經 `python -m compileall -q .` 與 `pytest -q` 驗證，全數通過無任何語法錯誤或測試失敗。
+| 39 | Web 認證與 RBAC 角色授權 (VIEWER/OPERATOR/ADMIN & CSRF) | ROUND 5 (P12) | web_ui/auth.py, 	ests/test_web_authz.py | 實作多級權限控制、Secure Cookie 與 CSRF 檢驗 | PASS |
+| 40 | 維運端點與健康檢查監控 (/health/live, /health/ready 等) | ROUND 5 (P12) | web_ui/server.py, 	ests/test_health_endpoints.py | 提供實時系統監控與容器存活就緒探針 | PASS |
+| 41 | 專案標準封裝與相依管理 (PEP 517/621 pyproject.toml) | ROUND 5 (P13) | pyproject.toml, README.md | 標準化打包配置，模組引用完全對齊無斷裂 | PASS |
+| 42 | 架構決策紀錄庫建立 (Architecture Decision Records) | ROUND 5 (P13) | docs/adr/001-trading-mode-safety-locks.md | 落地交易模式與風控閘門之架構設計決策 | PASS |
+| 43 | 全專案程式碼風格與格式化規範 (Ruff Linter & Formatter) | ROUND 5 (P13) | pyproject.toml | 通過 ruff 全代碼自動格式化檢測與排版驗收 | PASS |
