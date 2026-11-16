@@ -133,7 +133,7 @@ def sanitize_error(exc: Exception) -> str:
 
 
 class BrainJobQueue:
-    def __init__(self, brain_client: Any, default_poll_interval: float = 2.0) -> None:
+    def __init__(self, brain_client: Any, default_poll_interval: float = 2.0, autostart: bool = True) -> None:
         self.brain_client = brain_client
         self.default_poll_interval = float(default_poll_interval)
         self._jobs: dict[str, BrainSimulationJob] = {}
@@ -141,9 +141,9 @@ class BrainJobQueue:
         self._lock = threading.Lock()
         self._worker_thread: threading.Thread | None = None
         self._pending_queue: list[str] = []
-        self._running: bool = True
-
-        self._start_worker()
+        self._running: bool = False
+        if autostart:
+            self.start()
 
     def _start_worker(self) -> None:
         self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
@@ -172,6 +172,28 @@ class BrainJobQueue:
             self._key_to_job_id[key] = job_id
             self._pending_queue.append(job_id)
             return job, True
+
+    def start(self) -> None:
+        with self._lock:
+            if self._worker_thread and self._worker_thread.is_alive():
+                return
+            self._running = True
+            self._start_worker()
+
+    def stop(self) -> None:
+        self._running = False
+
+    def join(self, timeout: float = 2.0) -> None:
+        t = self._worker_thread
+        if t and t.is_alive():
+            t.join(timeout=timeout)
+
+    def queue_depth(self) -> int:
+        with self._lock:
+            return len(self._pending_queue)
+
+    def worker_alive(self) -> bool:
+        return bool(self._running and self._worker_thread and self._worker_thread.is_alive())
 
     def get_job(self, job_id: str) -> BrainSimulationJob | None:
         with self._lock:

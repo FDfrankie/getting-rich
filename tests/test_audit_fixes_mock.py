@@ -2,7 +2,8 @@
 Mock 單元測試套件：驗證 14 項深層程式碼與 UI 修復（全數 mock，嚴禁連外）。
 """
 
-from unittest.mock import MagicMock
+import os
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
@@ -16,15 +17,16 @@ from worldquant_brain.brain_client import BrainClient
 
 def test_brain_client_is_authenticated_property():
     """驗證 BrainClient 的 is_authenticated 屬性"""
-    client = BrainClient(email=None, password=None)
-    assert not client.is_authenticated
-    assert client.offline_mode
+    with patch.dict(os.environ, {"BRAIN_EMAIL": "", "BRAIN_USERNAME": "", "BRAIN_PASSWORD": ""}):
+        client = BrainClient(email=None, password=None)
+        assert not client.is_authenticated
+        assert client.offline_mode
 
-    client_with_auth = BrainClient(email="user@example.com", password="pwd")
-    assert not client_with_auth.offline_mode
-    assert not client_with_auth.is_authenticated  # 尚未 authenticate
-    client_with_auth.authenticated = True
-    assert client_with_auth.is_authenticated
+        client_with_auth = BrainClient(email="user@example.com", password="pwd")
+        assert not client_with_auth.offline_mode
+        assert not client_with_auth.is_authenticated  # 尚未 authenticate
+        client_with_auth.authenticated = True
+        assert client_with_auth.is_authenticated
 
 
 def test_ml_strategy_no_fit_on_inference():

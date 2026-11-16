@@ -4,6 +4,12 @@ Supports validated TradingMode: LOCAL_PAPER, BINANCE_TESTNET, BITUNIX_LIVE.
 """
 
 from __future__ import annotations
+from pathlib import Path
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+except ImportError:
+    pass
 
 import os
 import warnings

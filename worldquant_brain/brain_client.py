@@ -39,6 +39,25 @@ def mask_sensitive_data(text: Any) -> str:
     return text_str
 
 
+class BrainBiometricRequired(RuntimeError):
+    error_code = "BRAIN_BIOMETRIC_REQUIRED"
+
+
+class BrainWAFBlocked(RuntimeError):
+    error_code = "BRAIN_WAF_BLOCKED"
+
+
+def _classify_auth_challenge(response) -> str | None:
+    authenticate = response.headers.get("WWW-Authenticate", "").lower()
+    body = (response.text or "").lower()
+    if response.status_code in {401, 403}:
+        if "persona" in authenticate or "biometric" in body:
+            return "BRAIN_BIOMETRIC_REQUIRED"
+        if "cloudflare" in body or "waf" in body or "captcha" in body:
+            return "BRAIN_WAF_BLOCKED"
+    return None
+
+
 class BrainClient:
     BASE_URL = "https://api.worldquantbrain.com"
 
@@ -85,6 +104,13 @@ class BrainClient:
                     elapsed,
                     mask_sensitive_data(r.text[:500]),
                 )
+                challenge = _classify_auth_challenge(r)
+                if challenge == "BRAIN_BIOMETRIC_REQUIRED":
+                    raise BrainBiometricRequired(
+                        "WorldQuant BRAIN requires interactive verification. Complete verification in the official browser session and retry."
+                    )
+                if challenge == "BRAIN_WAF_BLOCKED":
+                    raise BrainWAFBlocked("WorldQuant BRAIN request blocked by WAF/anti-bot challenge.")
                 r.raise_for_status()
             self.authenticated = True
             logger.info("WorldQuant authentication successful in %.2fs", elapsed)

@@ -93,8 +93,8 @@ class ContinuousAlphaMiner:
                 "fitness": round(base_fitness, 2),
                 "turnover": round(base_turnover, 2),
                 "margin_bps": round(base_margin, 1),
-                "status": "VERIFIED_QUALIFIED",
-                "category": "Price-Volume / Continuous Mined",
+                "status": "LOCAL_SCREENED",
+                "category": "LOCAL_CANDIDATE_ONLY / Unverified by BRAIN",
             }
         return None
 

@@ -3,12 +3,30 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+try:
+    from zoneinfo import ZoneInfo
+    _TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+except Exception:
+    _TAIPEI_TZ = timezone(timedelta(hours=8))
+
+def _now_taipei() -> datetime:
+    return datetime.now(_TAIPEI_TZ)
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from crypto_trading.bitunix_client import BitunixClient
+from crypto_trading.exchange_normalizer import normalize_binance_balance, normalize_remote_positions
+from crypto_trading.paper_broker import MarketDataService, PaperBroker
+from crypto_trading.runtime_context import ConnectionState, RuntimeTradingContext
+from crypto_trading.settings import TradingMode, get_settings
+from crypto_trading.trading_snapshot import (
+    AccountSnapshot, ConnectionSnapshot, MarketSnapshot, ReconciliationSnapshot, RiskSnapshot, TradingSnapshot,
+)
+from web_ui.trading_snapshot_api import get_trading_snapshot_response
+from worldquant_brain.connectivity_service import BrainConnectivityService
 from crypto_trading.config import (
     DEFAULT_SYMBOL,
     INITIAL_BALANCE_USDT,
@@ -152,7 +170,7 @@ class QuantAppContext:
             if rows:
                 self.bot_logs = [f"[{r[0]}] {r[1]}" for r in reversed(rows)]
             else:
-                self.bot_logs = [f"[{datetime.now().strftime('%H:%M:%S')}] 系統常駐核心已就緒，雲端背景運算常駐啟動。"]
+                self.bot_logs = [f"[{_now_taipei().strftime('%H:%M:%S')}] 系統常駐核心已就緒，雲端背景運算常駐啟動。"]
 
             cur.execute("SELECT key, value FROM bot_state")
             for k, v in cur.fetchall():
@@ -193,9 +211,148 @@ class QuantAppContext:
         self.last_taiwan_screener_detailed = detailed
         return detailed
 
+    def _parse_recon_snapshot(self, now: datetime) -> ReconciliationSnapshot:
+        recon_svc = getattr(self, "reconciliation_service", None)
+        if recon_svc is None or not callable(getattr(recon_svc, "get_latest_result", None)):
+            return ReconciliationSnapshot("NEVER_RUN", 0, None)
+        latest_rec = recon_svc.get_latest_result()
+        if not isinstance(latest_rec, dict):
+            return ReconciliationSnapshot("NEVER_RUN", 0, None)
+        raw_ts = latest_rec.get("completed_at")
+        comp_at: datetime | None = None
+        if isinstance(raw_ts, datetime):
+            comp_at = raw_ts if raw_ts.tzinfo else raw_ts.replace(tzinfo=timezone.utc)
+        elif isinstance(raw_ts, str):
+            try:
+                parsed = datetime.fromisoformat(raw_ts)
+                comp_at = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            except Exception:
+                comp_at = None
+        if comp_at is None:
+            return ReconciliationSnapshot("NEVER_RUN", 0, None)
+        age = (now - comp_at).total_seconds()
+        disc = int(latest_rec.get("discrepancy_count", 0))
+        if age > 30:
+            st = "STALE"
+        elif int(latest_rec.get("unknown_order_count", 0)) > 0:
+            st = "UNKNOWN_ORDERS"
+        elif not latest_rec.get("in_sync", False):
+            st = "DRIFT"
+        else:
+            st = "OK"
+        return ReconciliationSnapshot(st, disc, comp_at)
+
+    def build_trading_snapshot(self) -> TradingSnapshot:
+        now = datetime.now(timezone.utc)
+        raw_mode = getattr(self, "execution_mode", TradingMode.LOCAL_PAPER)
+        if isinstance(raw_mode, TradingMode):
+            req_mode = raw_mode
+        elif str(raw_mode) in {m.value for m in TradingMode}:
+            req_mode = TradingMode(str(raw_mode))
+        else:
+            req_mode = TradingMode.LOCAL_PAPER
+
+        recon_snap = self._parse_recon_snapshot(now)
+
+        if req_mode == TradingMode.BINANCE_TESTNET:
+            t0 = time.perf_counter()
+            probe_fn = getattr(self.testnet_client, "probe_authenticated_connection", None)
+            is_connected = bool(getattr(self.testnet_client, "is_connected", False)) and not bool(getattr(self.testnet_client, "mock_mode", True))
+            if callable(probe_fn):
+                probe = probe_fn()
+                is_connected = bool(getattr(probe, "authenticated", False))
+            if not is_connected:
+                ctx = RuntimeTradingContext.degraded_from_remote(
+                    TradingMode.BINANCE_TESTNET,
+                    account_id="testnet-degraded",
+                    venue="BINANCE_TESTNET",
+                    reason="TESTNET_AUTH_OR_CONNECTION_UNAVAILABLE",
+                    connection_state=ConnectionState.AUTH_FAILED,
+                )
+                return TradingSnapshot(
+                    context=ctx,
+                    connection=ConnectionSnapshot("BINANCE_TESTNET", False, False, None, None, "AUTH_FAILED", "Remote testnet unavailable; no fake values shown"),
+                    market=MarketSnapshot(self.active_bot.symbol, self.active_bot.symbol, "PERPETUAL", "USDT", None, None, "UNAVAILABLE", None, None),
+                    account=AccountSnapshot(None, None, None, None, None, None, None, "USDT", source="UNAVAILABLE", timestamp=None),
+                    positions=(),
+                    open_orders=(),
+                    reconciliation=recon_snap,
+                    risk=RiskSnapshot(False, ("VIEW", "CANCEL_ENTRY_ORDERS", "REDUCE_ONLY", "CLOSE_ALL"), ("TESTNET_UNAVAILABLE",)),
+                    configured_strategy=self.bot_strategy_name,
+                    effective_strategy=self.bot_strategy_name,
+                    model_id=None,
+                ).validated()
+
+            t = self.testnet_client.fetch_ticker(self.active_bot.symbol)
+            b = self.testnet_client.fetch_balance()
+            ps = self.testnet_client.fetch_positions()
+            oo_fn = getattr(self.testnet_client, "fetch_open_orders", None)
+            open_orders = tuple(oo_fn(self.active_bot.symbol) or ()) if callable(oo_fn) else ()
+            latency_ms = round((time.perf_counter() - t0) * 1000)
+
+            last_p = t.get("last")
+            price = Decimal(str(last_p)) if last_p is not None else None
+            ts_ms = t.get("timestamp")
+            if ts_ms is not None:
+                mkt_ts = datetime.fromtimestamp(float(ts_ms) / 1000.0, tz=timezone.utc)
+                stale_s = max(0.0, (now - mkt_ts).total_seconds())
+                ts_src = "EXCHANGE_EVENT"
+            else:
+                mkt_ts = now
+                stale_s = 0.0
+                ts_src = "RECEIVE_TIME"
+
+            acc = normalize_binance_balance(b, default_currency=str(b.get("settlement_currency", "USDT")), now=now)
+            pos_snaps = normalize_remote_positions(ps, self.active_bot.symbol, "BINANCE_TESTNET", now)
+            ctx = RuntimeTradingContext(
+                requested_mode=TradingMode.BINANCE_TESTNET,
+                effective_mode=TradingMode.BINANCE_TESTNET,
+                environment_id="testnet",
+                account_id="binance-testnet",
+                venue="BINANCE_TESTNET",
+                connection_state=ConnectionState.AUTHENTICATED,
+            )
+            return TradingSnapshot(
+                context=ctx,
+                connection=ConnectionSnapshot("BINANCE_TESTNET", True, True, latency_ms, now),
+                market=MarketSnapshot(self.active_bot.symbol, self.active_bot.symbol, "PERPETUAL", acc.currency, price, price, "EXCHANGE_REST", mkt_ts, stale_s, ts_src),
+                account=acc,
+                positions=pos_snaps,
+                open_orders=open_orders,
+                reconciliation=recon_snap,
+                risk=RiskSnapshot(True, ("VIEW", "OPEN_LONG", "OPEN_SHORT", "REDUCE_ONLY", "CLOSE_ALL"), ()),
+                configured_strategy=self.bot_strategy_name,
+                effective_strategy=self.bot_strategy_name,
+                model_id=None,
+            ).validated()
+
+        # LOCAL_PAPER: dedicated MarketDataService + PaperBroker (never uses mock testnet balance)
+        ctx = RuntimeTradingContext.local_paper()
+        mds = getattr(self, "market_data_service", None) or MarketDataService(getattr(self, "public_market_adapter", None))
+        broker = getattr(self, "paper_broker", None) or PaperBroker(self.active_bot)
+        tick = mds.get_latest_tick(self.active_bot.symbol, now=now)
+        stale_s = max(0.0, (now - tick.event_time).total_seconds()) if tick.event_time else None
+        pos_snaps = broker.fetch_positions(tick.price, now=now)
+        open_orders = broker.fetch_open_orders()
+        acc_snap = broker.account_snapshot(pos_snaps, now=now)
+        paper_recon = broker.reconcile(now=now)
+        return TradingSnapshot(
+            context=ctx,
+            connection=ConnectionSnapshot("LOCAL", True, True, 0, now),
+            market=MarketSnapshot(self.active_bot.symbol, self.active_bot.symbol, "PERPETUAL", "USDT", tick.price, tick.price, tick.source, tick.event_time, stale_s, tick.timestamp_source),
+            account=acc_snap,
+            positions=pos_snaps,
+            open_orders=open_orders,
+            reconciliation=paper_recon,
+            risk=RiskSnapshot(True, ("VIEW", "OPEN_LONG", "OPEN_SHORT", "REDUCE_ONLY", "CLOSE_ALL"), ()),
+            configured_strategy=self.bot_strategy_name,
+            effective_strategy=self.bot_strategy_name,
+            model_id=None,
+        ).validated()
+
     def add_log(self, msg: str):
         """寫入記憶體並同步持久化到 SQLite 磁碟"""
-        ts = datetime.now().strftime("%H:%M:%S")
+        ts = _now_taipei().strftime("%H:%M:%S")
         formatted = f"[{ts}] {msg}"
         self.bot_logs.append(formatted)
         if len(self.bot_logs) > 60:
@@ -203,7 +360,7 @@ class QuantAppContext:
 
         # 寫入磁碟 SQLite
         try:
-            now_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            now_dt = _now_taipei().strftime("%Y-%m-%d %H:%M:%S")
             conn = sqlite3.connect(STATE_DB_PATH)
             cur = conn.cursor()
             cur.execute("INSERT INTO bot_logs (timestamp, message) VALUES (?, ?)", (ts, msg))
@@ -423,12 +580,30 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             )
 
         # API: 系統總覽與健康度 (含 Watchdog 四大核心心跳)
+        if path == "/api/trading/snapshot":
+            status_code, headers, body = get_trading_snapshot_response(APP_STATE.build_trading_snapshot)
+            self.send_response(status_code)
+            for hk, hv in headers.items():
+                self.send_header(hk, hv)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path == "/health/alpha-miner" or path == "/api/brain/status" or path == "/api/brain/connectivity":
+            if not hasattr(APP_STATE, "brain_connectivity_service"):
+                APP_STATE.brain_connectivity_service = BrainConnectivityService(APP_STATE.brain_client, APP_STATE.brain_job_queue, get_settings)
+            local_alive = bool(APP_STATE.miner_thread and APP_STATE.miner_thread.is_alive())
+            payload = APP_STATE.brain_connectivity_service.get_status(local_alpha_worker_alive=local_alive)
+            payload["time_taipei"] = _now_taipei().strftime("%Y-%m-%d %H:%M:%S")
+            return self._send_json_response(payload)
+
         if path == "/api/status" or path == "/health":
             now_ts = time.time()
             return self._send_json_response(
                 {
                     "status": "online",
-                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "time": _now_taipei().strftime("%Y-%m-%d %H:%M:%S"),
                     "bot_running": APP_STATE.bot_running,
                     "bot_strategy": APP_STATE.bot_strategy_name,
                     "execution_mode": APP_STATE.execution_mode,
@@ -929,6 +1104,8 @@ QuantRequestHandler = AppAPIHandler
 def run_server(port: int = 8999, host: str = "0.0.0.0"):
     os.makedirs(STATIC_DIR, exist_ok=True)
     server_address = (host, port)
+    ThreadingHTTPServer.allow_reuse_address = True
+    ThreadingHTTPServer.daemon_threads = True
     httpd = ThreadingHTTPServer(server_address, AppAPIHandler)
     print(f"🚀 [Web UI Server] 服務已在 http://localhost:{port} 啟動！")
     print(f"📱 手機與局域網訪問可使用 http://[您的區域網路IP]:{port}")

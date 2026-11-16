@@ -1,5 +1,21 @@
 import os
-from datetime import datetime
+import html
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo
+    _TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+except Exception:
+    _TAIPEI_TZ = timezone(timedelta(hours=8))
+
+@dataclass(frozen=True)
+class ReportSnapshot:
+    status: str
+    session_type: str
+    generated_at: str
+    last_valid_trade_date: str | None
+    market_info: dict
+    screener_res: dict
 
 import pandas as pd
 import yfinance as yf
@@ -22,23 +38,40 @@ class ReportGenerator:
         self.stock_screener = StockScreener()
         self.ml_ranker = TaiwanStockMLRanker(model_type="lightgbm")
         self.sync = GDrivePersistenceSync()
+        self._last_snapshot: ReportSnapshot | None = None
+
+    def collect_report_snapshot(self, session_type: str = '盤前晨報', cached_market_info: dict = None) -> ReportSnapshot:
+        now_str = datetime.now(_TAIPEI_TZ).strftime('%Y-%m-%d %H:%M:%S')
+        m_info = cached_market_info if cached_market_info else self.market_analyzer.analyze()
+        is_valid = m_info.get('status') == '正常' and m_info.get('latest_close') not in (None, 'N/A')
+        s_res = self.stock_screener.run_screener_detailed() if is_valid else {'scanned_count': 0, 'qualified_count': 0, 'picks': [], 'near_picks': [], 'defense_hedges': []}
+        snap = ReportSnapshot(
+            status='VALID' if is_valid else 'DATA_UNAVAILABLE',
+            session_type=session_type,
+            generated_at=now_str,
+            last_valid_trade_date=m_info.get('date') if is_valid else None,
+            market_info=m_info,
+            screener_res=s_res,
+        )
+        self._last_snapshot = snap
+        return snap
 
     def generate(self, session_type: str = "盤前晨報", cached_market_info: dict = None) -> str:
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        now_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        today_str = datetime.now(_TAIPEI_TZ).strftime("%Y-%m-%d")
+        now_time_str = datetime.now(_TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-        print("[*] 正在進行大盤多空診斷...")
-        market_info = cached_market_info if cached_market_info else self.market_analyzer.analyze()
-
-        print("[*] 正在掃描潛力強勢標的...")
-        screener_res = self.stock_screener.run_screener_detailed()
+        snap = self.collect_report_snapshot(session_type=session_type, cached_market_info=cached_market_info)
+        if snap.status != 'VALID':
+            return f"# 📊 台股量化決策報告【{session_type}】({today_str})\n\nREPORT_STATUS: DATA_UNAVAILABLE\n\n> ⚠️ 無法取得有效大盤收盤資料，已中止計算多空分數與選股建議。"
+        market_info = snap.market_info
+        screener_res = snap.screener_res
         scanned_count = screener_res["scanned_count"]
         qualified_count = screener_res["qualified_count"]
         picks = screener_res["picks"]
         near_picks = screener_res["near_picks"]
         defense_hedges = screener_res["defense_hedges"]
 
-        last_trade_date = market_info.get("date", today_str)
+        last_trade_date = (market_info.get("date") or "DATA_UNAVAILABLE")
 
         report_lines = [
             f"# 📊 台股量化決策報告【{session_type}】({today_str})",
@@ -163,7 +196,7 @@ class ReportGenerator:
                         f"| #{int(row['rank'])} | **{row['symbol']}** | {row['current_price']} | **{row['predicted_fwd_5d_ret_pct']:+0.2f}%** | {row['bias_ma20']:+0.2f}% | {row['rsi_14']:.1f} |"
                     )
         except Exception as e:
-            report_lines.append(f"\n> ℹ️ ML 多因子預測模型運行略過: {e!s}")
+            report_lines.append(f"\n> ℹ️ ML 多因子預測模型運行略過: {html.escape(str(e), quote=True)}")
 
         # 區塊 4: 每日覆盤與虧損檢討 (Post-Mortem Analysis)
         post_mortems = self.sync.get_recent_post_mortems(limit=5)
@@ -175,7 +208,7 @@ class ReportGenerator:
             ]
         )
         if not post_mortems:
-            report_lines.append("> ✅ 最近期無觸發停損或重大虧損事件，系統執行紀律率 100%。")
+            report_lines.append("> ℹ️ 尚無足夠平倉 / Post-Mortem 紀錄，無法計算執行紀律率（Insufficient data）。")
         else:
             report_lines.append("| 日期 | 標的 | 進場價 | 出場價 | 虧損金額 | 虧損幅度 | 歸因分析與優化對策 |")
             report_lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
@@ -214,11 +247,13 @@ class ReportGenerator:
         生成具備精緻視覺排版、色彩標籤、多空燈號與響應式表格的報告 HTML 視圖
         支援渲染為 HTML/PDF 格式，顯示產出時間與最後交易日
         """
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        now_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now_time_str = datetime.now(_TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
-        market_info = cached_market_info if cached_market_info else self.market_analyzer.analyze()
-        screener_res = self.stock_screener.run_screener_detailed()
+        snap = self._last_snapshot if (self._last_snapshot and cached_market_info is not None) else self.collect_report_snapshot(session_type=session_type, cached_market_info=cached_market_info)
+        if snap.status != 'VALID':
+            return "<div class='p-4 rounded-xl bg-rose-950/40 border border-rose-500/30 text-rose-300'><strong>REPORT_STATUS: DATA_UNAVAILABLE</strong> — 無法取得有效大盤收盤資料，已中止計算多空分數與選股建議。</div>"
+        market_info = snap.market_info
+        screener_res = snap.screener_res
         scanned_count = screener_res["scanned_count"]
         qualified_count = screener_res["qualified_count"]
         picks = screener_res["picks"]
@@ -227,7 +262,7 @@ class ReportGenerator:
 
         score = market_info.get("score", 50)
         regime = market_info.get("regime", "震盪整理")
-        last_trade_date = market_info.get("date", today_str)
+        last_trade_date = (market_info.get("date") or "DATA_UNAVAILABLE")
         ma_pattern = market_info.get("ma_pattern", "均線架構判斷中")
 
         # 燈號顏色邏輯
@@ -500,7 +535,7 @@ class ReportGenerator:
         except Exception as e:
             html += f"""
             <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-4 text-xs text-slate-500">
-                ML 多因子排序榜載入略過: {e!s}
+                ML 多因子排序榜載入略過: {html.escape(str(e), quote=True)}
             </div>
             """
 

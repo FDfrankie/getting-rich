@@ -1,0 +1,1 @@
+from tests.test_p11_governance_suite import TestArtifactTrust as TestArtifactTrust

@@ -2,7 +2,8 @@ import time
 from datetime import datetime
 from typing import Any
 
-from crypto_trading.config import DEFAULT_SYMBOL, INITIAL_BALANCE_USDT, PAPER_TRADING
+from crypto_trading.config import DEFAULT_SYMBOL, INITIAL_BALANCE_USDT
+from crypto_trading.settings import TradingMode, get_settings
 from crypto_trading.data_loader import CryptoDataLoader
 from crypto_trading.strategies.momentum_breakout import (
     BaseStrategy,
@@ -42,7 +43,7 @@ class CryptoTradingBot:
         exchange_adapter: Any | None = None,
     ):
         self.symbol = symbol
-        self.is_paper = PAPER_TRADING
+        self.is_paper = get_settings().trading_mode == TradingMode.LOCAL_PAPER
         self.loader = CryptoDataLoader(symbol=symbol)
         self.strategy = strategy or MomentumBreakoutStrategy()
         self.risk_manager = RiskManager(initial_capital=INITIAL_BALANCE_USDT)
