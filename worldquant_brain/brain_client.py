@@ -69,8 +69,8 @@ class BrainClient:
         poll_interval: float = 5.0,
         session: requests.Session | None = None,
     ) -> None:
-        self.email = email or os.getenv("BRAIN_EMAIL") or os.getenv("BRAIN_USERNAME")
-        self.password = password or os.getenv("BRAIN_PASSWORD")
+        self.email = email if email is not None else (os.getenv("BRAIN_EMAIL") or os.getenv("BRAIN_USERNAME"))
+        self.password = password if password is not None else os.getenv("BRAIN_PASSWORD")
         self.timeout = float(timeout)
         self.poll_interval = float(poll_interval)
         self.session = session or requests.Session()
@@ -312,10 +312,28 @@ class BrainClient:
             if status in ("COMPLETE", "COMPLETED"):
                 sim_id = last.get("id") or location.rstrip("/").split("/")[-1]
                 alpha_id = last.get("alpha") or last.get("alpha_id") or sim_id
-                sharpe = self._number(last, "sharpe")
-                fitness = self._number(last, "fitness")
-                turnover = self._number(last, "turnover")
-                margin = self._number(last, "margin")
+
+                # If metrics are not in the simulation object, fetch the alpha object
+                alpha_data = {}
+                if last.get("alpha"):
+                    try:
+                        alpha_url = f"{self.BASE_URL}/alphas/{last['alpha']}"
+                        alpha_resp = self.session.get(alpha_url, timeout=self.timeout)
+                        if alpha_resp.status_code == 200:
+                            alpha_data = alpha_resp.json()
+                    except Exception as e:
+                        logger.warning("Failed to fetch alpha record %s: %s", last["alpha"], e)
+
+                metrics_source = dict(last)
+                if alpha_data:
+                    metrics_source.update(alpha_data)
+                    if "is" in alpha_data and isinstance(alpha_data["is"], dict):
+                        metrics_source.update(alpha_data["is"])
+
+                sharpe = self._number(metrics_source, "sharpe")
+                fitness = self._number(metrics_source, "fitness")
+                turnover = self._number(metrics_source, "turnover")
+                margin = self._number(metrics_source, "margin")
 
                 has_valid_metrics = (sharpe is not None) and (fitness is not None)
                 result = {
