@@ -5,6 +5,7 @@ from typing import Any
 from crypto_trading.config import DEFAULT_SYMBOL, INITIAL_BALANCE_USDT
 from crypto_trading.settings import TradingMode, get_settings
 from crypto_trading.data_loader import CryptoDataLoader
+from crypto_trading.strategies.conditional_prob_strategy import ConditionalProbTechStrategy
 from crypto_trading.strategies.momentum_breakout import (
     BaseStrategy,
     MomentumBreakoutStrategy,
@@ -25,6 +26,21 @@ from crypto_trading.risk_manager import RiskManager
 from data_persistence.gdrive_sync import LocalPersistenceService
 
 
+def _resolve_default_timeframe() -> str:
+    import json
+    from pathlib import Path
+    rep = Path(__file__).resolve().parent.parent / "reports" / "mtf_conditional_prob_benchmark.json"
+    if rep.exists():
+        try:
+            data = json.loads(rep.read_text(encoding="utf-8"))
+            tf = str(data.get("recommended_timeframe", "")).strip()
+            if tf in {"1m", "3m", "5m", "15m", "1h", "1d"}:
+                return tf
+        except Exception:
+            pass
+    return "5m"
+
+
 class CryptoTradingBot:
     """
     虛擬貨幣自動操盤機器人核心
@@ -41,11 +57,13 @@ class CryptoTradingBot:
         symbol: str = DEFAULT_SYMBOL,
         strategy: BaseStrategy | None = None,
         exchange_adapter: Any | None = None,
+        exec_timeframe: str | None = None,
     ):
         self.symbol = symbol
         self.is_paper = get_settings().trading_mode == TradingMode.LOCAL_PAPER
         self.loader = CryptoDataLoader(symbol=symbol)
-        self.strategy = strategy or MomentumBreakoutStrategy()
+        self.exec_timeframe = exec_timeframe or _resolve_default_timeframe()
+        self.strategy = strategy or ConditionalProbTechStrategy()
         self.risk_manager = RiskManager(initial_capital=INITIAL_BALANCE_USDT)
         self.order_manager = OrderManager()
         self.manual_controller = ManualPositionController()
@@ -360,7 +378,7 @@ class CryptoTradingBot:
     def step(self):
         """單次決策迴圈步進 (整合高階趨勢濾網 Hierarchical Regime Filter)"""
         # 1. 分離高低時框資料，各取至少 100 根已收盤 K 線
-        df_exec = self.loader.fetch_ohlcv(limit=100, timeframe="1m")
+        df_exec = self.loader.fetch_ohlcv(limit=250, timeframe=getattr(self, "exec_timeframe", "5m"))
         df_high = self.loader.fetch_ohlcv(limit=100, timeframe="1h")
 
         df_strat = self.strategy.generate_signals(df_exec)
@@ -427,7 +445,7 @@ class CryptoTradingBot:
                     "BUY",
                     pos_plan["size"],
                     current_price,
-                    reason="布林帶動量突破向上做多",
+                    reason="條件機率+技術指標達標做多",
                 )
         elif signal == -1 and self.position_side == "FLAT":
             pos_plan = self.risk_manager.calculate_position_size(current_price, atr)
@@ -436,7 +454,7 @@ class CryptoTradingBot:
                     "SELL",
                     pos_plan["size"],
                     current_price,
-                    reason="布林帶動量跌破向下做空",
+                    reason="條件機率+技術指標達標做空",
                 )
         elif signal == 0 and self.position_side != "FLAT":
             close_side = "SELL" if self.position_side == "LONG" else "BUY"
