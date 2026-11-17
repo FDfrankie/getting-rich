@@ -58,10 +58,10 @@ class MarketAnalyzer:
         df = self.fetch_market_data()
         if df.empty or len(df) < 60:
             return {
-                "status": "數據不足",
-                "score": 50,
-                "regime": "震盪觀望",
-                "summary": "大盤數據取得不足，建議保守觀望。",
+                "status": "DATA_UNAVAILABLE",
+                "score": None,
+                "regime": "DATA_UNAVAILABLE",
+                "summary": "大盤數據取得不足，拒絕以預設 50 分假冒中性市場。",
             }
 
         close = df["Close"]

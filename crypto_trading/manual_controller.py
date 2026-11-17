@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from data_persistence.gdrive_sync import _DB_LOCK, STATE_DB_PATH
@@ -60,7 +60,7 @@ class ManualPositionController:
         tp_price: float | None = None,
     ) -> dict[str, Any]:
         """鎖定幣種倉位為手動接管"""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             cur = conn.cursor()
@@ -98,7 +98,7 @@ class ManualPositionController:
 
     def unlock_symbol(self, symbol: str) -> dict[str, Any]:
         """解除手動鎖定，交還給 Bot 自動交易"""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             cur = conn.cursor()
@@ -137,12 +137,14 @@ class ManualPositionController:
             # 檢查 TTL
             try:
                 locked_dt = datetime.fromisoformat(locked_at_str)
-                elapsed = (datetime.utcnow() - locked_dt).total_seconds()
+                if locked_dt.tzinfo is None:
+                    locked_dt = locked_dt.replace(tzinfo=timezone.utc)
+                elapsed = (datetime.now(timezone.utc) - locked_dt).total_seconds()
                 if elapsed > ttl:
                     # TTL 已過期，自動解鎖
                     cur.execute(
                         "UPDATE manual_overrides SET is_locked = 0, updated_at = ? WHERE symbol = ?",
-                        (datetime.utcnow().isoformat(), symbol),
+                        (datetime.now(timezone.utc).isoformat(), symbol),
                     )
                     conn.commit()
                     conn.close()
@@ -160,7 +162,7 @@ class ManualPositionController:
         take_profit: float | None = None,
     ) -> dict[str, Any]:
         """設定或更新停損停利保護單"""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             cur = conn.cursor()
@@ -192,13 +194,16 @@ class ManualPositionController:
 
     def manual_close_position(self, client, symbol: str, current_position: dict[str, Any]) -> dict[str, Any]:
         """單筆全平"""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         contracts = float(current_position.get("contracts", 0.0))
         side = current_position.get("side", "LONG").upper()
         close_side = "SELL" if side == "LONG" else "BUY"
 
         if hasattr(client, "create_order"):
-            res = client.create_order(symbol=symbol, side=close_side, order_type="MARKET", amount=contracts)
+            try:
+                res = client.create_order(symbol=symbol, side=close_side, order_type="MARKET", amount=contracts, reduce_only=True)
+            except TypeError:
+                res = client.create_order(symbol=symbol, side=close_side, order_type="MARKET", amount=contracts)
         else:
             res = {"success": True, "message": "Simulated close"}
 
@@ -229,17 +234,15 @@ class ManualPositionController:
         reduce_amount: float,
     ) -> dict[str, Any]:
         """部分減倉"""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         side = current_position.get("side", "LONG").upper()
         close_side = "SELL" if side == "LONG" else "BUY"
 
         if hasattr(client, "create_order"):
-            res = client.create_order(
-                symbol=symbol,
-                side=close_side,
-                order_type="MARKET",
-                amount=reduce_amount,
-            )
+            try:
+                res = client.create_order(symbol=symbol, side=close_side, order_type="MARKET", amount=reduce_amount, reduce_only=True)
+            except TypeError:
+                res = client.create_order(symbol=symbol, side=close_side, order_type="MARKET", amount=reduce_amount)
         else:
             res = {"success": True, "message": "Simulated reduce"}
 

@@ -18,7 +18,7 @@ def test_fetch_ohlcv_disallow_synthetic_raises_when_no_network():
     # Mock ccxt failure
     with (
         patch(
-            "ccxt.binance.fetch_ohlcv",
+            "crypto_trading.data_loader.ccxt.binance",
             side_effect=Exception("Network unreachable"),
         ),
         pytest.raises(DataUnavailableError, match="allow_synthetic=False"),
@@ -29,7 +29,7 @@ def test_fetch_ohlcv_disallow_synthetic_raises_when_no_network():
 def test_fetch_ohlcv_allow_synthetic_returns_synthetic_source():
     loader = CryptoDataLoader()
     with patch(
-        "ccxt.binance.fetch_ohlcv",
+        "crypto_trading.data_loader.ccxt.binance",
         side_effect=Exception("Network unreachable"),
     ):
         res = loader.fetch_ohlcv_result(limit=20, allow_synthetic=True)

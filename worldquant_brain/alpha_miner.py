@@ -38,6 +38,9 @@ class ContinuousAlphaMiner:
 
         # 基礎算子與數據欄位基因池
         self.fields = ["close", "open", "high", "low", "volume", "vwap", "returns"]
+        self.fundamental_fields = ["operating_cashflow", "operating_income", "sales", "assets", "liabilities", "debt", "equity", "cap", "ebitda"]
+        self.sentiment_fields = ["target_price", "eps_consensus_mean"]
+        self.group_ops = ["subindustry", "industry", "sector"]
         self.ts_ops = [
             ("ts_decay_linear", [3, 5, 10]),
             ("ts_rank", [5, 10, 20]),
@@ -47,13 +50,16 @@ class ContinuousAlphaMiner:
         ]
 
     def generate_candidate_expression(self) -> dict[str, str]:
-        """基因變異生成新的 Alpha 表達式"""
+        """基因變異生成新的 Alpha 表達式 (涵蓋價量、基本面、分析師預期與跨產業中性化)"""
         field_a = random.choice(self.fields)
         field_b = random.choice(["volume", "vwap", "returns"])
         op_name, window_choices = random.choice(self.ts_ops)
         window = random.choice(window_choices)
+        grp = random.choice(self.group_ops)
+        f1 = random.choice(self.fundamental_fields)
+        f2 = random.choice(["assets", "cap", "equity", "sales"])
 
-        pattern = random.choice([1, 2, 3, 4])
+        pattern = random.choice([1, 2, 3, 4, 5, 6, 7])
         if pattern == 1:
             expr = f"-1 * {op_name}(ts_correlation({field_a}, {field_b}, {window}), {window})"
             name = f"Auto_{field_a}_{field_b}_Reversal_{window}"
@@ -61,11 +67,24 @@ class ContinuousAlphaMiner:
             expr = f"rank({op_name}({field_a}, {window})) - rank(ts_decay_linear({field_b}, {window}))"
             name = f"Auto_MultiField_Spread_{field_a}_{window}"
         elif pattern == 3:
-            expr = f"group_neutralize(rank(ts_delta({field_a}, {window})) / (ts_std_dev({field_a}, 20) + 1e-4), subindustry)"
+            expr = f"group_neutralize(rank(ts_delta({field_a}, {window})) / (ts_std_dev({field_a}, 20) + 1e-4), {grp})"
             name = f"Auto_Normalized_Momentum_{field_a}_{window}"
-        else:
+        elif pattern == 4:
             expr = f"signed_power(ts_rank({field_a}, {window}) - 0.5, 2) * -1"
             name = f"Auto_Nonlinear_MeanRevert_{field_a}_{window}"
+        elif pattern == 5:
+            expr = f"group_neutralize(rank({f1} / (abs({f2}) + 0.001)), {grp})"
+            name = f"Auto_Fundamental_Quality_{f1}_{grp}"
+        elif pattern == 6:
+            s_field = random.choice(self.sentiment_fields)
+            if s_field == "target_price":
+                expr = f"group_neutralize(rank((target_price - close) / (close + 1e-4)), {grp})"
+            else:
+                expr = f"ts_decay_linear(group_rank(eps_consensus_mean - ts_delay(eps_consensus_mean, 20), {grp}), 5)"
+            name = f"Auto_Analyst_Sentiment_{s_field}_{grp}"
+        else:
+            expr = f"group_rank(ts_delta(close, {window}) / (ts_std_dev(close, 20) + 1e-4), {grp}) + group_rank({f1} / (cap + 0.001), {grp})"
+            name = f"Auto_Hybrid_PriceFund_{f1}_{grp}_{window}"
 
         return {"name": name, "expression": expr}
 
@@ -93,13 +112,16 @@ class ContinuousAlphaMiner:
                 "fitness": round(base_fitness, 2),
                 "turnover": round(base_turnover, 2),
                 "margin_bps": round(base_margin, 1),
-                "status": "VERIFIED_QUALIFIED",
-                "category": "Price-Volume / Continuous Mined",
+                "status": "LOCAL_SCREENED",
+                "category": "LOCAL_CANDIDATE_ONLY / Unverified by BRAIN",
             }
         return None
 
     def mine_cycle(self) -> dict[str, Any] | None:
-        """執行一次自動挖掘與篩選步進"""
+        """執行一次自動挖掘與篩選步進 (本機假模擬已停用，統一由線上 BrainJobQueue 執行)"""
+        # Local proxy simulation disabled per user policy
+        if os.getenv("BRAIN_ALLOW_LOCAL_PROXY_SIM", "false").lower() != "true":
+            return None
         self.total_mined += 1
         cand = self.generate_candidate_expression()
         result = self.backtest_alpha_oos(cand)
@@ -119,6 +141,64 @@ class ContinuousAlphaMiner:
             return result
         return None
 
+
+    def _dedup_db_path(self) -> str:
+        return getattr(self.vault, "db_path", None) or os.path.join(os.path.dirname(__file__), "alpha_vault.db")
+
+    def has_tried_expression(self, expression: str) -> bool:
+        import hashlib, sqlite3
+        expr_hash = hashlib.sha256(expression.strip().encode("utf-8")).hexdigest()
+        db_p = self._dedup_db_path()
+        if not db_p or db_p == ":memory:" or not os.path.exists(db_p):
+            return False
+        conn = sqlite3.connect(db_p, timeout=10.0)
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS brain_tried_expressions (expr_hash TEXT PRIMARY KEY, expression TEXT NOT NULL, created_at TEXT NOT NULL)"
+            )
+            cur = conn.execute("SELECT 1 FROM brain_tried_expressions WHERE expr_hash = ?", (expr_hash,))
+            return cur.fetchone() is not None
+        finally:
+            conn.close()
+
+    def mark_expression_tried(self, expression: str) -> None:
+        import hashlib, sqlite3
+        from datetime import datetime, timezone
+        expr_hash = hashlib.sha256(expression.strip().encode("utf-8")).hexdigest()
+        db_p = self._dedup_db_path()
+        if not db_p or db_p == ":memory:":
+            return
+        os.makedirs(os.path.dirname(os.path.abspath(db_p)), exist_ok=True)
+        conn = sqlite3.connect(db_p, timeout=10.0)
+        try:
+            with conn:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS brain_tried_expressions (expr_hash TEXT PRIMARY KEY, expression TEXT NOT NULL, created_at TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO brain_tried_expressions (expr_hash, expression, created_at) VALUES (?, ?, ?)",
+                    (expr_hash, expression.strip(), datetime.now(timezone.utc).isoformat()),
+                )
+        finally:
+            conn.close()
+
+    def generate_unique_candidate(self, max_attempts: int = 25) -> dict[str, str]:
+        """Generate a novel FASTEXPR expression (with evolutionary mutation from top verified alphas) not yet tried in SQLite."""
+        # 30% chance to mutate a verified alpha from vault if available
+        verified = [a for a in self.vault.list_alphas() if a.get("status") in ("BRAIN_COMPLETE", "VERIFIED", "TEMPLATE_SEED")]
+        for _ in range(max_attempts):
+            if verified and random.random() < 0.30:
+                base = random.choice(verified)
+                decay_w = random.choice([3, 5, 8, 12])
+                cand_expr = f"ts_decay_linear({base['expression']}, {decay_w})"
+                cand = {"name": f"Evolved_{base['name'][:20]}_{decay_w}", "expression": cand_expr}
+            else:
+                cand = self.generate_candidate_expression()
+            if not self.has_tried_expression(cand["expression"]):
+                self.mark_expression_tried(cand["expression"])
+                return cand
+        self.mark_expression_tried(cand["expression"])
+        return cand
 
 if __name__ == "__main__":
     miner = ContinuousAlphaMiner()

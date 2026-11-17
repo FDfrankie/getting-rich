@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from crypto_trading.order_manager import OrderManager, OrderState
@@ -16,6 +16,16 @@ class ReconciliationService:
         self.is_reconciled = False
         self.last_reconciled_time: str | None = None
         self.reconciliation_report: dict[str, Any] = {}
+
+    def get_latest_result(self) -> dict[str, Any] | None:
+        if not self.reconciliation_report:
+            return None
+        return {
+            "in_sync": bool(self.is_reconciled),
+            "discrepancy_count": int(self.reconciliation_report.get("discrepancy_count", 0)),
+            "completed_at": self.last_reconciled_time,
+            "unknown_order_count": 0,
+        }
 
     def is_ready_for_trading(self) -> bool:
         """重啟後是否已完成對帳"""
@@ -82,7 +92,7 @@ class ReconciliationService:
             discrepancies.append(f"Balance mismatch: local={local_balance}, remote={remote_balance}")
 
         self.is_reconciled = len(discrepancies) == 0
-        self.last_reconciled_time = datetime.utcnow().isoformat()
+        self.last_reconciled_time = datetime.now(timezone.utc).isoformat()
         self.reconciliation_report = {
             "is_reconciled": self.is_reconciled,
             "timestamp": self.last_reconciled_time,

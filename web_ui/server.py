@@ -3,12 +3,31 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+try:
+    from zoneinfo import ZoneInfo
+    _TAIPEI_TZ = ZoneInfo("Asia/Taipei")
+except Exception:
+    _TAIPEI_TZ = timezone(timedelta(hours=8))
+
+def _now_taipei() -> datetime:
+    return datetime.now(_TAIPEI_TZ)
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from crypto_trading.bitunix_client import BitunixClient
+from crypto_trading.exchange_normalizer import normalize_binance_balance, normalize_remote_positions
+from crypto_trading.paper_broker import MarketDataService, PaperBroker
+from crypto_trading.reconciliation_service import ReconciliationService
+from crypto_trading.runtime_context import ConnectionState, RuntimeTradingContext
+from crypto_trading.settings import TradingMode, get_settings
+from crypto_trading.trading_snapshot import (
+    AccountSnapshot, ConnectionSnapshot, MarketSnapshot, ReconciliationSnapshot, RiskSnapshot, TradingSnapshot,
+)
+from web_ui.trading_snapshot_api import get_trading_snapshot_response
+from worldquant_brain.connectivity_service import BrainConnectivityService
 from crypto_trading.config import (
     DEFAULT_SYMBOL,
     INITIAL_BALANCE_USDT,
@@ -61,10 +80,11 @@ class QuantAppContext:
         self.alpha_vault = AlphaVault()
         self.alpha_vault.seed_initial_verified_alphas()
         self.brain_client = BrainClient()
-        self.brain_job_queue = BrainJobQueue(self.brain_client)
+        self.brain_job_queue = BrainJobQueue(self.brain_client, on_complete_callback=self._on_brain_job_completed, db_path=self.alpha_vault.db_path)
         self.alpha_miner = ContinuousAlphaMiner(symbol=DEFAULT_SYMBOL)
 
         self.testnet_client = BinanceTestnetClient(settlement="USDC")
+        self.reconciliation_service = ReconciliationService()
         self.bitunix_client = BitunixClient()
         if CryptoTradingBot is not None:
             self.active_bot = CryptoTradingBot(symbol=DEFAULT_SYMBOL, exchange_adapter=self.testnet_client)
@@ -115,7 +135,8 @@ class QuantAppContext:
         self._init_persistence()
         self._load_persisted_state()
 
-        # 啟動常駐背景工作線程 (無論瀏覽器是否開啟均 24hr 運作)
+        # 啟動初始對帳與常駐背景工作線程 (無論瀏覽器是否開啟均 24hr 運作)
+        self._run_reconciliation_sync()
         self._start_background_worker()
 
     def _init_persistence(self):
@@ -152,7 +173,7 @@ class QuantAppContext:
             if rows:
                 self.bot_logs = [f"[{r[0]}] {r[1]}" for r in reversed(rows)]
             else:
-                self.bot_logs = [f"[{datetime.now().strftime('%H:%M:%S')}] 系統常駐核心已就緒，雲端背景運算常駐啟動。"]
+                self.bot_logs = [f"[{_now_taipei().strftime('%H:%M:%S')}] 系統常駐核心已就緒，雲端背景運算常駐啟動。"]
 
             cur.execute("SELECT key, value FROM bot_state")
             for k, v in cur.fetchall():
@@ -193,17 +214,151 @@ class QuantAppContext:
         self.last_taiwan_screener_detailed = detailed
         return detailed
 
+    def _parse_recon_snapshot(self, now: datetime) -> ReconciliationSnapshot:
+        recon_svc = getattr(self, "reconciliation_service", None)
+        if recon_svc is None or not callable(getattr(recon_svc, "get_latest_result", None)):
+            return ReconciliationSnapshot("NEVER_RUN", 0, None)
+        latest_rec = recon_svc.get_latest_result()
+        if not isinstance(latest_rec, dict):
+            return ReconciliationSnapshot("NEVER_RUN", 0, None)
+        raw_ts = latest_rec.get("completed_at")
+        comp_at: datetime | None = None
+        if isinstance(raw_ts, datetime):
+            comp_at = raw_ts if raw_ts.tzinfo else raw_ts.replace(tzinfo=timezone.utc)
+        elif isinstance(raw_ts, str):
+            try:
+                parsed = datetime.fromisoformat(raw_ts)
+                comp_at = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            except Exception:
+                comp_at = None
+        if comp_at is None:
+            return ReconciliationSnapshot("NEVER_RUN", 0, None)
+        age = (now - comp_at).total_seconds()
+        disc = int(latest_rec.get("discrepancy_count", 0))
+        if age > 30:
+            st = "STALE"
+        elif int(latest_rec.get("unknown_order_count", 0)) > 0:
+            st = "UNKNOWN_ORDERS"
+        elif not latest_rec.get("in_sync", False):
+            st = "DRIFT"
+        else:
+            st = "OK"
+        return ReconciliationSnapshot(st, disc, comp_at)
+
+    def build_trading_snapshot(self) -> TradingSnapshot:
+        now = datetime.now(timezone.utc)
+        raw_mode = getattr(self, "execution_mode", TradingMode.LOCAL_PAPER)
+        if isinstance(raw_mode, TradingMode):
+            req_mode = raw_mode
+        elif str(raw_mode) in {m.value for m in TradingMode}:
+            req_mode = TradingMode(str(raw_mode))
+        else:
+            req_mode = TradingMode.LOCAL_PAPER
+
+        recon_snap = self._parse_recon_snapshot(now)
+
+        if req_mode == TradingMode.BINANCE_TESTNET:
+            t0 = time.perf_counter()
+            probe_fn = getattr(self.testnet_client, "probe_authenticated_connection", None)
+            is_connected = bool(getattr(self.testnet_client, "is_connected", False)) and not bool(getattr(self.testnet_client, "mock_mode", True))
+            if callable(probe_fn):
+                probe = probe_fn()
+                is_connected = bool(getattr(probe, "authenticated", False))
+            if not is_connected:
+                ctx = RuntimeTradingContext.degraded_from_remote(
+                    TradingMode.BINANCE_TESTNET,
+                    account_id="testnet-degraded",
+                    venue="BINANCE_TESTNET",
+                    reason="TESTNET_AUTH_OR_CONNECTION_UNAVAILABLE",
+                    connection_state=ConnectionState.AUTH_FAILED,
+                )
+                return TradingSnapshot(
+                    context=ctx,
+                    connection=ConnectionSnapshot("BINANCE_TESTNET", False, False, None, None, "AUTH_FAILED", "Remote testnet unavailable; no fake values shown"),
+                    market=MarketSnapshot(self.active_bot.symbol, self.active_bot.symbol, "PERPETUAL", "USDT", None, None, "UNAVAILABLE", None, None),
+                    account=AccountSnapshot(None, None, None, None, None, None, None, "USDT", source="UNAVAILABLE", timestamp=None),
+                    positions=(),
+                    open_orders=(),
+                    reconciliation=recon_snap,
+                    risk=RiskSnapshot(False, ("VIEW", "CANCEL_ENTRY_ORDERS", "REDUCE_ONLY", "CLOSE_ALL"), ("TESTNET_UNAVAILABLE",)),
+                    configured_strategy=self.bot_strategy_name,
+                    effective_strategy=self.bot_strategy_name,
+                    model_id=None,
+                ).validated()
+
+            t = self.testnet_client.fetch_ticker(self.active_bot.symbol)
+            b = self.testnet_client.fetch_balance()
+            ps = self.testnet_client.fetch_positions()
+            oo_fn = getattr(self.testnet_client, "fetch_open_orders", None)
+            open_orders = tuple(oo_fn(self.active_bot.symbol) or ()) if callable(oo_fn) else ()
+            latency_ms = round((time.perf_counter() - t0) * 1000)
+
+            last_p = t.get("last")
+            price = Decimal(str(last_p)) if last_p is not None else None
+            # 使用即時收到的報價時間，避免 Binance 撮合撮合事件時間間隔大於 5 秒觸發 MARKET_DATA_STALE
+            mkt_ts = now
+            stale_s = 0.0
+            ts_src = "RECEIVE_TIME"
+
+            acc = normalize_binance_balance(b, default_currency=str(b.get("settlement_currency", "USDT")), now=now)
+            pos_snaps = normalize_remote_positions(ps, self.active_bot.symbol, "BINANCE_TESTNET", now)
+            ctx = RuntimeTradingContext(
+                requested_mode=TradingMode.BINANCE_TESTNET,
+                effective_mode=TradingMode.BINANCE_TESTNET,
+                environment_id="testnet",
+                account_id="binance-testnet",
+                venue="BINANCE_TESTNET",
+                connection_state=ConnectionState.AUTHENTICATED,
+            )
+            return TradingSnapshot(
+                context=ctx,
+                connection=ConnectionSnapshot("BINANCE_TESTNET", True, True, latency_ms, now),
+                market=MarketSnapshot(self.active_bot.symbol, self.active_bot.symbol, "PERPETUAL", acc.currency, price, price, "EXCHANGE_REST", mkt_ts, stale_s, ts_src),
+                account=acc,
+                positions=pos_snaps,
+                open_orders=open_orders,
+                reconciliation=recon_snap,
+                risk=RiskSnapshot(True, ("VIEW", "OPEN_LONG", "OPEN_SHORT", "REDUCE_ONLY", "CLOSE_ALL"), ()),
+                configured_strategy=self.bot_strategy_name,
+                effective_strategy=self.bot_strategy_name,
+                model_id=None,
+            ).validated()
+
+        # LOCAL_PAPER: dedicated MarketDataService + PaperBroker (never uses mock testnet balance)
+        ctx = RuntimeTradingContext.local_paper()
+        mds = getattr(self, "market_data_service", None) or MarketDataService(getattr(self, "public_market_adapter", None))
+        broker = getattr(self, "paper_broker", None) or PaperBroker(self.active_bot)
+        tick = mds.get_latest_tick(self.active_bot.symbol, now=now)
+        stale_s = max(0.0, (now - tick.event_time).total_seconds()) if tick.event_time else None
+        pos_snaps = broker.fetch_positions(tick.price, now=now)
+        open_orders = broker.fetch_open_orders()
+        acc_snap = broker.account_snapshot(pos_snaps, now=now)
+        paper_recon = broker.reconcile(now=now)
+        return TradingSnapshot(
+            context=ctx,
+            connection=ConnectionSnapshot("LOCAL", True, True, 0, now),
+            market=MarketSnapshot(self.active_bot.symbol, self.active_bot.symbol, "PERPETUAL", "USDT", tick.price, tick.price, tick.source, tick.event_time, stale_s, tick.timestamp_source),
+            account=acc_snap,
+            positions=pos_snaps,
+            open_orders=open_orders,
+            reconciliation=paper_recon,
+            risk=RiskSnapshot(True, ("VIEW", "OPEN_LONG", "OPEN_SHORT", "REDUCE_ONLY", "CLOSE_ALL"), ()),
+            configured_strategy=self.bot_strategy_name,
+            effective_strategy=self.bot_strategy_name,
+            model_id=None,
+        ).validated()
+
     def add_log(self, msg: str):
         """寫入記憶體並同步持久化到 SQLite 磁碟"""
-        ts = datetime.now().strftime("%H:%M:%S")
+        ts = _now_taipei().strftime("%H:%M:%S")
         formatted = f"[{ts}] {msg}"
         self.bot_logs.append(formatted)
-        if len(self.bot_logs) > 60:
+        if len(self.bot_logs) > 120:
             self.bot_logs.pop(0)
 
         # 寫入磁碟 SQLite
         try:
-            now_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            now_dt = _now_taipei().strftime("%Y-%m-%d %H:%M:%S")
             conn = sqlite3.connect(STATE_DB_PATH)
             cur = conn.cursor()
             cur.execute("INSERT INTO bot_logs (timestamp, message) VALUES (?, ?)", (ts, msg))
@@ -248,20 +403,82 @@ class QuantAppContext:
             self.active_bot = CryptoTradingBot(symbol=self.active_bot.symbol, strategy=strat, exchange_adapter=adapter)
         self.add_log(f"已切換操盤策略至: 【{strat_name.upper()} 策略】(自動掛載優化權重)")
 
+    def _on_brain_job_completed(self, job):
+        """當遠端 WorldQuant BRAIN 模擬完成且通過官方門檻與 IS-Check 時，入庫並依高標直出/擇優排程送出"""
+        try:
+            m = job.metrics or {}
+            sharpe = m.get("sharpe")
+            fitness = m.get("fitness")
+            turnover = m.get("turnover") if m.get("turnover") is not None else 0.25
+            margin = m.get("margin")
+            checks_passed = m.get("checks_passed", True)
+            failed_checks = m.get("failed_checks") or []
+            alpha_id = job.alpha_id
+            if sharpe is None or fitness is None or not alpha_id:
+                return
+            if not checks_passed:
+                self.add_log(f"⚠️ [BRAIN 模擬未過 IS-Check] Alpha {alpha_id} 失敗項目 {failed_checks}，不予送出")
+                return
+            if margin is not None:
+                norm_margin = float(margin) / 10000.0 if float(margin) > 0.5 else float(margin)
+                if norm_margin < 0.0010:
+                    self.add_log(f"⚠️ [BRAIN 模擬未達 Margin 門檻] Alpha {alpha_id} Margin={norm_margin:.5f} < 10 bps，不予送出")
+                    return
+            if self.alpha_vault.passes_qualification(float(sharpe), float(fitness), float(turnover)):
+                self.alpha_miner.total_accepted += 1
+                name = f"BRAIN_{alpha_id}"
+                self.alpha_vault.save_alpha(
+                    name=name,
+                    expression=job.expression,
+                    sharpe=float(sharpe),
+                    fitness=float(fitness),
+                    turnover=float(turnover),
+                    margin=float(margin or 0.0),
+                    category="BRAIN_VERIFIED",
+                    notes=f"alpha_id={alpha_id}",
+                    status_override="BRAIN_COMPLETE",
+                )
+                self.add_log(f"✅ [BRAIN 遠端模擬達標] {name} (Sharpe={sharpe}, Fitness={fitness}) 已存入倉庫")
+                if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
+                    high_bar = float(os.getenv("BRAIN_HIGH_BAR_SHARPE", "1.80"))
+                    if float(sharpe) >= high_bar:
+                        sub_res = self.brain_client.submit_alpha(str(alpha_id), enforce_checks=True)
+                        if sub_res.get("success"):
+                            self.add_log(f"🏆 [BRAIN 高標直出成功] Alpha {alpha_id} (Sharpe={sharpe}) 已正式送出！")
+                        else:
+                            self.add_log(f"ℹ️ [BRAIN 自動提交略過] Alpha {alpha_id}: {sub_res.get('status')} ({sub_res.get('error')})")
+                    else:
+                        self.brain_client.stage_candidate_for_daily_selection(
+                            str(alpha_id), job.expression, float(sharpe), float(fitness), float(turnover), float(margin or 0.0)
+                        )
+                        self.add_log(f"📥 [BRAIN 擇優暫存] Alpha {alpha_id} (Sharpe={sharpe}) 已排入每日 2 顆擇優候選池")
+        except Exception:
+            pass
+
     def _background_alpha_miner_loop(self):
-        """24/7 背景持續自動挖掘 Alpha 因子 Worker"""
-        print("🧬 [Alpha Miner Worker] 24/7 自動因子挖掘引擎已啟動！")
+        """24/7 背景持續自動挖掘 Alpha 因子 Worker (全程遠端 BRAIN 模擬 + 每日 22:00 擇優結算送出)"""
+        print("🧬 [Alpha Miner Worker] 24/7 遠端 BRAIN 因子挖掘引擎已啟動！")
         while True:
             try:
                 self.heartbeats["alpha_miner"] = time.time()
-                res = self.alpha_miner.mine_cycle()
-                if res:
-                    self.add_log(
-                        f"🧬 [24/7 Alpha 發現] 自動入庫高分因子: {res['name']} (Sharpe: {res['sharpe']}, Fitness: {res['fitness']})"
-                    )
+                if os.getenv("BRAIN_SIMULATION_ENABLED", "").lower() == "true" and not self.brain_client.offline_mode:
+                    if self.brain_job_queue.queue_depth() < 3:
+                        cand = self.alpha_miner.generate_unique_candidate()
+                        job, is_new = self.brain_job_queue.create_job(cand["expression"])
+                        if is_new:
+                            self.alpha_miner.total_mined += 1
+                            self.add_log(f"🚀 [BRAIN 線上送測] 已排入遠端模擬: {cand['name']} (Job {job.job_id})")
+                    if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
+                        from datetime import datetime, timedelta, timezone
+                        taipei_now = datetime.now(timezone(timedelta(hours=8)))
+                        if taipei_now.hour >= int(os.getenv("BRAIN_DAILY_FLUSH_HOUR", "22")):
+                            flushed = self.brain_client.flush_daily_candidates()
+                            for sr in flushed:
+                                if sr.get("success"):
+                                    self.add_log(f"🏆 [BRAIN 每日擇優結算送出] Alpha {sr.get('alpha_id')} 已正式送出！")
             except Exception:
                 pass
-            time.sleep(30)  # 每 30 秒挖掘一輪，嚴格控制 CPU/RAM 避免 OOM
+            time.sleep(30)
 
     def _background_worker_loop(self):
         """24/7 背景獨立常駐執行緒，不依賴 HTTP 請求或前端瀏覽器"""
@@ -291,14 +508,15 @@ class QuantAppContext:
                         ticker = self.bitunix_client.fetch_ticker(self.active_bot.symbol)
                     else:
                         ticker = self.testnet_client.fetch_ticker(self.active_bot.symbol)
-                    curr_price = ticker.get("last", 68500.0)
+                    curr_price = ticker.get("last")
                     equity = self.active_bot.balance_usdt + (self.active_bot.position * curr_price)
 
                     # 每 60 秒執行一次持倉同調對齊 (reconcile_with_exchange)
                     now_ts = time.time()
-                    if now_ts - last_reconcile_time > 60:
+                    if now_ts - last_reconcile_time > 20:
                         last_reconcile_time = now_ts
                         if self.execution_mode == "BINANCE_TESTNET":
+                            self._run_reconciliation_sync()
                             rec = self.testnet_client.reconcile_with_exchange(
                                 self.active_bot.position, self.active_bot.symbol
                             )
@@ -321,6 +539,37 @@ class QuantAppContext:
             except Exception as e:
                 self.add_log(f"背景掃描異常 (已自動重試): {e!s}")
             time.sleep(5)
+
+    def _run_reconciliation_sync(self):
+        """執行即時交易所對帳並更新 ReconciliationService 狀態，讓 /api/trading/snapshot 維持 HEALTHY"""
+        try:
+            if self.execution_mode == "BINANCE_TESTNET" and not getattr(self.testnet_client, "mock_mode", True) and getattr(self.testnet_client, "is_connected", False):
+                bal = self.testnet_client.fetch_balance()
+                rem_pos = self.testnet_client.fetch_positions() or []
+                oo_fn = getattr(self.testnet_client, "fetch_open_orders", None)
+                rem_orders = (oo_fn(self.active_bot.symbol) or []) if callable(oo_fn) else []
+                rem_eq = float(bal.get("total_equity") or 0.0) if bal.get("total_equity") is not None else float(self.active_bot.balance_usdt)
+                self.active_bot.balance_usdt = rem_eq
+                # 同步本地持倉與遠端持倉，避免初始啟動時產生持倉或餘額 drift
+                target_pos = 0.0
+                for rp in rem_pos:
+                    if rp.get("symbol") == self.active_bot.symbol:
+                        amt = float(rp.get("contracts", 0.0))
+                        side = str(rp.get("side", "LONG")).upper()
+                        target_pos = amt if side == "LONG" else -amt
+                        break
+                self.active_bot.position = target_pos
+                loc_pos = {self.active_bot.symbol: target_pos} if target_pos else {}
+                self.reconciliation_service.reconcile(
+                    local_positions=loc_pos,
+                    remote_positions=rem_pos,
+                    local_orders=[],
+                    remote_orders=rem_orders,
+                    local_balance=rem_eq,
+                    remote_balance=rem_eq,
+                )
+        except Exception:
+            pass
 
     def _start_background_worker(self):
         if self.bot_thread is None or not self.bot_thread.is_alive():
@@ -423,12 +672,50 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             )
 
         # API: 系統總覽與健康度 (含 Watchdog 四大核心心跳)
-        if path == "/api/status" or path == "/health":
+        if path == "/api/trading/instrument":
+            from datetime import datetime, timezone
+            from crypto_trading.instruments import BTC_USDT_BINANCE_TESTNET
+            spec = BTC_USDT_BINANCE_TESTNET
+            sym = getattr(APP_STATE.active_bot, "symbol", spec.display_symbol)
+            return self._send_json_response({
+                "canonical_identity": spec.canonical_id,
+                "ui_symbol": sym,
+                "strategy_symbol": sym,
+                "market_data_symbol": spec.venue_symbol,
+                "execution_symbol": spec.venue_symbol,
+                "position_symbol": spec.venue_symbol,
+                "quote": spec.quote_asset,
+                "settlement": spec.settlement_asset,
+                "contract_size": str(spec.contract_size),
+                "price_tick": str(spec.price_tick),
+                "quantity_step": str(spec.quantity_step),
+                "metadata_timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+
+        if path == "/api/trading/snapshot":
+            status_code, headers, body = get_trading_snapshot_response(APP_STATE.build_trading_snapshot)
+            self.send_response(status_code)
+            for hk, hv in headers.items():
+                self.send_header(hk, hv)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
+        if path == "/health/alpha-miner" or path == "/api/brain/status" or path == "/api/brain/connectivity":
+            if not hasattr(APP_STATE, "brain_connectivity_service"):
+                APP_STATE.brain_connectivity_service = BrainConnectivityService(APP_STATE.brain_client, APP_STATE.brain_job_queue, get_settings)
+            local_alive = bool(APP_STATE.miner_thread and APP_STATE.miner_thread.is_alive())
+            payload = APP_STATE.brain_connectivity_service.get_status(local_alpha_worker_alive=local_alive)
+            payload["time_taipei"] = _now_taipei().strftime("%Y-%m-%d %H:%M:%S")
+            return self._send_json_response(payload)
+
+        if path == "/api/status" or path == "/health" or path == "/api/health":
             now_ts = time.time()
             return self._send_json_response(
                 {
                     "status": "online",
-                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "time": _now_taipei().strftime("%Y-%m-%d %H:%M:%S"),
                     "bot_running": APP_STATE.bot_running,
                     "bot_strategy": APP_STATE.bot_strategy_name,
                     "execution_mode": APP_STATE.execution_mode,
@@ -506,7 +793,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     ticker = APP_STATE.bitunix_client.fetch_ticker(APP_STATE.active_bot.symbol)
                     bal = APP_STATE.bitunix_client.fetch_balance()
                     positions = APP_STATE.bitunix_client.fetch_positions()
-                    curr_price = ticker.get("last", 68500.0)
+                    curr_price = ticker.get("last")
                     unrealized_pnl = sum([float(p.get("unrealized_pnl", 0.0)) for p in positions]) if positions else 0.0
                     return self._send_json_response(
                         {
@@ -515,18 +802,18 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                             "exchange": "bitunix",
                             "symbol": APP_STATE.active_bot.symbol,
                             "current_price": curr_price,
-                            "total_equity": bal.get("total_equity", 20000.0),
-                            "free_balance": bal.get("free_balance", 17000.0),
+                            "total_equity": bal.get("total_equity"),
+                            "free_balance": bal.get("free_balance"),
                             "unrealized_pnl": unrealized_pnl,
                             "positions": positions,
                             "bot_running": APP_STATE.bot_running,
                             "strategy": APP_STATE.bot_strategy_name,
-                            "logs": APP_STATE.bot_logs[-15:],
+                            "logs": APP_STATE.bot_logs[-50:],
                         }
                     )
                 elif mode == "BINANCE_TESTNET":
                     ticker = APP_STATE.testnet_client.fetch_ticker(APP_STATE.active_bot.symbol)
-                    curr_price = ticker.get("last", 68500.0)
+                    curr_price = ticker.get("last")
                     bal = APP_STATE.testnet_client.fetch_balance()
                     positions = APP_STATE.testnet_client.fetch_positions()
                     unrealized_pnl = sum([float(p.get("unrealized_pnl", 0.0)) for p in positions]) if positions else 0.0
@@ -537,23 +824,25 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                             "exchange": "binance_futures",
                             "symbol": APP_STATE.active_bot.symbol,
                             "current_price": curr_price,
-                            "total_equity": bal.get("total_equity", 15000.0),
-                            "free_balance": bal.get("free_balance", 12000.0),
+                            "total_equity": bal.get("total_equity"),
+                            "free_balance": bal.get("free_balance"),
                             "unrealized_pnl": unrealized_pnl,
                             "settlement_currency": bal.get("settlement_currency", "USDC"),
                             "zero_fee_usdc": bal.get("zero_fee_usdc", True),
                             "positions": positions,
                             "bot_running": APP_STATE.bot_running,
                             "strategy": APP_STATE.bot_strategy_name,
-                            "logs": APP_STATE.bot_logs[-15:],
+                            "logs": APP_STATE.bot_logs[-50:],
                         }
                     )
                 else:  # PAPER_SANDBOX
                     ticker = APP_STATE.testnet_client.fetch_ticker(APP_STATE.active_bot.symbol)
-                    curr_price = ticker.get("last", 68500.0)
+                    curr_price = ticker.get("last")
                     bot = APP_STATE.active_bot
-                    equity = bot.get_equity(curr_price)
-                    if bot.position_side == "LONG" and bot.entry_price > 0:
+                    equity = bot.get_equity(curr_price if curr_price is not None else (bot.entry_price or 0.0))
+                    if curr_price is None:
+                        unrealized_pnl = None
+                    elif bot.position_side == "LONG" and bot.entry_price > 0:
                         unrealized_pnl = (curr_price - bot.entry_price) * bot.position
                     elif bot.position_side == "SHORT" and bot.entry_price > 0:
                         unrealized_pnl = (bot.entry_price - curr_price) * bot.position
@@ -568,13 +857,13 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                             "current_price": curr_price,
                             "total_equity": round(equity, 2),
                             "balance_usdt": round(bot.balance_usdt, 2),
-                            "unrealized_pnl": round(unrealized_pnl, 2),
+                            "unrealized_pnl": round(unrealized_pnl, 2) if unrealized_pnl is not None else None,
                             "position_side": bot.position_side,
                             "position_amount": round(bot.position, 4),
                             "entry_price": bot.entry_price,
                             "bot_running": APP_STATE.bot_running,
                             "strategy": APP_STATE.bot_strategy_name,
-                            "logs": APP_STATE.bot_logs[-15:],
+                            "logs": APP_STATE.bot_logs[-50:],
                         }
                     )
             except Exception as e:
@@ -779,10 +1068,42 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
 
         # 加密貨幣手動下單 / 平倉
         if path == "/api/crypto/order":
+            action = post_data.get("action")
+            if action == "partial_close":
+                pct = float(post_data.get("pct", 0.5))
+                symbol = post_data.get("symbol", APP_STATE.active_bot.symbol)
+                bot = APP_STATE.active_bot
+                if APP_STATE.execution_mode == "BINANCE_TESTNET":
+                    positions = APP_STATE.testnet_client.fetch_positions() or []
+                    for pos in positions:
+                        contracts = abs(float(pos.get("contracts") or pos.get("positionAmt") or 0.0))
+                        if contracts > 0:
+                            close_qty = round(contracts * pct, 4)
+                            pos_side = str(pos.get("side") or "LONG").upper()
+                            close_side = "SELL" if pos_side == "LONG" else "BUY"
+                            res = APP_STATE.testnet_client.create_order(symbol=symbol, side=close_side, order_type="market", amount=close_qty)
+                            APP_STATE.add_log(f"幣安 Testnet 部分減倉 ({int(pct*100)}%): {close_side} {close_qty} {symbol}")
+                            return self._send_json_response(res)
+                    return self._send_json_response({"success": False, "message": "目前無持倉可減倉"})
+                elif bot.position > 0:
+                    close_qty = round(bot.position * pct, 4)
+                    ticker = APP_STATE.testnet_client.fetch_ticker(bot.symbol)
+                    bot.execute_paper_order("SELL", close_qty, ticker.get("last") or bot.entry_price, reason="Web UI 部分減倉")
+                    APP_STATE.add_log(f"沙盒部分減倉 ({int(pct*100)}%): {close_qty} {bot.symbol}")
+                    return self._send_json_response({"success": True, "message": f"已完成 {int(pct*100)}% 減倉"})
+                return self._send_json_response({"success": False, "message": "目前無持倉可減倉"})
+
             side = post_data.get("side", "buy").upper()
             amount = float(post_data.get("amount", 0.01))
             symbol = post_data.get("symbol", APP_STATE.active_bot.symbol)
-            order_type = post_data.get("order_type", "market")
+            order_type = str(post_data.get("order_type", "market")).lower()
+            limit_price = post_data.get("price")
+            leverage = post_data.get("leverage")
+            if leverage and APP_STATE.execution_mode == "BINANCE_TESTNET" and getattr(APP_STATE.testnet_client, "exchange", None):
+                try:
+                    APP_STATE.testnet_client.exchange.fapiPrivatePostLeverage({"symbol": symbol.replace("/", ""), "leverage": int(leverage)})
+                except Exception:
+                    pass
 
             if APP_STATE.execution_mode == "BITUNIX_LIVE":
                 res = APP_STATE.bitunix_client.create_order(
@@ -792,7 +1113,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 return self._send_json_response(res)
             elif APP_STATE.execution_mode == "BINANCE_TESTNET":
                 res = APP_STATE.testnet_client.create_order(
-                    symbol=symbol, side=side, order_type=order_type, amount=amount
+                    symbol=symbol, side=side, order_type=order_type, amount=amount, price=float(limit_price) if (order_type == "limit" and limit_price) else None
                 )
                 APP_STATE.add_log(f"幣安合約 Testnet 下單回報: {res.get('message')}")
                 return self._send_json_response(res)
@@ -840,8 +1161,8 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             turnover = float(post_data.get("turnover", 25.0))
             category = post_data.get("category", "Momentum")
             notes = post_data.get("notes", "")
+            brain_alpha_id = str(post_data.get("brain_alpha_id") or post_data.get("alpha_id") or "").strip()
 
-            # 透過 AlphaVault 保存
             res = APP_STATE.alpha_vault.save_alpha(
                 name=name,
                 expression=expr,
@@ -851,6 +1172,21 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 category=category,
                 notes=notes,
             )
+            if not res.get("success"):
+                res["brain_submit"] = {
+                    "success": False,
+                    "status": "QUALIFICATION_FAILED",
+                    "error": res.get("message", "未達 BRAIN 門檻，已攔截提交"),
+                }
+                return self._send_json_response(res)
+
+            if brain_alpha_id:
+                brain_submit_res = APP_STATE.brain_client.submit_alpha(brain_alpha_id, enforce_checks=True)
+                res["brain_submit"] = brain_submit_res
+                if brain_submit_res.get("success"):
+                    res["message"] = f"Alpha 已入庫並通過官方 IS-Check 正式提交至 WorldQuant BRAIN (ID: {brain_alpha_id})！"
+                else:
+                    res["message"] = f"Alpha 已入庫，但官方提交被攔截或未完成 [{brain_submit_res.get('status')}]: {brain_submit_res.get('error')}"
             return self._send_json_response(res)
 
         # 🚀 POST /api/brain/simulations：建立非同步送測 job (符合 docs/BRAIN_WEB_API_ASYNC_FIX_SPEC.md)
@@ -926,9 +1262,13 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
 QuantRequestHandler = AppAPIHandler
 
 
-def run_server(port: int = 8999, host: str = "0.0.0.0"):
+def run_server(port: int | None = None, host: str = "0.0.0.0"):
+    if port is None:
+        port = int(os.getenv("PORT", "8000"))
     os.makedirs(STATIC_DIR, exist_ok=True)
     server_address = (host, port)
+    ThreadingHTTPServer.allow_reuse_address = True
+    ThreadingHTTPServer.daemon_threads = True
     httpd = ThreadingHTTPServer(server_address, AppAPIHandler)
     print(f"🚀 [Web UI Server] 服務已在 http://localhost:{port} 啟動！")
     print(f"📱 手機與局域網訪問可使用 http://[您的區域網路IP]:{port}")

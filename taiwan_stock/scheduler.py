@@ -1,7 +1,12 @@
-import time
 from datetime import datetime
+from taiwan_stock.twse_calendar import TAIPEI_TZ as _TAIPEI_TZ, is_twse_trading_day
+try:
+    from apscheduler.schedulers.blocking import BlockingScheduler
+    from apscheduler.triggers.cron import CronTrigger
+except ImportError:
+    BlockingScheduler = None
+    CronTrigger = None
 
-import schedule
 
 from taiwan_stock.config import WEBHOOK_SETTINGS
 from taiwan_stock.report_generator import ReportGenerator
@@ -13,7 +18,7 @@ AFTERNOON_SCHEDULE_TIME = "16:30"  # 下午盤後 16:30
 
 def scheduled_job(session_type: str = "盤前晨報"):
     """定時執行的台股量化決策報告產出任務 (支援盤前與盤後雙時段)"""
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = datetime.now(_TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
     print(f"\n[{now_str}] ⏰ 觸發台股【{session_type}】自動產出任務 (Asia/Taipei)...")
     try:
         generator = ReportGenerator()
@@ -37,13 +42,12 @@ def main():
     print("=" * 60)
 
     # 註冊雙時段定時排程
-    schedule.every().day.at(AFTERNOON_SCHEDULE_TIME).do(scheduled_job, session_type="下午盤後報告")
-    schedule.every().day.at(MORNING_SCHEDULE_TIME).do(scheduled_job, session_type="早上盤前晨報")
-
-    print("[*] 系統進入常駐監聽迴圈 (按 Ctrl+C 可停止)...")
-    while True:
-        schedule.run_pending()
-        time.sleep(30)
+    if BlockingScheduler is None or CronTrigger is None:
+        raise RuntimeError("APScheduler is required for timezone-safe scheduling (Asia/Taipei)")
+    sched = BlockingScheduler(timezone=_TAIPEI_TZ)
+    sched.add_job(lambda: is_twse_trading_day() and scheduled_job("下午盤後報告"), CronTrigger(hour=16, minute=30, timezone=_TAIPEI_TZ))
+    sched.add_job(lambda: is_twse_trading_day() and scheduled_job("早上盤前晨報"), CronTrigger(hour=8, minute=0, timezone=_TAIPEI_TZ))
+    sched.start()
 
 
 if __name__ == "__main__":

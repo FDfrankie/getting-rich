@@ -81,3 +81,15 @@ Thumbs.db
 # Data & cache
 data_cache/
 reports/*.html
+
+# Local workspace & patch backups
+.patch_backups/
+.post_v5_backups/
+.patch_backup_manifest.json
+.post_v5_delta_manifest.json
+temp/
+quant_envs/
+.antigravity-stage0/
+stage0_*.txt
+stage0_*.json
+.ruff_cache/

@@ -1,7 +1,8 @@
+from decimal import Decimal
 import hashlib
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -24,11 +25,14 @@ def generate_idempotency_key(
     symbol: str,
     side: str,
     order_type: str,
-    amount: float,
-    price: float | None,
+    amount: float | Decimal,
+    price: float | Decimal | None,
     client_tag: str = "",
 ) -> str:
-    raw = f"{symbol}_{side.upper()}_{order_type.upper()}_{amount:.6f}_{price or 0:.6f}_{client_tag}"
+    norm_amt = Decimal(str(amount)).normalize()
+    norm_prc = Decimal(str(price if price is not None else 0)).normalize()
+    bucket = client_tag or f"bucket_{int(time.time() // 5)}"
+    raw = f"{symbol}_{side.upper()}_{order_type.upper()}_{norm_amt:f}_{norm_prc:f}_{bucket}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -81,12 +85,12 @@ class OrderManager:
         在 DB 登記並宣稱該筆訂單 (claim -> SUBMITTING)
         若 idempotency_key 或 client_order_id 已存在，直接拒絕重複下單
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         cid = (
             client_order_id
             or f"ord_{int(time.time() * 1000)}_{hashlib.md5(f'{symbol}_{amount}_{time.time()}'.encode()).hexdigest()[:8]}"
         )
-        ikey = generate_idempotency_key(symbol, side, order_type, amount, price, client_tag or cid)
+        ikey = generate_idempotency_key(symbol, side, order_type, amount, price, client_tag)
 
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
@@ -144,7 +148,7 @@ class OrderManager:
         exchange_order_id: str | None = None,
         error_message: str | None = None,
     ) -> bool:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             cur = conn.cursor()

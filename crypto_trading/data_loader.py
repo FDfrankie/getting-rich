@@ -13,6 +13,11 @@ from enum import Enum
 import numpy as np
 import pandas as pd
 
+try:
+    import ccxt
+except ImportError:
+    ccxt = None
+
 from crypto_trading.config import DEFAULT_SYMBOL, DEFAULT_TIMEFRAME
 from crypto_trading.data_quality import (
     DataQualityError,
@@ -73,8 +78,8 @@ class CryptoDataLoader:
         # 1. 嘗試透過 CCXT 抓取
         ccxt_err = None
         try:
-            import ccxt
-
+            if ccxt is None:
+                raise RuntimeError("ccxt is not installed")
             exchange_class = ccxt.binance({"enableRateLimit": True, "timeout": 5000})
             ohlcv = exchange_class.fetch_ohlcv(target_symbol, timeframe=target_timeframe, limit=limit + 1)
             if ohlcv and len(ohlcv) > 0:

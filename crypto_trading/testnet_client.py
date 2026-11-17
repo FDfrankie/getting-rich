@@ -154,7 +154,9 @@ class BinanceTestnetClient:
         except Exception:
             pass
 
-        # 備用模擬報價
+        if not self.mock_mode and self.is_connected:
+            return {"symbol": target_symbol, "last": None, "error": "TICKER_UNAVAILABLE", "timestamp": None, "settlement": self.settlement}
+        # 備用模擬報價 (僅限 mock_mode)
         return {
             "symbol": target_symbol,
             "last": 68500.0 if "BTC" in symbol else 3500.0,
@@ -186,44 +188,64 @@ class BinanceTestnetClient:
             assets = acc.get("assets", [])
             total_usdt = 0.0
             free_usdt = 0.0
+            upnl_usdt = 0.0
+            margin_usdt = 0.0
             total_usdc = 0.0
             free_usdc = 0.0
+            upnl_usdc = 0.0
+            margin_usdc = 0.0
             balances = {}
             for a in assets:
                 asset_name = a.get("asset")
                 wallet_bal = float(a.get("walletBalance", 0.0))
                 avail_bal = float(a.get("availableBalance", 0.0))
+                upnl_val = float(a.get("unrealizedProfit", 0.0) or 0.0)
+                margin_val = float(a.get("marginBalance", wallet_bal + upnl_val) or (wallet_bal + upnl_val))
                 if wallet_bal > 0 or avail_bal > 0:
                     balances[asset_name] = wallet_bal
                 if asset_name == "USDT":
                     total_usdt = wallet_bal
                     free_usdt = avail_bal
+                    upnl_usdt = upnl_val
+                    margin_usdt = margin_val
                 elif asset_name == "USDC":
                     total_usdc = wallet_bal
                     free_usdc = avail_bal
+                    upnl_usdc = upnl_val
+                    margin_usdc = margin_val
 
             selected_total = total_usdc if self.settlement == "USDC" else total_usdt
             selected_free = free_usdc if self.settlement == "USDC" else free_usdt
+            selected_upnl = upnl_usdc if self.settlement == "USDC" else upnl_usdt
+            selected_margin = margin_usdc if self.settlement == "USDC" else margin_usdt
 
             return {
                 "mode": "OFFICIAL_BINANCE_TESTNET",
-                "total_equity": round(selected_total, 2),
+                "total_equity": round(selected_margin, 2),
+                "wallet_balance": round(selected_total, 2),
+                "unrealized_pnl": round(selected_upnl, 2),
                 "free_balance": round(selected_free, 2),
                 "total_usdt": round(total_usdt, 2),
                 "total_usdc": round(total_usdc, 2),
                 "settlement_currency": self.settlement,
                 "zero_fee_usdc": self.settlement == "USDC",
                 "balances": balances,
+                "info": {
+                    "totalWalletBalance": str(round(selected_total, 8)),
+                    "totalUnrealizedProfit": str(round(selected_upnl, 8)),
+                    "totalMarginBalance": str(round(selected_margin, 8)),
+                    "availableBalance": str(round(selected_free, 8)),
+                },
             }
         except Exception as e:
             return {
-                "mode": "OFFICIAL_BINANCE_TESTNET_FALLBACK",
-                "error": str(e),
-                "total_equity": self._mock_balance.get(self.settlement, 15000.0),
-                "free_balance": self._mock_balance.get(self.settlement, 15000.0) * 0.8,
+                "mode": "OFFICIAL_BINANCE_TESTNET_ERROR",
+                "error": type(e).__name__,
+                "total_equity": None,
+                "free_balance": None,
                 "settlement_currency": self.settlement,
-                "zero_fee_usdc": True,
-                "balances": self._mock_balance,
+                "zero_fee_usdc": self.settlement == "USDC",
+                "balances": {},
             }
 
     def fetch_positions(self) -> list[dict[str, Any]]:

@@ -136,7 +136,7 @@ class CryptoFeatureEngineer:
         insufficient_coverage = valid_counts < (total_assets * min_coverage)
         close_df[insufficient_coverage] = np.nan
 
-        ret_df = close_df.pct_change()
+        ret_df = close_df.pct_change(fill_method=None)
 
         cross_df = pd.DataFrame(index=close_df.index)
         cross_df["cross_momentum_spread"] = ret_df.max(axis=1) - ret_df.min(axis=1)
@@ -152,13 +152,14 @@ class CryptoFeatureEngineer:
         sol_key = sol_inst.base_asset if sol_inst else "SOL"
 
         if btc_key in close_df and eth_key in close_df:
-            cross_df["ETH_corr_BTC_24"] = ret_df[eth_key].rolling(24, min_periods=5).corr(ret_df[btc_key]).fillna(0.0)
+            cross_df["ETH_corr_BTC_24"] = ret_df[eth_key].rolling(24, min_periods=5).corr(ret_df[btc_key])
+            cross_df["ETH_corr_BTC_24_valid"] = cross_df["ETH_corr_BTC_24"].notna().astype(int)
 
         if sol_key in close_df and eth_key in close_df:
             cross_df["SOL_to_ETH_ratio"] = close_df[sol_key] / close_df[eth_key]
 
         if len(asset_dfs) >= 2:
             cols = list(close_df.columns)
-            cross_df["corr_top2"] = ret_df[cols[0]].rolling(20, min_periods=5).corr(ret_df[cols[1]]).fillna(0.0)
+            cross_df["corr_top2"] = ret_df[cols[0]].rolling(20, min_periods=5).corr(ret_df[cols[1]])
 
         return cross_df

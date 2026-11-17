@@ -31,10 +31,13 @@ class RLAlphaStrategy(BaseStrategy):
         self,
         agent_weights_path: str | None = None,
         feature_engineer: CryptoFeatureEngineer | None = None,
+        allow_unverified: bool = False,
     ):
         self.fe = feature_engineer or CryptoFeatureEngineer()
         self.agent = None
         self.weights_path = agent_weights_path
+        self.allow_unverified = allow_unverified
+        self.model_status = "MODEL_UNAVAILABLE"
         self.is_ready = False
         if self.weights_path and os.path.exists(self.weights_path):
             self.is_ready = True
@@ -47,6 +50,7 @@ class RLAlphaStrategy(BaseStrategy):
                 return False
             # 檢查是否有對應 manifest 動態對齊特徵長度
             manifest_path = self.weights_path.replace(".pt", "_manifest.json")
+            meta = {}
             if os.path.exists(manifest_path):
                 try:
                     with open(manifest_path, "r", encoding="utf-8") as f:
@@ -56,7 +60,12 @@ class RLAlphaStrategy(BaseStrategy):
                     elif "feature_columns" in meta:
                         state_dim = len(meta["feature_columns"]) + 2
                 except Exception:
-                    pass
+                    meta = {}
+            if not self.allow_unverified:
+                if not os.path.exists(manifest_path) or meta.get("is_synthetic") or meta.get("deployment_stage") == "RESEARCH_ONLY":
+                    self.is_ready = False
+                    self.model_status = "UNVERIFIED_MODEL_QUARANTINED"
+                    return False
             self.agent = PPOAgent(state_dim=state_dim, action_dim=1)
             self.agent.load(self.weights_path)
             return True
@@ -67,7 +76,7 @@ class RLAlphaStrategy(BaseStrategy):
         if not self.is_ready:
             df["signal"] = 0.0
             df["rl_action"] = 0.0
-            df["model_status"] = "MODEL_UNAVAILABLE"
+            df["model_status"] = getattr(self, "model_status", "MODEL_UNAVAILABLE")
             return df
 
         processed = self.fe.compute_features(df)
@@ -78,7 +87,7 @@ class RLAlphaStrategy(BaseStrategy):
         if not self._ensure_agent(state_dim):
             df["signal"] = 0.0
             df["rl_action"] = 0.0
-            df["model_status"] = "MODEL_UNAVAILABLE"
+            df["model_status"] = getattr(self, "model_status", "MODEL_UNAVAILABLE")
             return df
 
         signals = np.zeros(len(df))

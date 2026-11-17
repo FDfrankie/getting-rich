@@ -1,8 +1,9 @@
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
-from crypto_trading.config import DEFAULT_SYMBOL, INITIAL_BALANCE_USDT, PAPER_TRADING
+from crypto_trading.config import DEFAULT_SYMBOL, INITIAL_BALANCE_USDT
+from crypto_trading.settings import TradingMode, get_settings
 from crypto_trading.data_loader import CryptoDataLoader
 from crypto_trading.strategies.momentum_breakout import (
     BaseStrategy,
@@ -42,7 +43,7 @@ class CryptoTradingBot:
         exchange_adapter: Any | None = None,
     ):
         self.symbol = symbol
-        self.is_paper = PAPER_TRADING
+        self.is_paper = get_settings().trading_mode == TradingMode.LOCAL_PAPER
         self.loader = CryptoDataLoader(symbol=symbol)
         self.strategy = strategy or MomentumBreakoutStrategy()
         self.risk_manager = RiskManager(initial_capital=INITIAL_BALANCE_USDT)
@@ -87,9 +88,9 @@ class CryptoTradingBot:
             is_reduce_only=reduce_only,
             context={
                 "data_source": "crypto_trading_bot",
-                "data_timestamp": datetime.utcnow().isoformat(),
+                "data_timestamp": datetime.now(timezone.utc).isoformat(),
                 "data_quality_passed": True,
-                "reconciliation_fresh": True,
+                "reconciliation_fresh": (getattr(self, "reconciliation_service", None).is_ready_for_trading() if getattr(self, "reconciliation_service", None) else not bool(self.exchange_adapter)),
                 "has_unknown_orders": False,
                 "exchange_connected": bool(self.exchange_adapter),
             },

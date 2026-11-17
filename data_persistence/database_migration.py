@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from data_persistence.gdrive_sync import _DB_LOCK, BACKUP_DIR, STATE_DB_PATH
@@ -32,7 +32,7 @@ class DatabaseMigrationManager:
 
     def backup_database(self, prefix: str = "migration") -> str:
         """升級前線上熱備份 (sqlite3.backup())"""
-        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         backup_file = os.path.join(self.backup_dir, f"{prefix}_backup_{ts}.db")
         with _DB_LOCK:
             if os.path.exists(self.db_path):
@@ -97,7 +97,7 @@ class DatabaseMigrationManager:
                     func(conn)
                     conn.execute(
                         "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)",
-                        (ver, desc, datetime.utcnow().isoformat()),
+                        (ver, desc, datetime.now(timezone.utc).isoformat()),
                     )
                     conn.commit()
                     newly_applied.append(ver)
