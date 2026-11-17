@@ -507,7 +507,7 @@
 
         <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
           <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
-            <p class="text-xs text-slate-400">已驗證 Alpha 總數</p>
+            <p class="text-xs text-slate-400">已找到的 BRAIN Alpha</p>
             <p id="brainTotalAlphas" class="text-lg md:text-2xl font-black text-amber-400 mt-1">3 <span class="text-xs font-normal text-slate-400">組</span></p>
           </div>
           <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
@@ -1592,40 +1592,64 @@
     }
 
     // 3. WorldQuant BRAIN Alpha 倉庫
+    function renderAlphaActionButton(a) {
+      const st = String(a.status || '').toUpperCase();
+      if (st === 'BRAIN_COMPLETE') {
+        return `<button onclick="testAlpha('${a.id}', '${encodeURIComponent(a.expression)}', 'worldquant')" class="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold transition">🔍 執行 IS-Check / 重測</button>`;
+      }
+      if (st === 'SUBMISSION_CANDIDATE' || st === 'IS_CHECK_PASSED') {
+        return `<button onclick="testAlpha('${a.id}', '${encodeURIComponent(a.expression)}', 'worldquant')" class="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold transition">🚀 正式提交</button>`;
+      }
+      if (st === 'SUBMITTED') {
+        return `<span class="text-[10px] text-emerald-400 font-bold">✅ 已正式提交</span>`;
+      }
+      return `<button onclick="testAlpha('${a.id}', '${encodeURIComponent(a.expression)}', 'worldquant')" class="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold transition">🧪 送往 BRAIN 模擬</button>`;
+    }
+
     async function fetchAlphas() {
       try {
-        const res = await fetch('/api/brain/alphas');
+        const res = await fetch('/api/brain/alphas/discovered');
         const d = await res.json();
         if (d.success) {
-          const s = d.stats;
-          document.getElementById('brainTotalAlphas').innerHTML = `${s.verified_count} <span class="text-xs font-normal text-slate-400">組</span>`;
-          document.getElementById('brainAvgSharpe').innerText = s.avg_sharpe;
-          document.getElementById('brainAvgFitness').innerText = s.avg_fitness;
-          document.getElementById('brainAvgTurnover').innerText = `${s.avg_turnover_pct}%`;
+          const s = d.stats || {};
+          document.getElementById('brainTotalAlphas').innerHTML = `${d.count ?? 0} <span class="text-xs font-normal text-slate-400">組</span>`;
+          document.getElementById('brainAvgSharpe').innerText = Number(s.avg_sharpe || 0).toFixed(2);
+          document.getElementById('brainAvgFitness').innerText = Number(s.avg_fitness || 0).toFixed(2);
+          document.getElementById('brainAvgTurnover').innerText = `${Number(s.avg_turnover_pct || 0).toFixed(2)}%`;
 
           const list = document.getElementById('alphaList');
-          list.innerHTML = d.alphas.map(a => `
+          const rows = d.alphas || [];
+          if (!rows.length) {
+            list.innerHTML = `<div class="text-xs text-slate-400 p-4 bg-slate-900/60 rounded-xl border border-slate-800">尚無已完成 BRAIN 官方模擬的 Alpha，背景 Worker 持續挖掘中。</div>`;
+            return;
+          }
+          list.innerHTML = rows.map(a => {
+            const marginText = (a.margin === null || a.margin === undefined) ? 'UNAVAILABLE' : `${(Number(a.margin) * 10000).toFixed(2)} bps`;
+            const isChk = a.is_check_status || 'UNAVAILABLE';
+            const selfCorr = (a.self_correlation === null || a.self_correlation === undefined) ? 'UNAVAILABLE' : Number(a.self_correlation).toFixed(3);
+            const alphaIdLabel = a.brain_alpha_id || a.name;
+            return `
             <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-1.5">
               <div class="flex items-center justify-between">
-                <span class="font-bold text-xs text-amber-300">${a.name}</span>
+                <span class="font-bold text-xs text-amber-300">${alphaIdLabel}</span>
                 <span class="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold">${a.status}</span>
               </div>
               <div class="font-mono text-[11px] text-slate-300 bg-slate-950 p-2 rounded">${a.expression}</div>
-              <div class="flex items-center space-x-3 text-[10px] text-slate-400">
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-400">
                 <span>Sharpe: <strong class="text-emerald-400">${a.sharpe}</strong></span>
                 <span>Fitness: <strong class="text-indigo-400">${a.fitness}</strong></span>
-                <span>Turnover: <strong class="text-slate-200">${(a.turnover * 100).toFixed(1)}%</strong></span>
+                <span>Turnover: <strong class="text-slate-200">${(Number(a.turnover) * 100).toFixed(2)}%</strong></span>
+                <span>Margin: <strong class="text-slate-200">${marginText}</strong></span>
+                <span>IS-Check: <strong class="text-slate-200">${isChk}</strong></span>
+                <span>Self-Corr: <strong class="text-slate-200">${selfCorr}</strong></span>
                 <span class="text-slate-500 ml-auto">${a.created_at}</span>
               </div>
               <div class="flex items-center space-x-2 pt-1 border-t border-slate-800/80">
-                <button onclick="testAlpha('${a.id}', '${encodeURIComponent(a.expression)}', 'worldquant')" class="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold transition flex items-center space-x-1">
-                  <i class="fa-solid fa-paper-plane"></i>
-                  <span>🚀 送出至 WorldQuant 驗證並提交</span>
-                </button>
-                <span class="text-[10px] text-slate-500 italic ml-2">註：FASTEXPR 橫截面因子專屬美股回測</span>
+                ${renderAlphaActionButton(a)}
               </div>
             </div>
-          `).join('');
+          `;
+          }).join('');
         }
       } catch (e) {
         console.error(e);
@@ -1815,7 +1839,8 @@
           const wd = d.watchdog || {};
           const isLagging = Object.values(wd).some(v => v === 'LAGGING');
           if (isLagging) {
-            if (statusSpan) statusSpan.innerText = "系統延遲 (DEGRADED)";
+            const lagKeys = Object.entries(wd).filter(([,v]) => v === 'LAGGING').map(([k]) => k).join(', ');
+            if (statusSpan) statusSpan.innerText = lagKeys ? `系統延遲 (${lagKeys})` : "系統延遲 (DEGRADED)";
             if (statusContainer) statusContainer.className = "flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs";
             if (statusDot) statusDot.className = "w-2 h-2 rounded-full bg-amber-400 animate-pulse";
           } else {
