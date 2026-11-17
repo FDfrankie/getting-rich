@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sqlite3
@@ -57,6 +58,32 @@ class AlphaVault:
                     created_at TEXT NOT NULL
                 )
             """)
+            existing_cols = {r["name"] for r in cursor.execute("PRAGMA table_info(alphas)").fetchall()}
+            migrations = [
+                ("expression_hash", "TEXT"),
+                ("brain_simulation_id", "TEXT"),
+                ("brain_alpha_id", "TEXT"),
+                ("is_check_status", "TEXT"),
+                ("self_correlation", "REAL"),
+                ("production_correlation", "REAL"),
+                ("official_metrics_at", "TEXT"),
+                ("submitted_at", "TEXT"),
+                ("rejection_code", "TEXT"),
+                ("rejection_reason", "TEXT"),
+            ]
+            for col_name, col_type in migrations:
+                if col_name not in existing_cols:
+                    cursor.execute(f"ALTER TABLE alphas ADD COLUMN {col_name} {col_type}")
+
+            cursor.execute("CREATE INDEX IF NOT EXISTS ix_alphas_status ON alphas(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS ix_alphas_simulation_id ON alphas(brain_simulation_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS ix_alphas_expression_hash ON alphas(expression_hash)")
+
+            # Backfill expression_hash idempotently for existing rows
+            rows_no_hash = cursor.execute("SELECT id, expression FROM alphas WHERE expression_hash IS NULL OR expression_hash = ''").fetchall()
+            for r in rows_no_hash:
+                h = hashlib.sha256(str(r["expression"]).strip().encode("utf-8")).hexdigest()
+                cursor.execute("UPDATE alphas SET expression_hash = ? WHERE id = ?", (h, r["id"]))
             conn.commit()
 
     @staticmethod
@@ -97,11 +124,16 @@ class AlphaVault:
         delay: int = 1,
         returns: float = 0.0,
         drawdown: float = 0.0,
-        margin: float = 0.0,
+        margin: float | None = None,
         tags: str = "",
         notes: str = "",
         force: bool = False,
         status_override: str | None = None,
+        brain_simulation_id: str | None = None,
+        brain_alpha_id: str | None = None,
+        is_check_status: str | None = None,
+        self_correlation: float | None = None,
+        production_correlation: float | None = None,
     ) -> dict[str, Any]:
         """儲存 Alpha。若未達標且 force=False，則拒絕存入"""
         is_qualified = self.passes_qualification(sharpe, fitness, turnover)
@@ -120,17 +152,23 @@ class AlphaVault:
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            expr_clean = expression.strip()
+            expr_hash = hashlib.sha256(expr_clean.encode("utf-8")).hexdigest()
+            norm_margin = round(float(margin), 6) if margin is not None else None
             cursor.execute(
                 """
                 INSERT INTO alphas (
-                    name, expression, category, universe, decay, delay,
+                    name, expression, expression_hash, category, universe, decay, delay,
                     sharpe, fitness, turnover, returns, drawdown, margin,
-                    status, tags, notes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, tags, notes, created_at,
+                    brain_simulation_id, brain_alpha_id, is_check_status,
+                    self_correlation, production_correlation, official_metrics_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     name,
-                    expression.strip(),
+                    expr_clean,
+                    expr_hash,
                     category,
                     universe,
                     decay,
@@ -140,11 +178,17 @@ class AlphaVault:
                     round(norm_turnover, 4),
                     round(returns, 4),
                     round(drawdown, 4),
-                    round(margin, 4),
+                    norm_margin,
                     (status_override or ("VERIFIED" if is_qualified else "SUB_THRESHOLD")),
                     tags,
                     notes,
                     now_str,
+                    brain_simulation_id,
+                    brain_alpha_id,
+                    is_check_status,
+                    self_correlation,
+                    production_correlation,
+                    now_str if (brain_alpha_id or brain_simulation_id) else None,
                 ),
             )
             alpha_id = cursor.lastrowid
@@ -197,29 +241,91 @@ class AlphaVault:
             json.dump(alphas, f, indent=2, ensure_ascii=False)
         return target
 
+    @staticmethod
+    def _bucket_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        if not rows:
+            return {"count": 0, "avg_sharpe": 0.0, "avg_fitness": 0.0, "avg_turnover": 0.0, "avg_turnover_pct": 0.0}
+        avg_s = sum(float(r["sharpe"]) for r in rows) / len(rows)
+        avg_f = sum(float(r["fitness"]) for r in rows) / len(rows)
+        avg_t = sum(float(r["turnover"]) for r in rows) / len(rows)
+        return {
+            "count": len(rows),
+            "avg_sharpe": round(avg_s, 4),
+            "avg_fitness": round(avg_f, 4),
+            "avg_turnover": round(avg_t, 4),
+            "avg_turnover_pct": round(avg_t * 100.0, 2),
+        }
+
+    def list_discovered_alphas(self) -> list[dict[str, Any]]:
+        """列出所有已完成 BRAIN 官方模擬並取得結果的 Alpha，不受每日提交配額或後續 Gate 隱藏。"""
+        discovered_statuses = {"BRAIN_COMPLETE", "IS_CHECK_PASSED", "CORRELATION_PASSED", "SUBMISSION_CANDIDATE", "SUBMITTED"}
+        out = []
+        for a in self.list_alphas():
+            st = str(a.get("status") or "").upper()
+            has_official_id = bool(a.get("brain_alpha_id") or a.get("brain_simulation_id"))
+            if st in discovered_statuses or (has_official_id and st not in {"TEMPLATE_SEED", "LOCAL_VERIFIED", "VERIFIED"}):
+                item = dict(a)
+                if not item.get("brain_alpha_id") and str(item.get("name") or "").startswith("BRAIN_"):
+                    item["brain_alpha_id"] = str(item["name"])
+                out.append(item)
+        return out
+
     def get_stats(self) -> dict[str, Any]:
-        """統計目前倉庫指標與分佈"""
+        """統計目前倉庫指標與分狀態分佈（保證 count 與平均使用完全同一組資料集）"""
         alphas = self.list_alphas()
         if not alphas:
+            empty = self._bucket_stats([])
             return {
                 "total_count": 0,
                 "verified_count": 0,
+                "discovered_count": 0,
                 "avg_sharpe": 0.0,
                 "avg_fitness": 0.0,
                 "avg_turnover": 0.0,
+                "avg_turnover_pct": 0.0,
+                "summary": {
+                    "local_verified": empty,
+                    "brain_complete": empty,
+                    "is_check_passed": empty,
+                    "submission_candidates": empty,
+                    "submitted": empty,
+                    "rejected": empty,
+                    "discovered": empty,
+                    "total": empty,
+                },
             }
 
-        verified = [a for a in alphas if a["status"] == "VERIFIED"]
-        avg_sharpe = sum(a["sharpe"] for a in alphas) / len(alphas)
-        avg_fitness = sum(a["fitness"] for a in alphas) / len(alphas)
-        avg_turnover = sum(a["turnover"] for a in alphas) / len(alphas)
+        verified = [a for a in alphas if str(a.get("status") or "").upper() in {"VERIFIED", "LOCAL_VERIFIED"}]
+        brain_complete = [a for a in alphas if str(a.get("status") or "").upper() == "BRAIN_COMPLETE"]
+        is_check_passed = [a for a in alphas if str(a.get("status") or "").upper() == "IS_CHECK_PASSED"]
+        candidates = [a for a in alphas if str(a.get("status") or "").upper() == "SUBMISSION_CANDIDATE"]
+        submitted = [a for a in alphas if str(a.get("status") or "").upper() == "SUBMITTED"]
+        rejected = [a for a in alphas if str(a.get("status") or "").upper() == "REJECTED"]
+        discovered = self.list_discovered_alphas()
+
+        v_stats = self._bucket_stats(verified)
+        d_stats = self._bucket_stats(discovered)
 
         return {
             "total_count": len(alphas),
-            "verified_count": len(verified),
-            "avg_sharpe": round(avg_sharpe, 2),
-            "avg_fitness": round(avg_fitness, 2),
-            "avg_turnover_pct": round(avg_turnover * 100, 2),
+            "verified_count": v_stats["count"],
+            "discovered_count": d_stats["count"],
+            "avg_sharpe": round(v_stats["avg_sharpe"], 2),
+            "avg_fitness": round(v_stats["avg_fitness"], 2),
+            "avg_turnover_pct": v_stats["avg_turnover_pct"],
+            "discovered_avg_sharpe": round(d_stats["avg_sharpe"], 2),
+            "discovered_avg_fitness": round(d_stats["avg_fitness"], 2),
+            "discovered_avg_turnover_pct": d_stats["avg_turnover_pct"],
+            "summary": {
+                "local_verified": v_stats,
+                "brain_complete": self._bucket_stats(brain_complete),
+                "is_check_passed": self._bucket_stats(is_check_passed),
+                "submission_candidates": self._bucket_stats(candidates),
+                "submitted": self._bucket_stats(submitted),
+                "rejected": self._bucket_stats(rejected),
+                "discovered": d_stats,
+                "total": self._bucket_stats(alphas),
+            },
         }
 
     def seed_initial_verified_alphas(self):

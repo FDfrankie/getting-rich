@@ -526,10 +526,12 @@ class QuantAppContext:
                     sharpe=float(sharpe),
                     fitness=float(fitness),
                     turnover=float(turnover),
-                    margin=float(margin or 0.0),
+                    margin=float(margin) if margin is not None else None,
                     category="BRAIN_COMPLETE",
-                    notes=f"alpha_id={alpha_id} (模擬通過，待送出)",
+                    notes=f"alpha_id={alpha_id} (模擬完成)",
                     status_override="BRAIN_COMPLETE",
+                    brain_alpha_id=str(alpha_id),
+                    is_check_status="PASS" if checks_passed else "FAIL",
                 )
                 if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
                     self.brain_client.stage_candidate_for_daily_selection(
@@ -1077,6 +1079,19 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 )
             except Exception as e:
                 return self._send_json_response({"success": False, "error": str(e)}, status=500)
+
+        # API: 已找到的官方 BRAIN Alpha 清單（不受每日提交配額或後續 Gate 隱藏）
+        if path == "/api/brain/alphas/discovered":
+            discovered = APP_STATE.alpha_vault.list_discovered_alphas()
+            stats = APP_STATE.alpha_vault.get_stats()
+            return self._send_json_response(
+                {
+                    "success": True,
+                    "count": len(discovered),
+                    "stats": stats.get("summary", {}).get("discovered", {}),
+                    "alphas": discovered,
+                }
+            )
 
         # API: WorldQuant BRAIN Alpha 倉庫列表與變現教學
         if path == "/api/brain/alphas":
