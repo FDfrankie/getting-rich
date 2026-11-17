@@ -48,11 +48,54 @@
     "ETH_USDT_1m_180d.csv",
     "SOL_USDT_1m_180d.csv"
   ],
-  "deployment_stage": "LOCAL_PAPER_READY",
+  "deployment_stage": "SHADOW",
   "oos_metrics": {
     "mean_rank_ic": 0.014670230443781171,
     "mean_sharpe": 2.770896516246755,
     "mean_accuracy": 0.5096179342854458,
     "mean_turnover": 0.05
+  },
+  "approved_for_inference": true,
+  "approved_for_order_entry": false,
+  "validation_gate_version": "model-governance-v2-oos-stress",
+  "rejection_reason": "global_test_rank_ic_ge_0_015,global_test_base_daily_sharpe_ge_1_0,severe_cost_positive_return,severe_cost_daily_sharpe_ge_0_5",
+  "oos_validation_gate": {
+    "validated_at": "2026-11-17T20:53:07.447802+00:00",
+    "gate_passed": false,
+    "global_test_rank_ic": -0.006176,
+    "cost_scenarios": {
+      "base": {
+        "avg_net_return_pct": -99.4271,
+        "avg_daily_sharpe": -85.4006,
+        "avg_max_drawdown_pct": 99.4281
+      },
+      "stress_1_5x": {
+        "avg_net_return_pct": -99.9598,
+        "avg_daily_sharpe": -99.7863,
+        "avg_max_drawdown_pct": 99.9598
+      },
+      "severe_2_0x_funding": {
+        "avg_net_return_pct": -99.9972,
+        "avg_daily_sharpe": -106.7152,
+        "avg_max_drawdown_pct": 99.9972
+      }
+    },
+    "leave_one_asset_out": {
+      "BTC/USDT": {
+        "rank_ic": 0.039005,
+        "base_daily_sharpe": -59.0248,
+        "base_net_return_pct": -100.0
+      },
+      "ETH/USDT": {
+        "rank_ic": 0.046782,
+        "base_daily_sharpe": -74.1313,
+        "base_net_return_pct": -100.0
+      },
+      "SOL/USDT": {
+        "rank_ic": 0.033397,
+        "base_daily_sharpe": -90.2342,
+        "base_net_return_pct": -100.0
+      }
+    }
   }
 }

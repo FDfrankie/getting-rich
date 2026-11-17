@@ -102,8 +102,11 @@ def evaluate_signals_oos(df_sig: pd.DataFrame, tf: str, oos_start_idx: int, fee_
     active_mask = pos != 0
     win_rate = float(np.mean(net_ret[active_mask] > 0) * 100.0) if np.any(active_mask) else 0.0
 
+    eligible = trade_entries >= 100 and len(sub) >= 500
     return {
         "oos_bars": int(len(sub)),
+        "eligible_for_ranking": eligible,
+        "rejection_reason": None if eligible else "INSUFFICIENT_SAMPLE",
         "net_return_pct": round(total_ret_pct, 2),
         "sharpe": round(sharpe, 3),
         "max_drawdown_pct": round(max_dd_pct, 2),
@@ -198,15 +201,18 @@ def run_benchmark(symbols: list[str], output_dir: Path) -> dict[str, Any]:
             },
         }
 
-    # Pick recommended timeframe: highest avg_sharpe on cond_prob_maker with >= 5 avg trades
+    # Rank only statistically usable combinations. Never recommend seven-trade results.
     viable = [
         (tf, results_by_tf[tf]["summary"]["cond_prob_maker"])
         for tf in TIMEFRAMES
-        if results_by_tf[tf]["summary"]["cond_prob_maker"]["avg_trades"] >= 3
+        if results_by_tf[tf]["summary"]["cond_prob_maker"]["avg_trades"] >= 100
+        and results_by_tf[tf]["summary"]["cond_prob_maker"]["avg_sharpe"] > 0
     ]
-    if not viable:
-        viable = [(tf, results_by_tf[tf]["summary"]["cond_prob_maker"]) for tf in TIMEFRAMES]
-    best_tf, best_stats = max(viable, key=lambda x: (x[1]["avg_sharpe"], x[1]["avg_net_return_pct"]))
+    if viable:
+        best_tf, best_stats = max(viable, key=lambda x: (x[1]["avg_sharpe"], x[1]["avg_net_return_pct"]))
+    else:
+        best_tf = None
+        best_stats = {"avg_sharpe": 0.0, "avg_net_return_pct": 0.0, "avg_time_in_market_pct": 0.0}
 
     report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -221,7 +227,7 @@ def run_benchmark(symbols: list[str], output_dir: Path) -> dict[str, Any]:
 
     lines = [
         "# Multi-Timeframe Conditional Probability + Technical Benchmark (OOS)",
-        f"- Recommended Timeframe: **{best_tf}** (Maker Avg Sharpe: {best_stats['avg_sharpe']}, Avg Net Return: {best_stats['avg_net_return_pct']}%, Time-in-Market: {best_stats['avg_time_in_market_pct']}%)",
+        f"- Recommended Timeframe: **{best_tf or 'NONE - insufficient sample'}** (Maker Avg Sharpe: {best_stats['avg_sharpe']}, Avg Net Return: {best_stats['avg_net_return_pct']}%, Time-in-Market: {best_stats['avg_time_in_market_pct']}%)",
         "",
         "| Timeframe | Baseline Hold% | Baseline Ret% | CondProb Maker Hold% | CondProb Maker Ret% | CondProb Maker Sharpe | CondProb Taker Ret% | CondProb Taker Sharpe |",
         "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |",

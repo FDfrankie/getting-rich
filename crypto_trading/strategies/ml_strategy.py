@@ -14,6 +14,7 @@ import re
 import numpy as np
 import pandas as pd
 
+from crypto_trading.model_governance import validate_model_manifest
 from crypto_trading.ml_trainer import CryptoMLTrainer
 from crypto_trading.strategies.momentum_breakout import BaseStrategy
 
@@ -39,21 +40,11 @@ class MLAlphaStrategy(BaseStrategy):
         if trainer is not None:
             self.trainer = trainer
         elif model_path is not None:
-            manifest_path = re.sub(r"\.[^.]+$", "_manifest.json", model_path)
             if not allow_unverified:
-                if not os.path.exists(manifest_path):
+                decision = validate_model_manifest(model_path, require_inference_approval=True)
+                if not decision.allowed:
                     self.trainer = None
-                    self.model_status = "UNVERIFIED_MODEL_QUARANTINED"
-                    return
-                try:
-                    with open(manifest_path, "r", encoding="utf-8") as f:
-                        meta = json.load(f)
-                except Exception:
-                    self.trainer = None
-                    self.model_status = "UNVERIFIED_MODEL_QUARANTINED"
-                    return
-                if meta.get("is_synthetic") or meta.get("deployment_stage") == "RESEARCH_ONLY":
-                    self.trainer = None
+                    self.governance_status = decision.status
                     self.model_status = "UNVERIFIED_MODEL_QUARANTINED"
                     return
             self.trainer = CryptoMLTrainer.load_weights(model_path)

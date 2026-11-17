@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from crypto_trading.dataset_manifest import build_dataset_manifest
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 CACHE_DIR = BASE_DIR / "crypto_trading" / "data_cache"
 
@@ -89,8 +91,15 @@ def main() -> int:
         safe_name = sym.replace("/", "_")
         out_p = CACHE_DIR / f"{safe_name}_{args.timeframe}_{args.days}d.csv"
         df.to_csv(out_p)
+        expected_rows = int(args.days * 86400 / _TF_SECONDS.get(args.timeframe, 60))
+        manifest = build_dataset_manifest(
+            out_p, symbol=sym, timeframe=args.timeframe, source="binance", expected_rows=expected_rows
+        )
         span_info = f"{df.index[0]} -> {df.index[-1]}" if len(df) > 0 else "empty"
-        print(f"[✓] Saved {len(df)} bars ({span_info}) to {out_p}")
+        print(
+            f"[✓] Saved {len(df)} bars ({span_info}) to {out_p}; "
+            f"missing={manifest['missing_intervals']} sha256={manifest['sha256']}"
+        )
     return 0
 
 

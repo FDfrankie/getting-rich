@@ -37,10 +37,18 @@
   "total_bars": 90000,
   "cache_file": "BTC_USDT_1m_180d.csv",
   "is_synthetic": false,
-  "deployment_stage": "LOCAL_PAPER_READY",
+  "deployment_stage": "QUARANTINED",
   "oos_metrics": {
     "oos_return_pct": -25.0,
     "oos_sharpe": -113.666,
     "test_bars": 22473
+  },
+  "approved_for_inference": false,
+  "approved_for_order_entry": false,
+  "validation_gate_version": "model-governance-v2",
+  "rejection_reason": "FAILED_5SEED_OOS_GATE",
+  "oos_metrics_5seed": {
+    "median_oos_return_pct": -9.9987,
+    "median_oos_sharpe": -28.1237
   }
 }
