@@ -77,17 +77,38 @@ class TestWebUIAndServices(unittest.TestCase):
         self.assertIsInstance(pos, list)
 
     def test_03_bitunix_client(self):
-        """測試 Bitunix 實盤對接客戶端"""
+        """測試 Bitunix 實盤對接客戶端 (含離線 Fail-Closed 與 Live Mock 報價驗證)"""
+        from unittest.mock import MagicMock, patch
         client = BitunixClient()
         ticker = client.fetch_ticker("BTC/USDT")
         self.assertEqual(ticker["exchange"], "bitunix")
-        self.assertGreater(ticker["last"], 0)
+        self.assertIsNone(ticker["last"])
+        self.assertEqual(ticker["status"], "OFFLINE")
+        self.assertFalse(ticker["success"])
 
         bal = client.fetch_balance()
         self.assertIn("total_equity", bal)
+        self.assertIsNone(bal["total_equity"])
+        self.assertEqual(bal["error"], "BITUNIX_STANDBY_MODE")
 
-        ord_res = client.create_order("BTC/USDT", "BUY", "MARKET", 0.01)
-        self.assertTrue(ord_res["success"])
+        ord_fail = client.create_order("BTC/USDT", "BUY", "MARKET", 0.01)
+        self.assertFalse(ord_fail["success"])
+        self.assertEqual(ord_fail["error"], "TICKER_UNAVAILABLE")
+
+        ord_limit = client.create_order("BTC/USDT", "BUY", "LIMIT", 0.01, price=68000.0)
+        self.assertTrue(ord_limit["success"])
+
+        client.is_live = True
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"data": {"lastPrice": "68000.0", "highPrice": "69000.0", "lowPrice": "67000.0", "volume": "1234.5"}}
+        with patch("requests.get", return_value=mock_resp):
+            live_t = client.fetch_ticker("BTC/USDT")
+            self.assertEqual(live_t["exchange"], "bitunix")
+            self.assertEqual(live_t["last"], 68000.0)
+            self.assertEqual(live_t["status"], "LIVE")
+            self.assertTrue(live_t["success"])
 
     def test_04_multi_asset_features(self):
         """測試多週期多幣種資料加載與特徵工程"""

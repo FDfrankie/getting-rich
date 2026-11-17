@@ -96,7 +96,7 @@ class CryptoMLTrainer:
         else:
             raise ValueError(f"Unsupported model_type: {self.model_type}")
 
-    def walk_forward_train(self, df_raw: pd.DataFrame, n_splits: int = 5, train_ratio: float = 0.7) -> dict[str, Any]:
+    def walk_forward_train(self, df_raw: pd.DataFrame, n_splits: int = 5, train_ratio: float = 0.7, purge_bars: int = 12, embargo_bars: int = 2) -> dict[str, Any]:
         """
         Executes strict chronological Walk-Forward Validation.
         At each fold k:
@@ -113,9 +113,9 @@ class CryptoMLTrainer:
             if self.task == "regression"
             else ("target_direction_3" if "target_direction_3" in processed.columns else "target_binary")
         )
-        X = processed[features].values
-        y = processed[target_col].values
-        returns = processed["target_fwd_ret_3"].values
+        X = np.asarray(processed[features].values, dtype=float)
+        y = np.asarray(processed[target_col].values, dtype=float if self.task == "regression" else int)
+        returns = np.asarray(processed["target_fwd_ret_3"].values, dtype=float)
 
         n_samples = len(X)
         fold_size = int(n_samples / (n_splits + 1))

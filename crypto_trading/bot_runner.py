@@ -90,7 +90,7 @@ class CryptoTradingBot:
                 "data_source": "crypto_trading_bot",
                 "data_timestamp": datetime.utcnow().isoformat(),
                 "data_quality_passed": True,
-                "reconciliation_fresh": True,
+                "reconciliation_fresh": (getattr(self, "reconciliation_service", None).is_ready_for_trading() if getattr(self, "reconciliation_service", None) else not bool(self.exchange_adapter)),
                 "has_unknown_orders": False,
                 "exchange_connected": bool(self.exchange_adapter),
             },

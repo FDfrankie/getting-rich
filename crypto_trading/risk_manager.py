@@ -1,3 +1,4 @@
+from decimal import Decimal
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -157,9 +158,9 @@ class RiskManager:
             try:
                 test_conn = sqlite3.connect(db_path, timeout=1.0)
                 test_cur = test_conn.cursor()
-                test_cur.execute("CREATE TABLE IF NOT EXISTS _db_write_probe (ts TEXT)")
+                test_cur.execute("CREATE TABLE IF NOT EXISTS _db_write_probe (id INTEGER PRIMARY KEY, ts TEXT)")
                 test_cur.execute(
-                    "INSERT INTO _db_write_probe VALUES (?)",
+                    "REPLACE INTO _db_write_probe (id, ts) VALUES (1, ?)",
                     (datetime.utcnow().isoformat(),),
                 )
                 test_conn.commit()
@@ -179,14 +180,12 @@ class RiskManager:
 
         step_size = ctx.get("step_size", 0.001)
         if step_size > 0:
-            remainder = amount % step_size
-            if round(remainder, 6) != 0 and round(abs(remainder - step_size), 6) != 0:
+            if Decimal(str(amount)) % Decimal(str(step_size)) != Decimal("0"):
                 reasons.append(f"Amount {amount} violates step_size {step_size}")
 
         tick_size = ctx.get("tick_size", 0.01)
         if tick_size > 0:
-            remainder_p = price % tick_size
-            if round(remainder_p, 6) != 0 and round(abs(remainder_p - tick_size), 6) != 0:
+            if Decimal(str(price)) % Decimal(str(tick_size)) != Decimal("0"):
                 reasons.append(f"Price {price} violates tick_size {tick_size}")
 
         # 部位與槓桿限額

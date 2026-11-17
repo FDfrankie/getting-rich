@@ -133,9 +133,10 @@ def sanitize_error(exc: Exception) -> str:
 
 
 class BrainJobQueue:
-    def __init__(self, brain_client: Any, default_poll_interval: float = 2.0, autostart: bool = True) -> None:
+    def __init__(self, brain_client: Any, default_poll_interval: float = 2.0, autostart: bool = True, on_complete_callback: Any = None) -> None:
         self.brain_client = brain_client
         self.default_poll_interval = float(default_poll_interval)
+        self.on_complete_callback = on_complete_callback
         self._jobs: dict[str, BrainSimulationJob] = {}
         self._key_to_job_id: dict[str, str] = {}
         self._lock = threading.Lock()
@@ -334,14 +335,33 @@ class BrainJobQueue:
                 state = str(poll_data.get("status") or poll_data.get("state") or "").upper()
 
                 if state in ("COMPLETE", "COMPLETED"):
-                    sharpe = self.brain_client._number(poll_data, "sharpe")
-                    fitness = self.brain_client._number(poll_data, "fitness")
-                    turnover = self.brain_client._number(poll_data, "turnover")
-                    margin = self.brain_client._number(poll_data, "margin")
+                    real_alpha_id = poll_data.get("alpha") or poll_data.get("alpha_id")
+                    metrics_source = dict(poll_data)
+                    if real_alpha_id:
+                        try:
+                            alpha_resp = self.brain_client.session.get(
+                                f"{self.brain_client.BASE_URL}/alphas/{real_alpha_id}",
+                                timeout=self.brain_client.timeout,
+                            )
+                            if getattr(alpha_resp, "status_code", None) == 200 and getattr(alpha_resp, "content", None):
+                                alpha_json = alpha_resp.json()
+                                if isinstance(alpha_json, dict):
+                                    metrics_source.update(alpha_json)
+                                    if isinstance(alpha_json.get("is"), dict):
+                                        metrics_source.update(alpha_json["is"])
+                        except Exception:
+                            pass
+
+                    sharpe = self.brain_client._number(metrics_source, "sharpe")
+                    fitness = self.brain_client._number(metrics_source, "fitness")
+                    turnover = self.brain_client._number(metrics_source, "turnover")
+                    margin = self.brain_client._number(metrics_source, "margin")
 
                     # Sharpe 與 Fitness 必須是有效非空數字才算成功
                     has_metrics = (sharpe is not None) and (fitness is not None)
                     with self._lock:
+                        if real_alpha_id:
+                            job.alpha_id = str(real_alpha_id)
                         job.status = BrainJobStatus.COMPLETED if has_metrics else BrainJobStatus.FAILED
                         job.metrics = {
                             "sharpe": sharpe,
@@ -351,6 +371,11 @@ class BrainJobQueue:
                         }
                         if not has_metrics:
                             job.safe_error = "線上模擬完成但缺少有效 Sharpe 或 Fitness 指標"
+                    if has_metrics and callable(getattr(self, "on_complete_callback", None)):
+                        try:
+                            self.on_complete_callback(job)
+                        except Exception:
+                            pass
                     return
 
                 if state in {"ERROR", "FAILED", "CANCELLED", "CANCELED"}:

@@ -17,9 +17,10 @@ Tests 12 strict acceptance criteria:
 
 from __future__ import annotations
 
+import os
 import time
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from worldquant_brain.brain_client import BrainClient, mask_sensitive_data
 from worldquant_brain.brain_job_queue import (
@@ -44,8 +45,9 @@ class TestWorldQuantAlphaAudit(unittest.TestCase):
 
     def test_01_offline_and_na_does_not_show_success(self):
         """1. OFFLINE + N/A 不判定為成功，且提示離線訊息"""
-        offline_client = BrainClient(email=None, password=None)
-        res = offline_client.simulate_alpha("rank(close)")
+        with patch.dict(os.environ, {"BRAIN_EMAIL": "", "BRAIN_PASSWORD": ""}):
+            offline_client = BrainClient(email=None, password=None)
+            res = offline_client.simulate_alpha("rank(close)")
 
         self.assertEqual(res["status"], "OFFLINE")
         self.assertFalse(res["success"])

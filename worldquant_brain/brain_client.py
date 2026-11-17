@@ -69,8 +69,8 @@ class BrainClient:
         poll_interval: float = 5.0,
         session: requests.Session | None = None,
     ) -> None:
-        self.email = email if email is not None else (os.getenv("BRAIN_EMAIL") or os.getenv("BRAIN_USERNAME"))
-        self.password = password if password is not None else os.getenv("BRAIN_PASSWORD")
+        self.email = email or os.getenv("BRAIN_EMAIL") or os.getenv("BRAIN_USERNAME")
+        self.password = password or os.getenv("BRAIN_PASSWORD")
         self.timeout = float(timeout)
         self.poll_interval = float(poll_interval)
         self.session = session or requests.Session()
@@ -312,7 +312,7 @@ class BrainClient:
             if status in ("COMPLETE", "COMPLETED"):
                 sim_id = last.get("id") or location.rstrip("/").split("/")[-1]
                 alpha_id = last.get("alpha") or last.get("alpha_id") or sim_id
-
+                
                 # If metrics are not in the simulation object, fetch the alpha object
                 alpha_data = {}
                 if last.get("alpha"):
@@ -399,3 +399,116 @@ class BrainClient:
             "regular": expression,
         }
         return self.submit_and_poll_simulation(payload, **kwargs)
+
+    def _quota_db(self) -> str:
+        return getattr(self, "quota_db_path", None) or os.path.join(os.path.dirname(__file__), "alpha_vault.db")
+
+    def _today_taipei(self) -> str:
+        from datetime import datetime, timedelta, timezone
+        return datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+
+    def get_daily_submission_count(self, day_str: str | None = None) -> int:
+        import sqlite3
+        day = day_str or self._today_taipei()
+        db_p = self._quota_db()
+        os.makedirs(os.path.dirname(os.path.abspath(db_p)), exist_ok=True)
+        conn = sqlite3.connect(db_p, timeout=10.0)
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS brain_daily_submissions (alpha_id TEXT PRIMARY KEY, submitted_date TEXT NOT NULL, created_at TEXT NOT NULL)"
+            )
+            cur = conn.execute("SELECT COUNT(*) FROM brain_daily_submissions WHERE submitted_date = ?", (day,))
+            return int(cur.fetchone()[0])
+        finally:
+            conn.close()
+
+    def _record_daily_submission(self, alpha_id: str, day_str: str | None = None) -> None:
+        import sqlite3
+        from datetime import datetime, timezone
+        day = day_str or self._today_taipei()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        db_p = self._quota_db()
+        os.makedirs(os.path.dirname(os.path.abspath(db_p)), exist_ok=True)
+        conn = sqlite3.connect(db_p, timeout=10.0)
+        try:
+            with conn:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS brain_daily_submissions (alpha_id TEXT PRIMARY KEY, submitted_date TEXT NOT NULL, created_at TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO brain_daily_submissions (alpha_id, submitted_date, created_at) VALUES (?, ?, ?)",
+                    (str(alpha_id), day, now_iso),
+                )
+        finally:
+            conn.close()
+
+    def submit_alpha(self, alpha_id: str, max_wait_seconds: float = 60.0, max_daily_submissions: int | None = None) -> dict[str, Any]:
+        """Submit a simulated alpha to WorldQuant BRAIN (/alphas/{alpha_id}/submit) with daily quota cap (default 2/day)."""
+        if not alpha_id or not str(alpha_id).strip():
+            return {"success": False, "status": "INVALID_ALPHA_ID", "error": "alpha_id is required"}
+
+        limit = int(max_daily_submissions if max_daily_submissions is not None else os.getenv("BRAIN_MAX_DAILY_SUBMISSIONS", "2"))
+        today_cnt = self.get_daily_submission_count()
+        if today_cnt >= limit:
+            return {
+                "success": False,
+                "status": "DAILY_QUOTA_REACHED",
+                "alpha_id": alpha_id,
+                "daily_limit": limit,
+                "submitted_today": today_cnt,
+                "error": f"已達每日提交上限 ({today_cnt}/{limit})，今日不再送出",
+            }
+
+        if self.offline_mode:
+            return {
+                "success": False,
+                "status": "OFFLINE",
+                "alpha_id": alpha_id,
+                "error": "BRAIN_EMAIL/BRAIN_PASSWORD 未設定，未送出任何網路請求。",
+            }
+        if not self.is_authenticated and not self.authenticate():
+            return {"success": False, "status": "AUTH_FAILED", "alpha_id": alpha_id, "error": "BRAIN 登入失敗"}
+
+        url = f"{self.BASE_URL}/alphas/{alpha_id}/submit"
+        deadline = time.monotonic() + float(max_wait_seconds)
+        resp = self.session.post(url, timeout=self.timeout)
+        if resp.status_code in (401, 403):
+            self.authenticated = False
+            if self.authenticate():
+                resp = self.session.post(url, timeout=self.timeout)
+        if resp.status_code == 429:
+            retry_after = float(resp.headers.get("Retry-After") or self.poll_interval)
+            time.sleep(min(retry_after, 10.0))
+            resp = self.session.post(url, timeout=self.timeout)
+
+        location = resp.headers.get("Location") or resp.headers.get("location")
+        if resp.status_code in (200, 201, 202) and location:
+            if location.startswith("/"):
+                location = f"{self.BASE_URL}{location}"
+            while time.monotonic() < deadline:
+                poll = self.session.get(location, timeout=self.timeout)
+                if poll.status_code == 429:
+                    time.sleep(float(poll.headers.get("Retry-After") or self.poll_interval))
+                    continue
+                if poll.status_code in (200, 201):
+                    data = poll.json() if poll.content else {}
+                    st = str(data.get("status") or data.get("state") or "SUBMITTED").upper()
+                    if st in ("COMPLETE", "COMPLETED", "SUBMITTED", "PASS", "ACTIVE"):
+                        self._record_daily_submission(alpha_id)
+                        return {"success": True, "status": "SUBMITTED", "alpha_id": alpha_id, "raw": data}
+                    if st in ("FAIL", "FAILED", "ERROR"):
+                        return {"success": False, "status": "SUBMIT_REJECTED", "alpha_id": alpha_id, "raw": data}
+                elif poll.status_code >= 400:
+                    return {"success": False, "status": "SUBMIT_ERROR", "alpha_id": alpha_id, "http_status": poll.status_code}
+                time.sleep(min(self.poll_interval, 5.0))
+        if resp.status_code in (200, 201):
+            data = resp.json() if resp.content else {}
+            self._record_daily_submission(alpha_id)
+            return {"success": True, "status": "SUBMITTED", "alpha_id": alpha_id, "raw": data}
+        return {
+            "success": False,
+            "status": "SUBMIT_ERROR",
+            "alpha_id": alpha_id,
+            "http_status": resp.status_code,
+            "error": mask_sensitive_data((resp.text or "")[:300]),
+        }

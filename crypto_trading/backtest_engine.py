@@ -65,7 +65,7 @@ class BacktestEngine:
         source_name = data_source or getattr(df, "data_source", self.fee_schedule.source)
 
         # 1. 計算資產市場收益率
-        market_returns = close.pct_change().fillna(0)
+        market_returns = close.pct_change(fill_method=None).fillna(0)
 
         # 2. 策略部位：嚴格延遲 delay_bars 期 (預設 t+1，避免 Lookahead Bias)
         delay = self.fee_schedule.delay_bars
@@ -97,7 +97,7 @@ class BacktestEngine:
 
         # 累積淨值曲線 (Gross vs Net)
         gross_equity = (1.0 + gross_returns).cumprod() * self.initial_capital
-        net_equity = (1.0 + net_returns).cumprod() * self.initial_capital
+        net_equity = (1.0 + net_returns).clip(lower=0.0).cumprod() * self.initial_capital
 
         gross_return_pct = (gross_equity.iloc[-1] - self.initial_capital) / self.initial_capital
         net_return_pct = (net_equity.iloc[-1] - self.initial_capital) / self.initial_capital

@@ -63,39 +63,62 @@ class BitunixClient:
         }
 
     def fetch_ticker(self, symbol: str = "BTC/USDT") -> dict[str, Any]:
-        """獲取實時行情報價"""
+        """Return a stable, fail-closed ticker schema.
+
+        Public market data is queried only in BITUNIX_LIVE mode. In every
+        non-live mode the method returns an explicit OFFLINE result instead of
+        synthesizing a tradable price.
+        """
         clean_symbol = symbol.replace("/", "").upper()
-        # 公開行情接口 (不需簽名)
+
+        def offline(reason: str) -> dict[str, Any]:
+            return {
+                "exchange": "bitunix",
+                "symbol": symbol,
+                "price": None,
+                "last": None,
+                "bid": None,
+                "ask": None,
+                "high24h": None,
+                "low24h": None,
+                "volume24h": None,
+                "timestamp": None,
+                "status": "OFFLINE",
+                "success": False,
+                "error": "TICKER_UNAVAILABLE",
+                "detail": reason,
+            }
+
+        if not self.is_live:
+            return offline("Bitunix market data is disabled outside BITUNIX_LIVE mode")
+
         try:
             import requests
 
             url = f"{self.base_url}/api/v1/futures/market/ticker?symbol={clean_symbol}"
             resp = requests.get(url, timeout=3)
-            if resp.status_code == 200:
-                data = resp.json().get("data", {})
-                return {
-                    "exchange": "bitunix",
-                    "symbol": symbol,
-                    "last": float(data.get("lastPrice", 0.0)),
-                    "high24h": float(data.get("highPrice", 0.0)),
-                    "low24h": float(data.get("lowPrice", 0.0)),
-                    "volume24h": float(data.get("volume", 0.0)),
-                    "timestamp": int(time.time() * 1000),
-                }
-        except Exception:
-            pass
-
-        # 擬真厚尾 fallback 報價
-        last_price = 87450.0 if "BTC" in symbol else 3120.0
-        return {
-            "exchange": "bitunix",
-            "symbol": symbol,
-            "last": last_price,
-            "high24h": last_price * 1.025,
-            "low24h": last_price * 0.985,
-            "volume24h": 15420.5,
-            "timestamp": int(time.time() * 1000),
-        }
+            resp.raise_for_status()
+            data = resp.json().get("data", {})
+            last = float(data["lastPrice"])
+            bid_raw = data.get("bidPrice")
+            ask_raw = data.get("askPrice")
+            return {
+                "exchange": "bitunix",
+                "symbol": symbol,
+                "price": last,
+                "last": last,
+                "bid": float(bid_raw) if bid_raw not in (None, "") else None,
+                "ask": float(ask_raw) if ask_raw not in (None, "") else None,
+                "high24h": float(data["highPrice"]) if data.get("highPrice") not in (None, "") else None,
+                "low24h": float(data["lowPrice"]) if data.get("lowPrice") not in (None, "") else None,
+                "volume24h": float(data["volume"]) if data.get("volume") not in (None, "") else None,
+                "timestamp": int(time.time() * 1000),
+                "status": "LIVE",
+                "success": True,
+                "error": None,
+            }
+        except Exception as exc:
+            return offline(f"Bitunix ticker unavailable: {type(exc).__name__}")
 
     def fetch_balance(self) -> dict[str, Any]:
         """獲取 Bitunix 帳戶資產與可用保證金"""
@@ -103,9 +126,10 @@ class BitunixClient:
             return {
                 "mode": "BITUNIX_STANDBY_MODE (未配置實盤 API Key)",
                 "exchange": "bitunix",
-                "total_equity": self._simulated_balance["USDT"],
-                "free_balance": self._simulated_balance["USDT"] * 0.85,
-                "balances": self._simulated_balance,
+                "total_equity": None,
+                "free_balance": None,
+                "balances": {},
+                "error": "BITUNIX_STANDBY_MODE",
                 "notice": "請在系統環境變數或 config.py 中配置 BITUNIX_API_KEY 與 BITUNIX_API_SECRET 以啟動真金白銀實盤撮合。",
             }
 
@@ -186,7 +210,14 @@ class BitunixClient:
 
         if not self.is_live:
             ticker = self.fetch_ticker(symbol)
-            exec_price = price if (order_type == "LIMIT" and price) else ticker["last"]
+            exec_price = price if (order_type == "LIMIT" and price) else ticker.get("last")
+            if exec_price is None:
+                return {
+                    "success": False,
+                    "mode": "BITUNIX_STANDBY_TICKER_UNAVAILABLE",
+                    "error": "TICKER_UNAVAILABLE",
+                    "message": "Bitunix 行情不可用，拒絕以假價格模擬成交",
+                }
             order_info = {
                 "id": f"bitunix_sim_{int(time.time() * 1000)}",
                 "exchange": "bitunix",

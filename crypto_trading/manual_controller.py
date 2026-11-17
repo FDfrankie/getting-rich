@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from data_persistence.gdrive_sync import _DB_LOCK, STATE_DB_PATH
@@ -137,7 +137,9 @@ class ManualPositionController:
             # 檢查 TTL
             try:
                 locked_dt = datetime.fromisoformat(locked_at_str)
-                elapsed = (datetime.utcnow() - locked_dt).total_seconds()
+                if locked_dt.tzinfo is None:
+                    locked_dt = locked_dt.replace(tzinfo=timezone.utc)
+                elapsed = (datetime.now(timezone.utc) - locked_dt).total_seconds()
                 if elapsed > ttl:
                     # TTL 已過期，自動解鎖
                     cur.execute(
@@ -198,7 +200,10 @@ class ManualPositionController:
         close_side = "SELL" if side == "LONG" else "BUY"
 
         if hasattr(client, "create_order"):
-            res = client.create_order(symbol=symbol, side=close_side, order_type="MARKET", amount=contracts)
+            try:
+                res = client.create_order(symbol=symbol, side=close_side, order_type="MARKET", amount=contracts, reduce_only=True)
+            except TypeError:
+                res = client.create_order(symbol=symbol, side=close_side, order_type="MARKET", amount=contracts)
         else:
             res = {"success": True, "message": "Simulated close"}
 
@@ -234,12 +239,10 @@ class ManualPositionController:
         close_side = "SELL" if side == "LONG" else "BUY"
 
         if hasattr(client, "create_order"):
-            res = client.create_order(
-                symbol=symbol,
-                side=close_side,
-                order_type="MARKET",
-                amount=reduce_amount,
-            )
+            try:
+                res = client.create_order(symbol=symbol, side=close_side, order_type="MARKET", amount=reduce_amount, reduce_only=True)
+            except TypeError:
+                res = client.create_order(symbol=symbol, side=close_side, order_type="MARKET", amount=reduce_amount)
         else:
             res = {"success": True, "message": "Simulated reduce"}
 

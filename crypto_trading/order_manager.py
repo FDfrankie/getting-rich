@@ -1,3 +1,4 @@
+from decimal import Decimal
 import hashlib
 import sqlite3
 import time
@@ -24,11 +25,14 @@ def generate_idempotency_key(
     symbol: str,
     side: str,
     order_type: str,
-    amount: float,
-    price: float | None,
+    amount: float | Decimal,
+    price: float | Decimal | None,
     client_tag: str = "",
 ) -> str:
-    raw = f"{symbol}_{side.upper()}_{order_type.upper()}_{amount:.6f}_{price or 0:.6f}_{client_tag}"
+    norm_amt = Decimal(str(amount)).normalize()
+    norm_prc = Decimal(str(price if price is not None else 0)).normalize()
+    bucket = client_tag or f"bucket_{int(time.time() // 5)}"
+    raw = f"{symbol}_{side.upper()}_{order_type.upper()}_{norm_amt:f}_{norm_prc:f}_{bucket}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -86,7 +90,7 @@ class OrderManager:
             client_order_id
             or f"ord_{int(time.time() * 1000)}_{hashlib.md5(f'{symbol}_{amount}_{time.time()}'.encode()).hexdigest()[:8]}"
         )
-        ikey = generate_idempotency_key(symbol, side, order_type, amount, price, client_tag or cid)
+        ikey = generate_idempotency_key(symbol, side, order_type, amount, price, client_tag)
 
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)

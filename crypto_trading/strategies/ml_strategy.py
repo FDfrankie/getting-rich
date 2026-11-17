@@ -7,6 +7,10 @@ Signal Output:
   0: Flat / Neutral
 """
 
+import json
+import os
+import re
+
 import numpy as np
 import pandas as pd
 
@@ -27,14 +31,35 @@ class MLAlphaStrategy(BaseStrategy):
         model_path: str | None = None,
         trainer: CryptoMLTrainer | None = None,
         confidence_hurdle: float = 0.0015,  # 預測收益率需高於 0.15% (扣除手續費) 才開倉
+        allow_unverified: bool = False,
     ):
         self.confidence_hurdle = confidence_hurdle
+        self.allow_unverified = allow_unverified
+        self.model_status = "READY"
         if trainer is not None:
             self.trainer = trainer
         elif model_path is not None:
+            manifest_path = re.sub(r"\.[^.]+$", "_manifest.json", model_path)
+            if not allow_unverified:
+                if not os.path.exists(manifest_path):
+                    self.trainer = None
+                    self.model_status = "UNVERIFIED_MODEL_QUARANTINED"
+                    return
+                try:
+                    with open(manifest_path, "r", encoding="utf-8") as f:
+                        meta = json.load(f)
+                except Exception:
+                    self.trainer = None
+                    self.model_status = "UNVERIFIED_MODEL_QUARANTINED"
+                    return
+                if meta.get("is_synthetic") or meta.get("deployment_stage") == "RESEARCH_ONLY":
+                    self.trainer = None
+                    self.model_status = "UNVERIFIED_MODEL_QUARANTINED"
+                    return
             self.trainer = CryptoMLTrainer.load_weights(model_path)
         else:
             self.trainer = None
+            self.model_status = "MODEL_UNAVAILABLE"
 
     def fit_on_data(
         self,
@@ -53,7 +78,7 @@ class MLAlphaStrategy(BaseStrategy):
             # 未載入合格模型與 manifest 時，回傳 0 (Hold) 並標記 MODEL_UNAVAILABLE，禁止現場 fit_on_data 偷看數據
             df["signal"] = 0.0
             df["ml_prediction"] = 0.0
-            df["model_status"] = "MODEL_UNAVAILABLE"
+            df["model_status"] = getattr(self, "model_status", "MODEL_UNAVAILABLE")
             return df
 
         predictions = self.trainer.predict(df)

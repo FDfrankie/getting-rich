@@ -79,7 +79,7 @@ class QuantAppContext:
         self.alpha_vault = AlphaVault()
         self.alpha_vault.seed_initial_verified_alphas()
         self.brain_client = BrainClient()
-        self.brain_job_queue = BrainJobQueue(self.brain_client)
+        self.brain_job_queue = BrainJobQueue(self.brain_client, on_complete_callback=self._on_brain_job_completed)
         self.alpha_miner = ContinuousAlphaMiner(symbol=DEFAULT_SYMBOL)
 
         self.testnet_client = BinanceTestnetClient(settlement="USDC")
@@ -405,17 +405,54 @@ class QuantAppContext:
             self.active_bot = CryptoTradingBot(symbol=self.active_bot.symbol, strategy=strat, exchange_adapter=adapter)
         self.add_log(f"已切換操盤策略至: 【{strat_name.upper()} 策略】(自動掛載優化權重)")
 
+    def _on_brain_job_completed(self, job):
+        """當遠端 WorldQuant BRAIN 模擬完成且達標時，自動入庫並在配額內 (每日最多 2 顆) 自動送出"""
+        try:
+            m = job.metrics or {}
+            sharpe = m.get("sharpe")
+            fitness = m.get("fitness")
+            turnover = m.get("turnover") if m.get("turnover") is not None else 0.25
+            margin = m.get("margin") or 0.0
+            alpha_id = job.alpha_id
+            if sharpe is None or fitness is None or not alpha_id:
+                return
+            if self.alpha_vault.passes_qualification(float(sharpe), float(fitness), float(turnover)):
+                self.alpha_miner.total_accepted += 1
+                name = f"BRAIN_{alpha_id}"
+                self.alpha_vault.save_alpha(
+                    name=name,
+                    expression=job.expression,
+                    sharpe=float(sharpe),
+                    fitness=float(fitness),
+                    turnover=float(turnover),
+                    margin=float(margin),
+                    category="BRAIN_VERIFIED",
+                    notes=f"alpha_id={alpha_id}",
+                    status_override="BRAIN_COMPLETE",
+                )
+                self.add_log(f"✅ [BRAIN 遠端模擬達標] {name} (Sharpe={sharpe}, Fitness={fitness}) 已存入倉庫")
+                if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
+                    sub_res = self.brain_client.submit_alpha(str(alpha_id))
+                    if sub_res.get("success"):
+                        self.add_log(f"🏆 [BRAIN 自動正式提交成功] Alpha {alpha_id} 已送出至官方平台！")
+                    else:
+                        self.add_log(f"ℹ️ [BRAIN 自動提交略過] Alpha {alpha_id}: {sub_res.get('status')} ({sub_res.get('error')})")
+        except Exception:
+            pass
+
     def _background_alpha_miner_loop(self):
         """24/7 背景持續自動挖掘 Alpha 因子 Worker"""
         print("🧬 [Alpha Miner Worker] 24/7 自動因子挖掘引擎已啟動！")
         while True:
             try:
                 self.heartbeats["alpha_miner"] = time.time()
-                res = self.alpha_miner.mine_cycle()
-                if res:
-                    self.add_log(
-                        f"🧬 [24/7 Alpha 發現] 自動入庫高分因子: {res['name']} (Sharpe: {res['sharpe']}, Fitness: {res['fitness']})"
-                    )
+                if os.getenv("BRAIN_SIMULATION_ENABLED", "").lower() == "true" and not self.brain_client.offline_mode:
+                    if self.brain_job_queue.queue_depth() < 3:
+                        cand = self.alpha_miner.generate_candidate_expression()
+                        job, is_new = self.brain_job_queue.create_job(cand["expression"])
+                        if is_new:
+                            self.alpha_miner.total_mined += 1
+                            self.add_log(f"🚀 [BRAIN 線上送測] 已排入遠端模擬: {cand['name']} (Job {job.job_id})")
             except Exception:
                 pass
             time.sleep(30)  # 每 30 秒挖掘一輪，嚴格控制 CPU/RAM 避免 OOM
@@ -448,7 +485,7 @@ class QuantAppContext:
                         ticker = self.bitunix_client.fetch_ticker(self.active_bot.symbol)
                     else:
                         ticker = self.testnet_client.fetch_ticker(self.active_bot.symbol)
-                    curr_price = ticker.get("last", 68500.0)
+                    curr_price = ticker.get("last")
                     equity = self.active_bot.balance_usdt + (self.active_bot.position * curr_price)
 
                     # 每 60 秒執行一次持倉同調對齊 (reconcile_with_exchange)
@@ -580,6 +617,26 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             )
 
         # API: 系統總覽與健康度 (含 Watchdog 四大核心心跳)
+        if path == "/api/trading/instrument":
+            from datetime import datetime, timezone
+            from crypto_trading.instruments import BTC_USDT_BINANCE_TESTNET
+            spec = BTC_USDT_BINANCE_TESTNET
+            sym = getattr(APP_STATE.active_bot, "symbol", spec.display_symbol)
+            return self._send_json_response({
+                "canonical_identity": spec.canonical_id,
+                "ui_symbol": sym,
+                "strategy_symbol": sym,
+                "market_data_symbol": spec.venue_symbol,
+                "execution_symbol": spec.venue_symbol,
+                "position_symbol": spec.venue_symbol,
+                "quote": spec.quote_asset,
+                "settlement": spec.settlement_asset,
+                "contract_size": str(spec.contract_size),
+                "price_tick": str(spec.price_tick),
+                "quantity_step": str(spec.quantity_step),
+                "metadata_timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+
         if path == "/api/trading/snapshot":
             status_code, headers, body = get_trading_snapshot_response(APP_STATE.build_trading_snapshot)
             self.send_response(status_code)
@@ -598,7 +655,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             payload["time_taipei"] = _now_taipei().strftime("%Y-%m-%d %H:%M:%S")
             return self._send_json_response(payload)
 
-        if path == "/api/status" or path == "/health":
+        if path == "/api/status" or path == "/health" or path == "/api/health":
             now_ts = time.time()
             return self._send_json_response(
                 {
@@ -681,7 +738,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     ticker = APP_STATE.bitunix_client.fetch_ticker(APP_STATE.active_bot.symbol)
                     bal = APP_STATE.bitunix_client.fetch_balance()
                     positions = APP_STATE.bitunix_client.fetch_positions()
-                    curr_price = ticker.get("last", 68500.0)
+                    curr_price = ticker.get("last")
                     unrealized_pnl = sum([float(p.get("unrealized_pnl", 0.0)) for p in positions]) if positions else 0.0
                     return self._send_json_response(
                         {
@@ -690,8 +747,8 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                             "exchange": "bitunix",
                             "symbol": APP_STATE.active_bot.symbol,
                             "current_price": curr_price,
-                            "total_equity": bal.get("total_equity", 20000.0),
-                            "free_balance": bal.get("free_balance", 17000.0),
+                            "total_equity": bal.get("total_equity"),
+                            "free_balance": bal.get("free_balance"),
                             "unrealized_pnl": unrealized_pnl,
                             "positions": positions,
                             "bot_running": APP_STATE.bot_running,
@@ -701,7 +758,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     )
                 elif mode == "BINANCE_TESTNET":
                     ticker = APP_STATE.testnet_client.fetch_ticker(APP_STATE.active_bot.symbol)
-                    curr_price = ticker.get("last", 68500.0)
+                    curr_price = ticker.get("last")
                     bal = APP_STATE.testnet_client.fetch_balance()
                     positions = APP_STATE.testnet_client.fetch_positions()
                     unrealized_pnl = sum([float(p.get("unrealized_pnl", 0.0)) for p in positions]) if positions else 0.0
@@ -712,8 +769,8 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                             "exchange": "binance_futures",
                             "symbol": APP_STATE.active_bot.symbol,
                             "current_price": curr_price,
-                            "total_equity": bal.get("total_equity", 15000.0),
-                            "free_balance": bal.get("free_balance", 12000.0),
+                            "total_equity": bal.get("total_equity"),
+                            "free_balance": bal.get("free_balance"),
                             "unrealized_pnl": unrealized_pnl,
                             "settlement_currency": bal.get("settlement_currency", "USDC"),
                             "zero_fee_usdc": bal.get("zero_fee_usdc", True),
@@ -725,10 +782,12 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     )
                 else:  # PAPER_SANDBOX
                     ticker = APP_STATE.testnet_client.fetch_ticker(APP_STATE.active_bot.symbol)
-                    curr_price = ticker.get("last", 68500.0)
+                    curr_price = ticker.get("last")
                     bot = APP_STATE.active_bot
-                    equity = bot.get_equity(curr_price)
-                    if bot.position_side == "LONG" and bot.entry_price > 0:
+                    equity = bot.get_equity(curr_price if curr_price is not None else (bot.entry_price or 0.0))
+                    if curr_price is None:
+                        unrealized_pnl = None
+                    elif bot.position_side == "LONG" and bot.entry_price > 0:
                         unrealized_pnl = (curr_price - bot.entry_price) * bot.position
                     elif bot.position_side == "SHORT" and bot.entry_price > 0:
                         unrealized_pnl = (bot.entry_price - curr_price) * bot.position
@@ -743,7 +802,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                             "current_price": curr_price,
                             "total_equity": round(equity, 2),
                             "balance_usdt": round(bot.balance_usdt, 2),
-                            "unrealized_pnl": round(unrealized_pnl, 2),
+                            "unrealized_pnl": round(unrealized_pnl, 2) if unrealized_pnl is not None else None,
                             "position_side": bot.position_side,
                             "position_amount": round(bot.position, 4),
                             "entry_price": bot.entry_price,
@@ -1016,6 +1075,10 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             category = post_data.get("category", "Momentum")
             notes = post_data.get("notes", "")
 
+            brain_alpha_id = str(post_data.get("brain_alpha_id") or post_data.get("alpha_id") or "").strip()
+            brain_submit_res = None
+            if brain_alpha_id:
+                brain_submit_res = APP_STATE.brain_client.submit_alpha(brain_alpha_id)
             # 透過 AlphaVault 保存
             res = APP_STATE.alpha_vault.save_alpha(
                 name=name,
@@ -1026,6 +1089,12 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 category=category,
                 notes=notes,
             )
+            if brain_submit_res is not None:
+                res["brain_submit"] = brain_submit_res
+                if brain_submit_res.get("success"):
+                    res["message"] = f"Alpha 已入庫並正式提交至 WorldQuant BRAIN (ID: {brain_alpha_id})！"
+                else:
+                    res["message"] = f"Alpha 已入庫，但官方提交未完成 [{brain_submit_res.get('status')}]: {brain_submit_res.get('error')}"
             return self._send_json_response(res)
 
         # 🚀 POST /api/brain/simulations：建立非同步送測 job (符合 docs/BRAIN_WEB_API_ASYNC_FIX_SPEC.md)
@@ -1101,7 +1170,9 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
 QuantRequestHandler = AppAPIHandler
 
 
-def run_server(port: int = 8999, host: str = "0.0.0.0"):
+def run_server(port: int | None = None, host: str = "0.0.0.0"):
+    if port is None:
+        port = int(os.getenv("PORT", "8000"))
     os.makedirs(STATIC_DIR, exist_ok=True)
     server_address = (host, port)
     ThreadingHTTPServer.allow_reuse_address = True

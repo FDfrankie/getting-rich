@@ -154,7 +154,9 @@ class BinanceTestnetClient:
         except Exception:
             pass
 
-        # 備用模擬報價
+        if not self.mock_mode and self.is_connected:
+            return {"symbol": target_symbol, "last": None, "error": "TICKER_UNAVAILABLE", "timestamp": None, "settlement": self.settlement}
+        # 備用模擬報價 (僅限 mock_mode)
         return {
             "symbol": target_symbol,
             "last": 68500.0 if "BTC" in symbol else 3500.0,
@@ -217,13 +219,13 @@ class BinanceTestnetClient:
             }
         except Exception as e:
             return {
-                "mode": "OFFICIAL_BINANCE_TESTNET_FALLBACK",
-                "error": str(e),
-                "total_equity": self._mock_balance.get(self.settlement, 15000.0),
-                "free_balance": self._mock_balance.get(self.settlement, 15000.0) * 0.8,
+                "mode": "OFFICIAL_BINANCE_TESTNET_ERROR",
+                "error": type(e).__name__,
+                "total_equity": None,
+                "free_balance": None,
                 "settlement_currency": self.settlement,
-                "zero_fee_usdc": True,
-                "balances": self._mock_balance,
+                "zero_fee_usdc": self.settlement == "USDC",
+                "balances": {},
             }
 
     def fetch_positions(self) -> list[dict[str, Any]]:

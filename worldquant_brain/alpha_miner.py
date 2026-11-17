@@ -99,7 +99,10 @@ class ContinuousAlphaMiner:
         return None
 
     def mine_cycle(self) -> dict[str, Any] | None:
-        """執行一次自動挖掘與篩選步進"""
+        """執行一次自動挖掘與篩選步進 (本機假模擬已停用，統一由線上 BrainJobQueue 執行)"""
+        # Local proxy simulation disabled per user policy
+        if os.getenv("BRAIN_ALLOW_LOCAL_PROXY_SIM", "false").lower() != "true":
+            return None
         self.total_mined += 1
         cand = self.generate_candidate_expression()
         result = self.backtest_alpha_oos(cand)

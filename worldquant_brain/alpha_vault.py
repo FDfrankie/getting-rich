@@ -101,6 +101,7 @@ class AlphaVault:
         tags: str = "",
         notes: str = "",
         force: bool = False,
+        status_override: str | None = None,
     ) -> dict[str, Any]:
         """儲存 Alpha。若未達標且 force=False，則拒絕存入"""
         is_qualified = self.passes_qualification(sharpe, fitness, turnover)
@@ -140,7 +141,7 @@ class AlphaVault:
                     round(returns, 4),
                     round(drawdown, 4),
                     round(margin, 4),
-                    "VERIFIED" if is_qualified else "SUB_THRESHOLD",
+                    (status_override or ("VERIFIED" if is_qualified else "SUB_THRESHOLD")),
                     tags,
                     notes,
                     now_str,
@@ -277,6 +278,7 @@ class AlphaVault:
                 drawdown=p["drawdown"],
                 tags=p["tags"],
                 notes=p["notes"],
+                status_override="TEMPLATE_SEED",
             )
 
     @staticmethod

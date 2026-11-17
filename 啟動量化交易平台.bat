@@ -5,14 +5,9 @@ echo ========================================================
 echo   Antigravity 自動化量化操盤平台 (台股 + 加密合約 + WorldQuant)
 echo ========================================================
 echo.
-echo [1] 正在開啟雲端 OnRender Web 介面...
-start https://getting-rich.onrender.com/
-echo.
-echo [2] 正在檢查本機 Python 操盤核心伺服器...
-timeout /t 2 >nul
-echo.
-echo 若需於本機運行本地伺服器，請按任意鍵啟動本地 Web 服務 (連接埠 8999)：
-pause >nul
-start http://localhost:8999
-python web_ui/app.py
+set "VENV_PY=G:\我的雲端硬碟\.quant_envs\antigravity\Scripts\python.exe"
+if not exist "%VENV_PY%" set "VENV_PY=python"
+echo [1] 正在啟動本機 Web 操盤與 WorldQuant 遠端送測服務 (Port 8000)...
+start http://127.0.0.1:8000
+"%VENV_PY%" -m web_ui.server
 pause
