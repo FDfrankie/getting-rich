@@ -20,7 +20,7 @@ class ContinuousAlphaMiner:
     """
     24/7 不間斷自動 Alpha 因子挖掘與進化引擎 (Continuous Alpha Miner)
     職責：
-    1. 自適應變異並組合時序/截面運算子 (ts_rank, ts_decay_linear, ts_correlation, signed_power 等)
+    1. 自適應變異並組合時序/截面運算子 (ts_rank, ts_decay_linear, ts_corr, signed_power 等)
     2. 自動回測多時間週期 (15s, 1m, 5m, 1h) 收益表現
     3. 執行嚴格 Point-in-Time 防未來函數檢查與樣本外 (OOS) 衰退檢驗
     4. 自動篩選 Sharpe >= 1.25, Fitness >= 1.0, Turnover 在 1%~70% 的優質 Alpha 存入 Vault 並同步 Google Drive
@@ -81,9 +81,9 @@ class ContinuousAlphaMiner:
         f1 = random.choice(self.fundamental_fields)
         f2 = random.choice(["assets", "cap", "equity", "sales"])
 
-        pattern = random.choice([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        pattern = random.choice([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
         if pattern == 1:
-            expr = f"-1 * {op_name}(ts_correlation({field_a}, {field_b}, {window}), {window})"
+            expr = f"-1 * {op_name}(ts_corr({field_a}, {field_b}, {window}), {window})"
             name = f"Auto_{field_a}_{field_b}_Reversal_{window}"
         elif pattern == 2:
             expr = f"rank({op_name}({field_a}, {window})) - rank(ts_decay_linear({field_b}, {window}))"
@@ -115,10 +115,31 @@ class ContinuousAlphaMiner:
             # Alpha#12-style volume-price divergence
             expr = f"group_neutralize(signed_power(ts_delta(volume, 1), 1) * (-1 * ts_delta(close, {window})), {grp})"
             name = f"Alpha101_VolPriceDivergence_{grp}_{window}"
-        else:
+        elif pattern == 10:
             # Alpha#6 / Alpha#54-style VWAP-close mean reversion damped by ts_decay_linear
-            expr = f"ts_decay_linear(-1 * ts_correlation(open, volume, {window}) * rank((close - vwap) / (vwap + 1e-4)), 5)"
+            expr = f"ts_decay_linear(-1 * ts_corr(open, volume, {window}) * rank((close - vwap) / (vwap + 0.0001)), 5)"
             name = f"Alpha101_VwapReversion_{window}"
+        elif pattern == 11:
+            # Official BRAIN: Fundamental Operating Earnings & Asset Turnover with winsorize
+            expr = f"group_neutralize(winsorize(rank(ts_zscore(operating_income / (assets + 0.0001), 60)), std=4), {grp})"
+            name = f"BRAIN_OpIncome_AssetTurn_{grp}"
+        elif pattern == 12:
+            # Official BRAIN: Residual momentum via ts_regression + hump turnover control
+            expr = f"hump(rank(ts_regression(returns, ts_delta(volume, 1), 20, lag=0, rettype=0)), hump=0.01)"
+            name = f"BRAIN_RegResid_Hump_{window}"
+        elif pattern == 13:
+            # Official BRAIN: Short-term sentiment volume stability (scl12_buzz)
+            expr = f"group_neutralize(-1 * ts_std_dev(ts_backfill(scl12_buzz, 5), 10), {grp})"
+            name = f"BRAIN_SentimentBuzz_Stab_{grp}"
+        elif pattern == 14:
+            # Official BRAIN: Option6 IV surface slope gated by forecast R^2 confidence
+            expr = f"trade_when(ts_mean(opt6_fcstr2imp, 60) > 0.5, -1 * ts_zscore(opt6_slopeavg1m, 60), -1)"
+            name = f"BRAIN_Opt6_Slope_Regime_{window}"
+        else:
+            # Official BRAIN: Sub-Universe safe liquidity-weighted decay on ts_av_diff
+            sig = f"-1 * ts_av_diff(close, {window}) / (ts_std_dev(close, 20) + 0.0001)"
+            expr = f"ts_decay_linear({sig}, 5) * rank(volume * close) + ts_decay_linear({sig}, 10) * (1 - rank(volume * close))"
+            name = f"BRAIN_LiqDecay_AvDiff_{window}"
 
         return {"name": name, "expression": expr}
 
@@ -233,6 +254,120 @@ class ContinuousAlphaMiner:
                 return cand
         self.mark_expression_tried(cand["expression"])
         return cand
+
+    def generate_near_miss_refinements(
+        self,
+        expression: str,
+        settings: dict[str, Any] | None = None,
+        *,
+        sharpe: float,
+        fitness: float,
+        turnover: float,
+        margin: float | None = None,
+        failed_checks: list[str] | None = None,
+        max_variants: int = 3,
+    ) -> list[dict[str, Any]]:
+        """Generate targeted FASTEXPR/setting refinements for near-miss alphas."""
+        expr = (expression or "").strip()
+        if not expr:
+            return []
+
+        norm_margin = (
+            float(margin) / 10000.0
+            if (margin is not None and float(margin) > 0.5)
+            else (float(margin) if margin is not None else None)
+        )
+        failed = {str(c).upper() for c in (failed_checks or [])}
+        near_miss = (
+            abs(float(sharpe)) >= 0.85
+            or (float(fitness) >= 0.65 and float(sharpe) >= 0.70)
+            or (
+                abs(float(sharpe)) >= 0.80
+                and bool(failed & {"LOW_SHARPE", "LOW_FITNESS", "HIGH_TURNOVER", "LOW_SUB_UNIVERSE_SHARPE", "LOW_MARGIN"})
+            )
+        )
+        if not near_miss:
+            return []
+
+        base_settings = dict(settings) if settings else self.generate_candidate_settings()
+        base_decay = int(base_settings.get("decay", 0) or 0)
+        base_neut = str(base_settings.get("neutralization", "SUBINDUSTRY")).upper()
+        candidates: list[dict[str, Any]] = []
+
+        # 1. Negative Sharpe sign-flip
+        if float(sharpe) <= -1.10 and not expr.startswith("-1 * ("):
+            s1 = dict(base_settings)
+            candidates.append({
+                "name": "NearMiss_SignFlip",
+                "expression": f"-1 * ({expr})",
+                "settings": s1,
+                "reason": f"sharpe={sharpe:.2f}",
+            })
+
+        # 2. High turnover or thin margin -> decay + ts_decay_linear + tighter truncation
+        if float(turnover) > 0.45 or (norm_margin is not None and norm_margin < 0.0010) or ("HIGH_TURNOVER" in failed):
+            s2 = dict(base_settings)
+            s2["decay"] = min(12, max(6, base_decay + 4))
+            s2["truncation"] = min(float(base_settings.get("truncation", 0.08) or 0.08), 0.05)
+            refined_expr = expr if expr.startswith("ts_decay_linear(") else f"ts_decay_linear({expr}, 8)"
+            candidates.append({
+                "name": "NearMiss_DecayTurnover",
+                "expression": refined_expr,
+                "settings": s2,
+                "reason": f"turnover={turnover:.2f},margin={norm_margin}",
+            })
+
+        # 3. Rotate neutralization & stabilize cross-sectional rank
+        alt_neut = "INDUSTRY" if base_neut == "SUBINDUSTRY" else ("SECTOR" if base_neut == "INDUSTRY" else "SUBINDUSTRY")
+        s3 = dict(base_settings)
+        s3["neutralization"] = alt_neut
+        s3["decay"] = max(4, base_decay)
+        ranked_expr = expr if expr.startswith("rank(") else f"rank({expr})"
+        candidates.append({
+            "name": f"NearMiss_Neut_{alt_neut}",
+            "expression": ranked_expr,
+            "settings": s3,
+            "reason": f"neutralization->{alt_neut}",
+        })
+
+        # 4. Sub-Universe failure -> liquidity-weighted decay (official BRAIN formula)
+        if "LOW_SUB_UNIVERSE_SHARPE" in failed or "SUB_UNIVERSE" in " ".join(failed):
+            s4 = dict(base_settings)
+            s4["universe"] = "TOP3000"
+            candidates.append({
+                "name": "NearMiss_SubUniverseLiqDecay",
+                "expression": f"ts_decay_linear({expr}, 5) * rank(volume * close) + ts_decay_linear({expr}, 10) * (1 - rank(volume * close))",
+                "settings": s4,
+                "reason": "sub_universe_liquidity_decay",
+            })
+
+        # 5. Weight concentration / hump turnover control + group neutralization fallback
+        s5 = dict(base_settings)
+        s5["decay"] = max(6, base_decay)
+        s5["truncation"] = 0.05
+        if not expr.startswith("hump("):
+            candidates.append({
+                "name": "NearMiss_HumpWinsorize",
+                "expression": f"hump(winsorize(rank({expr}), std=4), hump=0.01)",
+                "settings": s5,
+                "reason": "hump_winsorize_weight_turnover",
+            })
+        elif not expr.startswith("group_neutralize("):
+            candidates.append({
+                "name": "NearMiss_GroupNeut",
+                "expression": f"group_neutralize(rank({expr}), subindustry)",
+                "settings": s5,
+                "reason": "group_neutralize_subindustry",
+            })
+
+        emitted: list[dict[str, Any]] = []
+        for c in candidates:
+            if len(emitted) >= max_variants:
+                break
+            if not self.has_tried_expression(c["expression"]):
+                self.mark_expression_tried(c["expression"])
+                emitted.append(c)
+        return emitted
 
 if __name__ == "__main__":
     miner = ContinuousAlphaMiner()

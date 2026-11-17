@@ -82,6 +82,7 @@ class QuantAppContext:
         self.brain_client = BrainClient()
         self.brain_job_queue = BrainJobQueue(self.brain_client, on_complete_callback=self._on_brain_job_completed, on_fail_callback=self._on_brain_job_failed, db_path=self.alpha_vault.db_path)
         self.alpha_miner = ContinuousAlphaMiner(symbol=DEFAULT_SYMBOL)
+        self._refined_expr_keys: set[str] = set()
 
         self.testnet_client = BinanceTestnetClient(settlement="USDC")
         self.reconciliation_service = ReconciliationService()
@@ -413,6 +414,45 @@ class QuantAppContext:
         except Exception:
             pass
 
+    def _enqueue_near_miss_refinements(
+        self,
+        job,
+        *,
+        sharpe: float,
+        fitness: float,
+        turnover: float,
+        margin: float | None,
+        failed_checks: list[str] | None = None,
+    ) -> int:
+        try:
+            expr = str(getattr(job, "expression", "") or "").strip()
+            if not expr or expr in self._refined_expr_keys:
+                return 0
+            max_depth = int(os.getenv("BRAIN_QUEUE_MAX_DEPTH", "16"))
+            if self.brain_job_queue.queue_depth() >= max_depth:
+                return 0
+            variants = self.alpha_miner.generate_near_miss_refinements(
+                expr,
+                getattr(job, "settings", None),
+                sharpe=sharpe,
+                fitness=fitness,
+                turnover=turnover,
+                margin=margin,
+                failed_checks=failed_checks,
+                max_variants=3,
+            )
+            self._refined_expr_keys.add(expr)
+            enqueued = 0
+            for v in variants:
+                self._refined_expr_keys.add(v["expression"])
+                _, is_new = self.brain_job_queue.create_job(v["expression"], settings=v["settings"])
+                if is_new:
+                    enqueued += 1
+                    self.add_log(f"🔧 [Near-Miss 微調送測] {v['name']} ({v['reason']})")
+            return enqueued
+        except Exception:
+            return 0
+
     def _on_brain_job_completed(self, job):
         """
         WorldQuant BRAIN 模擬完成後：
@@ -434,7 +474,8 @@ class QuantAppContext:
                 return
 
             if not checks_passed:
-                self.add_log(f"⚠️ [BRAIN 未過 IS-Check] Alpha {alpha_id} 失敗項目 {failed_checks}，不予送出")
+                self.add_log(f"⚠️ [BRAIN 未過 IS-Check] Alpha {alpha_id} 失敗項目 {failed_checks}，嘗試 Near-Miss 微調")
+                self._enqueue_near_miss_refinements(job, sharpe=float(sharpe), fitness=float(fitness), turnover=float(turnover), margin=margin, failed_checks=failed_checks)
                 if vid is not None:
                     self.alpha_vault.delete_alpha(int(vid))
                 return
@@ -442,13 +483,15 @@ class QuantAppContext:
             if margin is not None:
                 norm_margin = float(margin) / 10000.0 if float(margin) > 0.5 else float(margin)
                 if norm_margin < 0.0010:
-                    self.add_log(f"⚠️ [BRAIN 未達 Margin 門檻] Alpha {alpha_id} Margin={norm_margin:.5f} < 10 bps，不予送出")
+                    self.add_log(f"⚠️ [BRAIN 未達 Margin 門檻] Alpha {alpha_id} Margin={norm_margin:.5f} < 10 bps，嘗試 Near-Miss 微調")
+                    self._enqueue_near_miss_refinements(job, sharpe=float(sharpe), fitness=float(fitness), turnover=float(turnover), margin=margin, failed_checks=failed_checks)
                     if vid is not None:
                         self.alpha_vault.delete_alpha(int(vid))
                     return
 
             if not self.alpha_vault.passes_qualification(float(sharpe), float(fitness), float(turnover)):
-                self.add_log(f"⚠️ [BRAIN 指標未達標] Alpha {alpha_id} (Sharpe={sharpe}, Fitness={fitness})")
+                self.add_log(f"⚠️ [BRAIN 指標未達標] Alpha {alpha_id} (Sharpe={sharpe}, Fitness={fitness})，嘗試 Near-Miss 微調")
+                self._enqueue_near_miss_refinements(job, sharpe=float(sharpe), fitness=float(fitness), turnover=float(turnover), margin=margin, failed_checks=failed_checks)
                 if vid is not None:
                     self.alpha_vault.delete_alpha(int(vid))
                 return
@@ -510,6 +553,8 @@ class QuantAppContext:
                         if is_new:
                             self.alpha_miner.total_mined += 1
                             self.add_log(f"🚀 [BRAIN 線上送測] 已排入遠端模擬: {cand['name']} (Job {job.job_id})")
+                        else:
+                            break
                     if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
                         from datetime import datetime, timedelta, timezone
                         taipei_now = datetime.now(timezone(timedelta(hours=8)))
