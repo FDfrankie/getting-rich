@@ -502,7 +502,7 @@ class BrainClient:
 
         results: list[dict[str, Any]] = []
         for row in rows:
-            res = self.submit_alpha(str(row["alpha_id"]), max_daily_submissions=limit, enforce_checks=True)
+            res = self.submit_alpha(str(row["alpha_id"]), max_daily_submissions=limit, enforce_checks=True, day_str=day)
             results.append(res)
             if res.get("status") == "DAILY_QUOTA_REACHED":
                 break
@@ -573,13 +573,14 @@ class BrainClient:
         max_wait_seconds: float = 60.0,
         max_daily_submissions: int | None = None,
         enforce_checks: bool = True,
+        day_str: str | None = None,
     ) -> dict[str, Any]:
         """Submit a simulated alpha to WorldQuant BRAIN (/alphas/{alpha_id}/submit) with strict IS-check gate and daily quota cap (default 2/day)."""
         if not alpha_id or not str(alpha_id).strip():
             return {"success": False, "status": "INVALID_ALPHA_ID", "error": "alpha_id is required"}
 
         limit = int(max_daily_submissions if max_daily_submissions is not None else os.getenv("BRAIN_MAX_DAILY_SUBMISSIONS", "2"))
-        today_cnt = self.get_daily_submission_count()
+        today_cnt = self.get_daily_submission_count(day_str)
         if today_cnt >= limit:
             return {
                 "success": False,
@@ -636,7 +637,7 @@ class BrainClient:
                     data = poll.json() if poll.content else {}
                     st = str(data.get("status") or data.get("state") or "SUBMITTED").upper()
                     if st in ("COMPLETE", "COMPLETED", "SUBMITTED", "PASS", "ACTIVE"):
-                        self._record_daily_submission(alpha_id)
+                        self._record_daily_submission(alpha_id, day_str=day_str)
                         return {"success": True, "status": "SUBMITTED", "alpha_id": alpha_id, "raw": data}
                     if st in ("FAIL", "FAILED", "ERROR"):
                         return {"success": False, "status": "SUBMIT_REJECTED", "alpha_id": alpha_id, "raw": data}
@@ -645,7 +646,7 @@ class BrainClient:
                 time.sleep(min(self.poll_interval, 5.0))
         if resp.status_code in (200, 201):
             data = resp.json() if resp.content else {}
-            self._record_daily_submission(alpha_id)
+            self._record_daily_submission(alpha_id, day_str=day_str)
             return {"success": True, "status": "SUBMITTED", "alpha_id": alpha_id, "raw": data}
         return {
             "success": False,

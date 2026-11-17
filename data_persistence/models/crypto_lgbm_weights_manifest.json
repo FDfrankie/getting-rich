@@ -2,8 +2,8 @@
   "target": "crypto_lgbm",
   "model_name": "crypto_lgbm_weights",
   "version": "1.0.0",
-  "sha256": "ae514ebb867f6e431d677bfd7d34d4d1e55b185e0c42d97e319adeaf7abcf2b8",
-  "weights_sha256": "ae514ebb867f6e431d677bfd7d34d4d1e55b185e0c42d97e319adeaf7abcf2b8",
+  "sha256": "c176f836723e8ab7557c94b3c29e0fa3cd69b6c68886791c0960125475ca0f09",
+  "weights_sha256": "c176f836723e8ab7557c94b3c29e0fa3cd69b6c68886791c0960125475ca0f09",
   "framework": "lightgbm",
   "feature_columns": [
     "log_ret_1",
@@ -28,20 +28,74 @@
     "hl_location",
     "obv_slope_10"
   ],
-  "trained_at": "2026-11-17T14:03:25.723798+00:00",
+  "trained_at": "2026-11-17T15:11:26.926772+00:00",
   "symbols": [
     "BTC/USDT",
     "ETH/USDT",
     "SOL/USDT"
   ],
-  "timeframe": "1h",
-  "data_source": "LIVE",
+  "timeframe": "1m",
+  "data_source": "HISTORICAL_CACHE",
   "is_synthetic": false,
-  "deployment_stage": "LOCAL_PAPER_READY",
+  "total_bars": 777599,
+  "bars_per_symbol": {
+    "BTC/USDT": 259200,
+    "ETH/USDT": 259200,
+    "SOL/USDT": 259199
+  },
+  "cache_files": [
+    "BTC_USDT_1m_180d.csv",
+    "ETH_USDT_1m_180d.csv",
+    "SOL_USDT_1m_180d.csv"
+  ],
+  "deployment_stage": "SHADOW",
   "oos_metrics": {
-    "mean_rank_ic": -0.11676853213956784,
-    "mean_sharpe": -6.8990011110538845,
-    "mean_accuracy": 0.46829268292682924,
+    "mean_rank_ic": 0.014670230443781171,
+    "mean_sharpe": 2.770896516246755,
+    "mean_accuracy": 0.5096179342854458,
     "mean_turnover": 0.05
+  },
+  "approved_for_inference": true,
+  "approved_for_order_entry": false,
+  "validation_gate_version": "model-governance-v2-oos-stress",
+  "rejection_reason": "global_test_rank_ic_ge_0_015,global_test_base_daily_sharpe_ge_1_0,severe_cost_positive_return,severe_cost_daily_sharpe_ge_0_5",
+  "oos_validation_gate": {
+    "validated_at": "2026-11-17T20:53:07.447802+00:00",
+    "gate_passed": false,
+    "global_test_rank_ic": -0.006176,
+    "cost_scenarios": {
+      "base": {
+        "avg_net_return_pct": -99.4271,
+        "avg_daily_sharpe": -85.4006,
+        "avg_max_drawdown_pct": 99.4281
+      },
+      "stress_1_5x": {
+        "avg_net_return_pct": -99.9598,
+        "avg_daily_sharpe": -99.7863,
+        "avg_max_drawdown_pct": 99.9598
+      },
+      "severe_2_0x_funding": {
+        "avg_net_return_pct": -99.9972,
+        "avg_daily_sharpe": -106.7152,
+        "avg_max_drawdown_pct": 99.9972
+      }
+    },
+    "leave_one_asset_out": {
+      "BTC/USDT": {
+        "rank_ic": 0.039005,
+        "base_daily_sharpe": -59.0248,
+        "base_net_return_pct": -100.0
+      },
+      "ETH/USDT": {
+        "rank_ic": 0.046782,
+        "base_daily_sharpe": -74.1313,
+        "base_net_return_pct": -100.0
+      },
+      "SOL/USDT": {
+        "rank_ic": 0.033397,
+        "base_daily_sharpe": -90.2342,
+        "base_net_return_pct": -100.0
+      }
+    }
   }
 }

@@ -2,8 +2,8 @@
   "target": "taiwan_ranker",
   "model_name": "taiwan_stock_ranker",
   "version": "1.0.0",
-  "sha256": "e5f9c798c892aee19554fafc5a95c213697e84fd0694577d1a06419c543cacb0",
-  "weights_sha256": "e5f9c798c892aee19554fafc5a95c213697e84fd0694577d1a06419c543cacb0",
+  "sha256": "030bbc158b0f63fff569ef5e1d4121a513e962d26aa5848f25867a9e4153fda8",
+  "weights_sha256": "030bbc158b0f63fff569ef5e1d4121a513e962d26aa5848f25867a9e4153fda8",
   "framework": "lightgbm",
   "universe_symbols": [
     "2330.TW",
@@ -37,10 +37,14 @@
   ],
   "data_source": "LIVE_YFINANCE",
   "is_synthetic": false,
-  "deployment_stage": "LOCAL_PAPER_READY",
+  "deployment_stage": "REPORTING_ONLY",
   "oos_metrics": {
-    "rank_ic": 0.011120490857161625,
-    "rmse": 0.09433294275328141
+    "rank_ic": 0.01927634269970601,
+    "rmse": 0.0843150998146109
   },
-  "trained_at": "2026-11-17T14:04:04.036476+00:00"
+  "trained_at": "2026-11-17T15:12:21.140537+00:00",
+  "approved_for_inference": true,
+  "approved_for_order_entry": false,
+  "validation_gate_version": "model-governance-v2",
+  "rejection_reason": "ORDER_ENTRY_NOT_APPROVED"
 }

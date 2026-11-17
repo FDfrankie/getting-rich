@@ -106,7 +106,7 @@ class CryptoMLTrainer:
           - Test set:  [fold_train_end : fold_test_end] (out-of-sample)
         No future data is ever leaked.
         """
-        processed = self.feature_engineer.compute_features(df_raw).dropna().copy()
+        processed = self.feature_engineer.compute_features(df_raw, timeframe=self.timeframe).dropna().copy()
         features = self.feature_engineer.feature_columns
         self.feature_names = features
 
@@ -140,7 +140,7 @@ class CryptoMLTrainer:
             model.fit(X_train, y_train)
 
             # 3 期重疊收益之年化夏普比率修正因子：年週期為 8760 / 3，避免 3 期重疊持有將波動虛胖
-            annual_multiplier = np.sqrt(8760.0 / 3.0)
+            annual_multiplier = np.sqrt(CryptoFeatureEngineer.get_annualization_factor(self.timeframe) / max(1, int(self.horizon)))
 
             if self.task == "regression":
                 preds = model.predict(X_test)
@@ -195,6 +195,113 @@ class CryptoMLTrainer:
             "top_10_features": feat_imp[:10],
         }
         return summary
+
+    def walk_forward_train_multi(
+        self,
+        dfs: dict[str, pd.DataFrame],
+        n_splits: int = 5,
+        purge_bars: int = 12,
+        embargo_bars: int = 2,
+    ) -> dict[str, Any]:
+        """
+        Executes strict chronological Walk-Forward Validation pooled across multiple symbols.
+        Features are computed per symbol first (zero cross-symbol contamination), then sorted
+        chronologically by timestamp before splitting with purge & embargo gaps.
+        """
+        frames: list[pd.DataFrame] = []
+        per_symbol_bars: dict[str, int] = {}
+        for sym, df_raw in dfs.items():
+            proc = self.feature_engineer.compute_features(df_raw, timeframe=self.timeframe).dropna().copy()
+            if len(proc) > 0:
+                per_symbol_bars[sym] = int(len(proc))
+                frames.append(proc)
+
+        if not frames:
+            raise ValueError("No valid rows after feature computation across provided symbols.")
+
+        pooled = pd.concat(frames, axis=0).sort_index()
+        features = list(self.feature_engineer.feature_columns)
+        self.feature_names = features
+
+        target_col = (
+            "target_fwd_ret_3"
+            if self.task == "regression"
+            else ("target_direction_3" if "target_direction_3" in pooled.columns else "target_binary")
+        )
+        X = np.asarray(pooled[features].values, dtype=float)
+        y = np.asarray(pooled[target_col].values, dtype=float if self.task == "regression" else int)
+        returns = np.asarray(pooled["target_fwd_ret_3"].values, dtype=float)
+
+        n_samples = len(X)
+        fold_size = int(n_samples / (n_splits + 1))
+        all_metrics = []
+        annual_multiplier = np.sqrt(
+            CryptoFeatureEngineer.get_annualization_factor(self.timeframe) / max(1, int(self.horizon))
+        )
+        gap = max(0, int(purge_bars) + int(embargo_bars)) * max(1, len(frames))
+
+        for fold in range(n_splits):
+            train_end = fold_size * (fold + 1)
+            test_start = train_end + gap
+            test_end = min(test_start + fold_size, n_samples)
+            if test_start >= test_end:
+                break
+
+            X_train, y_train = X[:train_end], y[:train_end]
+            X_test, y_test = X[test_start:test_end], y[test_start:test_end]
+            test_ret = returns[test_start:test_end]
+
+            model = self._init_model()
+            model.fit(X_train, y_train)
+
+            if self.task == "regression":
+                preds = model.predict(X_test)
+                rank_ic = pd.Series(preds).corr(pd.Series(y_test), method="spearman")
+                strat_ret = np.sign(preds) * test_ret
+                sharpe = (np.mean(strat_ret) / (np.std(strat_ret) + 1e-9)) * annual_multiplier
+                accuracy = np.mean((preds > 0) == (y_test > 0))
+            else:
+                prob = model.predict_proba(X_test)[:, 1]
+                preds = prob - 0.5
+                rank_ic = pd.Series(prob).corr(pd.Series(y_test), method="spearman")
+                strat_ret = np.sign(preds) * test_ret
+                sharpe = (np.mean(strat_ret) / (np.std(strat_ret) + 1e-9)) * annual_multiplier
+                accuracy = np.mean((prob > 0.5) == (y_test == 1))
+
+            all_metrics.append(
+                {
+                    "fold": fold + 1,
+                    "train_size": len(X_train),
+                    "test_size": len(X_test),
+                    "rank_ic": float(rank_ic if not np.isnan(rank_ic) else 0.0),
+                    "directional_accuracy": float(accuracy),
+                    "annualized_sharpe": float(sharpe),
+                }
+            )
+
+        self.model = self._init_model()
+        self.model.fit(X, y)
+        self.cv_results = all_metrics
+
+        if hasattr(self.model, "feature_importances_"):
+            importances = self.model.feature_importances_
+            feat_imp = sorted(zip(self.feature_names, importances), key=lambda x: x[1], reverse=True)
+        else:
+            feat_imp = []
+
+        return {
+            "model_type": self.model_type,
+            "task": self.task,
+            "features_count": len(self.feature_names),
+            "total_samples": n_samples,
+            "per_symbol_bars": per_symbol_bars,
+            "folds": all_metrics,
+            "mean_rank_ic": float(np.mean([m["rank_ic"] for m in all_metrics])) if all_metrics else 0.0,
+            "mean_accuracy": float(np.mean([m["directional_accuracy"] for m in all_metrics])) if all_metrics else 0.0,
+            "mean_sharpe": float(np.mean([m["annualized_sharpe"] for m in all_metrics])) if all_metrics else 0.0,
+            "mean_turnover": float(np.mean([m.get("turnover", 0.05) for m in all_metrics])) if all_metrics else 0.05,
+            "top_10_features": feat_imp[:10],
+        }
 
     def save_weights(self, path: str, metadata: dict[str, Any] | None = None):
         """Saves model instance, feature names, and configuration."""

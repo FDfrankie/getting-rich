@@ -27,6 +27,21 @@ class FeeSchedule:
     step_size: float = 0.001  # 數量最小變動單位
     min_notional: float = 5.0  # 最小名義下單價值 (USD/USDT)
 
+    @classmethod
+    def for_venue(cls, venue: str = "BINANCE_USDC_FUTURES") -> "FeeSchedule":
+        """
+        依據各交易所官方費率表回傳精準手續費模型：
+        - BINANCE_USDC_FUTURES: Maker 0.00% (0 bps), Taker 0.04% (4 bps)
+        - BITUNIX_FUTURES (VIP0): Maker 0.02% (2 bps), Taker 0.06% (6 bps)
+        - BINANCE_USDT_FUTURES: Maker 0.02% (2 bps), Taker 0.05% (5 bps)
+        """
+        v = venue.upper().strip()
+        if v == "BINANCE_USDC_FUTURES":
+            return cls(source="binance_usdc_futures", maker_fee_rate=0.0, taker_fee_rate=0.0004, spread_bps=1.0, slippage_bps=3.0)
+        if v == "BITUNIX_FUTURES":
+            return cls(source="bitunix_futures_vip0", maker_fee_rate=0.0002, taker_fee_rate=0.0006, spread_bps=1.5, slippage_bps=5.0)
+        return cls(source="binance_usdt_futures", maker_fee_rate=0.0002, taker_fee_rate=0.0005, spread_bps=1.0, slippage_bps=5.0)
+
 
 class BacktestEngine:
     """

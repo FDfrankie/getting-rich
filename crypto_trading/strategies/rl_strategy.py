@@ -10,6 +10,7 @@ import os
 import numpy as np
 import pandas as pd
 
+from crypto_trading.model_governance import validate_model_manifest
 from crypto_trading.feature_engineer import CryptoFeatureEngineer
 from crypto_trading.strategies.momentum_breakout import BaseStrategy
 
@@ -62,10 +63,22 @@ class RLAlphaStrategy(BaseStrategy):
                 except Exception:
                     meta = {}
             if not self.allow_unverified:
-                if not os.path.exists(manifest_path) or meta.get("is_synthetic") or meta.get("deployment_stage") == "RESEARCH_ONLY":
+                decision = validate_model_manifest(self.weights_path, require_inference_approval=True)
+                if not decision.allowed:
                     self.is_ready = False
-                    self.model_status = "UNVERIFIED_MODEL_QUARANTINED"
+                    self.model_status = (
+                        "UNVERIFIED_MODEL_QUARANTINED"
+                        if decision.status in {
+                            "MANIFEST_MISSING",
+                            "MANIFEST_INVALID",
+                            "MODEL_QUARANTINED",
+                            "SYNTHETIC_MODEL_QUARANTINED",
+                            "INFERENCE_NOT_APPROVED",
+                        }
+                        else decision.status
+                    )
                     return False
+                meta = decision.manifest
             self.agent = PPOAgent(state_dim=state_dim, action_dim=1)
             self.agent.load(self.weights_path)
             return True

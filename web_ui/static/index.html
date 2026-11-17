@@ -188,10 +188,6 @@
               <option value="BTC/USDT" selected>BTC/USDT (比特幣)</option>
               <option value="ETH/USDT">ETH/USDT (以太幣)</option>
               <option value="SOL/USDT">SOL/USDT (索拉納)</option>
-              <option value="2330.TW">2330.TW (台積電)</option>
-              <option value="2454.TW">2454.TW (聯發科)</option>
-              <option value="2317.TW">2317.TW (鴻海)</option>
-              <option value="00632R.TW">00632R.TW (台灣50反1)</option>
             </select>
 
             <!-- 週期切換 -->
@@ -393,6 +389,57 @@
           <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
             <p class="text-xs text-slate-400">20 日年化波動度</p>
             <p id="twVol" class="text-lg md:text-2xl font-black text-slate-200 mt-1">--%</p>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- 台股專屬即時 K 線看盤區 -->
+      <div class="glass-card rounded-2xl p-4 md:p-5 shadow-xl space-y-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div class="flex items-center space-x-2">
+            <i class="fa-solid fa-chart-candlestick text-rose-400"></i>
+            <h3 class="font-bold text-sm md:text-base text-white">台股即時走勢看盤</h3>
+            <span id="twChartTimeframeBadge" class="text-[10px] px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-bold">1d</span>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <select id="twChartSymbolSelect" onchange="selectTaiwanStock(this.value)" class="bg-slate-900 border border-slate-700 text-xs rounded-xl px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-rose-500 font-mono">
+              <option value="2330.TW" selected>2330.TW (台積電)</option>
+              <option value="2308.TW">2308.TW (台達電)</option>
+              <option value="2454.TW">2454.TW (聯發科)</option>
+              <option value="3008.TW">3008.TW (大立光)</option>
+              <option value="3443.TW">3443.TW (創意)</option>
+              <option value="6442.TW">6442.TW (光聖)</option>
+              <option value="2317.TW">2317.TW (鴻海)</option>
+              <option value="00981A.TW">00981A.TW</option>
+              <option value="00632R.TW">00632R.TW (台灣50反1)</option>
+              <option value="^TWII">^TWII (加權指數)</option>
+            </select>
+            <div class="flex items-center space-x-1">
+              <input type="text" id="twCustomSymbolInput" placeholder="輸入代碼如 2330.TW" class="w-32 bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none">
+              <button type="button" onclick="const v=document.getElementById('twCustomSymbolInput').value.trim(); if(v) selectTaiwanStock(v.toUpperCase());" class="px-2.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold">查詢</button>
+            </div>
+            <div class="flex items-center bg-slate-900 rounded-xl p-1 border border-slate-800 text-xs font-mono">
+              <button type="button" onclick="setTwChartInterval('5m')" id="btn-tw-int-5m" class="px-2 py-1 rounded-lg text-slate-400 hover:text-white">5m</button>
+              <button type="button" onclick="setTwChartInterval('15m')" id="btn-tw-int-15m" class="px-2 py-1 rounded-lg text-slate-400 hover:text-white">15m</button>
+              <button type="button" onclick="setTwChartInterval('1h')" id="btn-tw-int-1h" class="px-2 py-1 rounded-lg text-slate-400 hover:text-white">1h</button>
+              <button type="button" onclick="setTwChartInterval('1d')" id="btn-tw-int-1d" class="px-2 py-1 rounded-lg font-bold bg-rose-600 text-white">1d</button>
+            </div>
+          </div>
+        </div>
+        <div id="twChartLegend" class="flex flex-wrap items-center gap-3 text-xs font-mono bg-slate-950/70 p-2.5 rounded-xl border border-slate-800/80">
+          <span class="text-slate-400">標的: <strong id="twLegendSymbol" class="text-amber-300">2330.TW</strong></span>
+          <span class="text-slate-400">開: <strong id="twLegendOpen" class="text-white">--</strong></span>
+          <span class="text-slate-400">高: <strong id="twLegendHigh" class="text-emerald-400">--</strong></span>
+          <span class="text-slate-400">低: <strong id="twLegendLow" class="text-rose-400">--</strong></span>
+          <span class="text-slate-400">收: <strong id="twLegendClose" class="text-white">--</strong></span>
+          <span class="text-yellow-400">MA5: <strong id="twLegendMA5">--</strong></span>
+          <span class="text-blue-400">MA20: <strong id="twLegendMA20">--</strong></span>
+          <span class="text-purple-400">MA60: <strong id="twLegendMA60">--</strong></span>
+        </div>
+        <div id="twChartContainer" class="w-full h-[380px] rounded-xl overflow-hidden bg-slate-950 relative border border-slate-900">
+          <div id="twChartLoading" class="hidden absolute inset-0 flex items-center justify-center bg-slate-950/80 z-10 text-rose-400 text-xs font-bold">
+            <i class="fa-solid fa-spinner animate-spin mr-2"></i> 正在加載台股 K 線行情...
           </div>
         </div>
       </div>
@@ -1038,6 +1085,112 @@
       }, 5000);
     }
 
+
+    let twChart = null;
+    let twCandleSeries = null;
+    let twVolumeSeries = null;
+    let twMa5Line = null, twMa20Line = null, twMa60Line = null;
+    let currentTwSymbol = '2330.TW';
+    let currentTwInterval = '1d';
+
+    function initTwLightweightChart() {
+      const container = document.getElementById('twChartContainer');
+      if (!container || twChart || typeof LightweightCharts === 'undefined') return;
+      twChart = LightweightCharts.createChart(container, {
+        width: container.clientWidth || 800,
+        height: 380,
+        layout: { background: { type: 'solid', color: '#020617' }, textColor: '#94a3b8' },
+        grid: { vertLines: { color: '#0f172a' }, horzLines: { color: '#0f172a' } },
+        timeScale: { timeVisible: true, borderColor: '#1e293b' },
+        rightPriceScale: { borderColor: '#1e293b' },
+      });
+      twCandleSeries = twChart.addCandlestickSeries({
+        upColor: '#ef4444', downColor: '#10b981',
+        borderUpColor: '#ef4444', borderDownColor: '#10b981',
+        wickUpColor: '#ef4444', wickDownColor: '#10b981',
+      });
+      twVolumeSeries = twChart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: '' });
+      twVolumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+      twMa5Line = twChart.addLineSeries({ color: '#facc15', lineWidth: 1.5 });
+      twMa20Line = twChart.addLineSeries({ color: '#3b82f6', lineWidth: 1.5 });
+      twMa60Line = twChart.addLineSeries({ color: '#a855f7', lineWidth: 1.5 });
+      window.addEventListener('resize', () => {
+        if (twChart && container) twChart.applyOptions({ width: container.clientWidth });
+      });
+    }
+
+    async function loadTwChartData() {
+      const loading = document.getElementById('twChartLoading');
+      if (loading) loading.classList.remove('hidden');
+      try {
+        const res = await fetch(`/api/crypto/klines?symbol=${encodeURIComponent(currentTwSymbol)}&interval=${currentTwInterval}`);
+        const d = await res.json();
+        if (d.success && d.candles && d.candles.length > 0) {
+          if (!twChart) initTwLightweightChart();
+          if (twChart) {
+            const container = document.getElementById('twChartContainer');
+            if (container && container.clientWidth > 0) twChart.applyOptions({ width: container.clientWidth });
+            twCandleSeries.setData(d.candles.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close })));
+            twVolumeSeries.setData(d.candles.map(c => ({
+              time: c.time, value: c.volume,
+              color: c.close >= c.open ? 'rgba(239, 68, 68, 0.35)' : 'rgba(16, 185, 129, 0.35)'
+            })));
+            if (d.overlay) {
+              if (d.overlay.ma5) twMa5Line.setData(d.overlay.ma5);
+              if (d.overlay.ma20) twMa20Line.setData(d.overlay.ma20);
+              if (d.overlay.ma60) twMa60Line.setData(d.overlay.ma60);
+            }
+          }
+          const lastC = d.candles[d.candles.length - 1];
+          const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+          setTxt('twLegendSymbol', currentTwSymbol);
+          setTxt('twLegendOpen', Number(lastC.open).toFixed(2));
+          setTxt('twLegendHigh', Number(lastC.high).toFixed(2));
+          setTxt('twLegendLow', Number(lastC.low).toFixed(2));
+          setTxt('twLegendClose', Number(lastC.close).toFixed(2));
+          if (d.overlay?.ma5?.length) setTxt('twLegendMA5', Number(d.overlay.ma5[d.overlay.ma5.length - 1].value).toFixed(2));
+          if (d.overlay?.ma20?.length) setTxt('twLegendMA20', Number(d.overlay.ma20[d.overlay.ma20.length - 1].value).toFixed(2));
+          if (d.overlay?.ma60?.length) setTxt('twLegendMA60', Number(d.overlay.ma60[d.overlay.ma60.length - 1].value).toFixed(2));
+        }
+      } catch (e) {
+        console.error(e);
+      } finally {
+        if (loading) loading.classList.add('hidden');
+      }
+    }
+
+    function selectTaiwanStock(sym) {
+      currentTwSymbol = sym;
+      const sel = document.getElementById('twChartSymbolSelect');
+      if (sel) {
+        const exists = Array.from(sel.options).some(o => o.value === sym);
+        if (!exists) {
+          const opt = document.createElement('option');
+          opt.value = sym;
+          opt.text = sym;
+          sel.appendChild(opt);
+        }
+        sel.value = sym;
+      }
+      if (currentTab !== 'taiwan') switchTab('taiwan');
+      loadTwChartData();
+    }
+
+    function setTwChartInterval(intv) {
+      currentTwInterval = intv;
+      ['5m', '15m', '1h', '1d'].forEach(i => {
+        const btn = document.getElementById(`btn-tw-int-${i}`);
+        if (btn) {
+          btn.className = (i === intv)
+            ? "px-2 py-1 rounded-lg font-bold bg-rose-600 text-white"
+            : "px-2 py-1 rounded-lg text-slate-400 hover:text-white";
+        }
+      });
+      const b = document.getElementById('twChartTimeframeBadge');
+      if (b) b.innerText = intv;
+      loadTwChartData();
+    }
+
     function stopChartPolling() {
       if (chartPollingTimer) {
         clearInterval(chartPollingTimer);
@@ -1343,7 +1496,7 @@
 
           if (d.picks && d.picks.length > 0) {
             html += d.picks.map(p => `
-              <div onclick="switchTab('crypto'); switchChartSymbol('${p.symbol}')" class="cursor-pointer hover:border-indigo-500/50 transition bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+              <div onclick="selectTaiwanStock('${p.symbol}')" class="cursor-pointer hover:border-indigo-500/50 transition bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
                 <div>
                   <div class="flex items-center space-x-1.5">
                     <span class="font-bold text-sm text-white">${p.symbol}</span>
@@ -1366,7 +1519,7 @@
             `;
             if (d.near_picks && d.near_picks.length > 0) {
               html += d.near_picks.map(p => `
-                <div onclick="switchTab('crypto'); switchChartSymbol('${p.symbol}')" class="cursor-pointer hover:border-amber-500/50 transition bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+                <div onclick="selectTaiwanStock('${p.symbol}')" class="cursor-pointer hover:border-amber-500/50 transition bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
                   <div>
                     <div class="flex items-center space-x-1.5">
                       <span class="font-bold text-sm text-slate-200">${p.symbol}</span>
@@ -1393,7 +1546,7 @@
                   <span>🛡️ 空頭避險與轉弱監控 (點擊看盤)</span>
                 </div>
                 ${d.defense_hedges.map(h => `
-                  <div onclick="switchTab('crypto'); switchChartSymbol('${h.symbol.split(' ')[0]}')" class="cursor-pointer hover:border-rose-500/50 transition bg-slate-950 border border-slate-800/80 rounded-xl p-2.5 flex items-center justify-between text-xs mb-1.5">
+                  <div onclick="selectTaiwanStock('${h.symbol.split(' ')[0]}')" class="cursor-pointer hover:border-rose-500/50 transition bg-slate-950 border border-slate-800/80 rounded-xl p-2.5 flex items-center justify-between text-xs mb-1.5">
                     <div>
                       <span class="font-bold text-amber-300">${h.symbol}</span>
                       <div class="text-[10px] text-slate-400 mt-0.5">${h.reason}</div>
@@ -1467,7 +1620,7 @@
               <div class="flex items-center space-x-2 pt-1 border-t border-slate-800/80">
                 <button onclick="testAlpha('${a.id}', '${encodeURIComponent(a.expression)}', 'worldquant')" class="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold transition flex items-center space-x-1">
                   <i class="fa-solid fa-paper-plane"></i>
-                  <span>🚀 送出至 WorldQuant 回測</span>
+                  <span>🚀 送出至 WorldQuant 驗證並提交</span>
                 </button>
                 <span class="text-[10px] text-slate-500 italic ml-2">註：FASTEXPR 橫截面因子專屬美股回測</span>
               </div>
@@ -1566,7 +1719,7 @@
         const result = await safeFetchJson('/api/brain/simulations', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ expression: expr })
+          body: JSON.stringify({ expression: expr, vault_id: alphaId, auto_submit: true })
         });
 
         if (!result.ok || !result.data) {
@@ -1612,7 +1765,11 @@
             const realId = j.alpha_id || j.simulation_id;
             const idInput = document.getElementById('alphaBrainId');
             if (idInput && realId) idInput.value = realId;
-            alert(`🎉 Alpha 回測完成！\n狀態: COMPLETED\nAlpha ID: ${realId}\nSharpe: ${sharpe.toFixed(2)}\nFitness: ${fitness.toFixed(2)}\n換手率: ${j.turnover ?? m.turnover ?? 'N/A'}`);
+            if (j.brain_submitted) {
+              alert(`🏆 已於 WorldQuant BRAIN 驗證並正式送出！該項目已從清單移除。\nAlpha ID: ${realId}\nSharpe: ${sharpe.toFixed(2)}\nFitness: ${fitness.toFixed(2)}`);
+            } else {
+              alert(`💾 WorldQuant BRAIN 模擬成功（暫未送出，已保留於清單）：\nAlpha ID: ${realId}\nSharpe: ${sharpe.toFixed(2)}\nFitness: ${fitness.toFixed(2)}\n原因: ${j.brain_submit?.error || '待送出或已達今日 2 顆上限'}`);
+            }
             fetchAlphas();
             return;
           }
@@ -1634,7 +1791,8 @@
             } else if (status === 'TIMEOUT' || pollRes.status === 504) {
               reason = `WorldQuant 伺服器模擬逾時。\n${reason}`;
             }
-            alert(`❌ Alpha 模擬未通過 [${status || 'HTTP_' + pollRes.status}]:\n${reason}`);
+            alert(`❌ WorldQuant BRAIN 驗證失敗（可能含不存在的函式或運算子，已從清單移除）[${status || 'HTTP_' + pollRes.status}]:\n${reason}`);
+            fetchAlphas();
             return;
           }
         }, nextPoll);

@@ -28,15 +28,34 @@ class CryptoTradingEnv:
         fee_rate: float = 0.0005,  # 5 bps fee
         slippage: float = 0.0002,  # 2 bps slippage
         max_drawdown_limit: float = 0.25,  # 25% max drawdown termination
-        reward_type: str = "sharpe_differential",  # 'sharpe_differential' or 'pnl_risk_adjusted'
+        reward_type: str = "sharpe_differential",
+        position_deadband: float = 0.15,
+        min_holding_bars: int = 30,
+        rebalance_cooldown: int = 15,
+        funding_rate_per_bar: float = 0.0,
+        turnover_penalty_rate: float = 0.1,
+        drawdown_penalty_rate: float = 1.5,
     ):
         self.df = df_features.reset_index(drop=True)
+        self._feat_arr = np.nan_to_num(
+            self.df[feature_cols].to_numpy(dtype=np.float32),
+            nan=0.0,
+            posinf=1.0,
+            neginf=-1.0,
+        )
+        self._close_arr = self.df["Close"].to_numpy(dtype=np.float64)
         self.feature_cols = feature_cols
         self.initial_balance = initial_balance
         self.fee_rate = fee_rate
         self.slippage = slippage
         self.max_drawdown_limit = max_drawdown_limit
         self.reward_type = reward_type
+        self.position_deadband = float(position_deadband)
+        self.min_holding_bars = int(min_holding_bars)
+        self.rebalance_cooldown = int(rebalance_cooldown)
+        self.funding_rate_per_bar = float(funding_rate_per_bar)
+        self.turnover_penalty_rate = float(turnover_penalty_rate)
+        self.drawdown_penalty_rate = float(drawdown_penalty_rate)
 
         # Observation dimensions: feature vector size + 2 (current position, unrealized PnL%)
         self.state_dim = len(feature_cols) + 2
@@ -52,6 +71,8 @@ class CryptoTradingEnv:
         self.entry_price = 0.0
         self.peak_equity = initial_balance
         self.returns_history = []
+        self.bars_in_position = 0
+        self.bars_since_rebalance = self.rebalance_cooldown
 
     def reset(self) -> np.ndarray:
         self.current_step = 0
@@ -60,15 +81,13 @@ class CryptoTradingEnv:
         self.entry_price = 0.0
         self.peak_equity = self.initial_balance
         self.returns_history = []
+        self.bars_in_position = 0
+        self.bars_since_rebalance = self.rebalance_cooldown
         return self._get_observation()
 
     def _get_observation(self) -> np.ndarray:
-        current_row = self.df.loc[self.current_step]
-        feat_vec = current_row[self.feature_cols].values.astype(np.float32)
-        # Handle possible NaN/inf in input features
-        feat_vec = np.nan_to_num(feat_vec, nan=0.0, posinf=1.0, neginf=-1.0)
-
-        current_price = current_row["Close"]
+        feat_vec = self._feat_arr[self.current_step]
+        current_price = float(self._close_arr[self.current_step])
         unrealized_pnl = 0.0
         if self.position != 0 and self.entry_price > 0:
             unrealized_pnl = self.position * (current_price - self.entry_price) / self.entry_price
@@ -82,10 +101,22 @@ class CryptoTradingEnv:
         Executes one step in the trading environment.
         action: Target position weight in [-1.0, 1.0].
         """
-        action = float(np.clip(action, -1.0, 1.0))
-        current_price = self.df.loc[self.current_step, "Close"]
+        proposed_action = float(np.clip(action, -1.0, 1.0))
+        delta = proposed_action - self.position
+        action = proposed_action
+        blocked_reason = None
+        if abs(delta) < self.position_deadband:
+            action = self.position
+            blocked_reason = "DEADBAND"
+        elif self.position != 0.0 and self.bars_in_position < self.min_holding_bars:
+            action = self.position
+            blocked_reason = "MIN_HOLDING"
+        elif self.bars_since_rebalance < self.rebalance_cooldown:
+            action = self.position
+            blocked_reason = "COOLDOWN"
+        current_price = float(self._close_arr[self.current_step])
         next_step = self.current_step + 1
-        next_price = self.df.loc[next_step, "Close"]
+        next_price = float(self._close_arr[next_step])
 
         # 1. Price change return
         price_ret = (next_price - current_price) / current_price
@@ -95,7 +126,9 @@ class CryptoTradingEnv:
 
         # 3. Transaction friction cost (commission + slippage)
         position_delta = abs(action - self.position)
-        cost = position_delta * (self.fee_rate + self.slippage)
+        trading_cost = position_delta * (self.fee_rate + self.slippage)
+        funding_cost = abs(self.position) * self.funding_rate_per_bar
+        cost = trading_cost + funding_cost
 
         # 4. Net period return
         net_return = gross_return - cost
@@ -114,6 +147,12 @@ class CryptoTradingEnv:
         if action != self.position:
             self.position = action
             self.entry_price = next_price if action != 0 else 0.0
+            self.bars_in_position = 0
+            self.bars_since_rebalance = 0
+        else:
+            self.bars_since_rebalance += 1
+            if self.position != 0.0:
+                self.bars_in_position += 1
 
         self.current_step = next_step
         done = (self.current_step >= self.max_steps) or (drawdown >= self.max_drawdown_limit)
@@ -125,6 +164,14 @@ class CryptoTradingEnv:
             "drawdown": drawdown,
             "position": self.position,
             "close_price": next_price,
+            "proposed_position": proposed_action,
+            "executed_position": self.position,
+            "action_blocked_reason": blocked_reason,
+            "turnover": position_delta,
+            "trading_cost": trading_cost,
+            "funding_cost": funding_cost,
+            "bars_in_position": self.bars_in_position,
+            "bars_since_rebalance": self.bars_since_rebalance,
         }
 
         obs = self._get_observation() if not done else np.zeros(self.state_dim, dtype=np.float32)
@@ -146,10 +193,10 @@ class CryptoTradingEnv:
             downside_penalty = 2.0 * (net_return**2) * 100.0
 
         # Drawdown penalty
-        dd_penalty = 1.5 * (drawdown**2)
+        dd_penalty = self.drawdown_penalty_rate * (drawdown**2)
 
         # Turnover friction penalty
-        turnover_penalty = 0.1 * delta_pos
+        turnover_penalty = self.turnover_penalty_rate * delta_pos
 
         reward = base_reward - downside_penalty - dd_penalty - turnover_penalty
         return float(reward)

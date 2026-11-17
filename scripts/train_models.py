@@ -10,6 +10,8 @@ Supports three independent models with zero look-ahead leakage and SHA-256 manif
 from __future__ import annotations
 
 import argparse
+import glob
+import hashlib
 import json
 import os
 import shutil
@@ -62,35 +64,89 @@ def quarantine_unverified_models() -> list[str]:
     return quarantined
 
 
+
+CACHE_DIR = os.path.join(BASE_DIR, "crypto_trading", "data_cache")
+
+
+def _load_historical_or_live_ohlcv(
+    symbol: str,
+    timeframe: str = "1m",
+    limit: int = 1200,
+    allow_synthetic: bool = False,
+    prefer_cache: bool = True,
+) -> tuple[pd.DataFrame, str, bool, str | None]:
+    """
+    Loads the largest cached historical CSV from crypto_trading/data_cache/ matching timeframe
+    when available (and not allow_synthetic), otherwise falls back to CryptoDataLoader.
+    """
+    if prefer_cache and not allow_synthetic and os.path.isdir(CACHE_DIR):
+        safe_sym = symbol.replace("/", "_")
+        pattern = os.path.join(CACHE_DIR, f"{safe_sym}_{timeframe}_*.csv")
+        candidates = sorted(glob.glob(pattern), key=lambda fp: os.path.getsize(fp), reverse=True)
+        for cand in candidates:
+            try:
+                df = pd.read_csv(cand, index_col=0, parse_dates=True)
+                if df.index.tz is None:
+                    df.index = df.index.tz_localize("UTC")
+                else:
+                    df.index = df.index.tz_convert("UTC")
+                df = df.sort_index()
+                if len(df) >= 500:
+                    return df, "HISTORICAL_CACHE", False, os.path.basename(cand)
+            except Exception:
+                continue
+
+    loader = CryptoDataLoader(symbol=symbol, timeframe=timeframe)
+    res = loader.fetch_ohlcv_result(
+        limit=limit,
+        symbol=symbol,
+        timeframe=timeframe,
+        allow_synthetic=allow_synthetic,
+    )
+    is_syn = bool(res.is_synthetic or res.source == DataSource.SYNTHETIC)
+    src_label = "SYNTHETIC" if is_syn else res.source.value
+    return res.df, src_label, is_syn, None
+
+
 def train_crypto_lgbm(
     symbols: list[str],
-    timeframe: str = "1h",
+    timeframe: str = "1m",
     limit: int = 1200,
     allow_synthetic: bool = False,
     output_dir: str = MODELS_DIR,
+    prefer_cache: bool = True,
 ) -> dict[str, Any]:
     os.makedirs(output_dir, exist_ok=True)
-    loader = CryptoDataLoader(timeframe=timeframe)
-    frames: list[pd.DataFrame] = []
+    dfs_by_sym: dict[str, pd.DataFrame] = {}
     sources_used: list[str] = []
+    cache_files: list[str] = []
+    bars_per_symbol: dict[str, int] = {}
     any_synthetic = False
 
     for sym in symbols:
-        res = loader.fetch_ohlcv_result(
-            limit=limit,
+        df, src_label, is_syn, cache_name = _load_historical_or_live_ohlcv(
             symbol=sym,
             timeframe=timeframe,
+            limit=limit,
             allow_synthetic=allow_synthetic,
+            prefer_cache=prefer_cache,
         )
-        frames.append(res.df)
-        sources_used.append(res.source.value)
-        if res.is_synthetic or res.source == DataSource.SYNTHETIC:
+        dfs_by_sym[sym] = df
+        sources_used.append(src_label)
+        bars_per_symbol[sym] = int(len(df))
+        if cache_name:
+            cache_files.append(cache_name)
+        if is_syn:
             any_synthetic = True
 
-    primary_df = frames[0]
     trainer = CryptoMLTrainer(model_type="lightgbm", task="regression", horizon=3, timeframe=timeframe)
-    summary = trainer.walk_forward_train(primary_df, n_splits=5, purge_bars=12, embargo_bars=2)
+    if len(dfs_by_sym) > 1 and hasattr(trainer, "walk_forward_train_multi"):
+        summary = trainer.walk_forward_train_multi(dfs_by_sym, n_splits=5, purge_bars=12, embargo_bars=2)
+    else:
+        primary_df = next(iter(dfs_by_sym.values()))
+        summary = trainer.walk_forward_train(primary_df, n_splits=5, purge_bars=12, embargo_bars=2)
 
+    data_source_tag = "SYNTHETIC" if any_synthetic else ("HISTORICAL_CACHE" if cache_files else "LIVE")
     out_path = os.path.join(output_dir, "crypto_lgbm_weights.joblib")
     manifest = trainer.save_weights(
         out_path,
@@ -98,9 +154,16 @@ def train_crypto_lgbm(
             "target": "crypto_lgbm",
             "symbols": symbols,
             "timeframe": timeframe,
-            "data_source": "SYNTHETIC" if any_synthetic else "LIVE",
+            "data_source": data_source_tag,
             "is_synthetic": any_synthetic,
-            "deployment_stage": "RESEARCH_ONLY" if any_synthetic else "LOCAL_PAPER_READY",
+            "total_bars": int(sum(bars_per_symbol.values())),
+            "bars_per_symbol": bars_per_symbol,
+            "cache_files": cache_files,
+            "deployment_stage": "RESEARCH_ONLY" if any_synthetic else "SHADOW",
+            "approved_for_inference": not any_synthetic,
+            "approved_for_order_entry": False,
+            "validation_gate_version": "model-governance-v2",
+            "rejection_reason": "SYNTHETIC_DATA" if any_synthetic else "PENDING_GLOBAL_DATE_LOAO_AND_STRESS_COST",
             "oos_metrics": {
                 "mean_rank_ic": summary["mean_rank_ic"],
                 "mean_sharpe": summary["mean_sharpe"],
@@ -109,7 +172,6 @@ def train_crypto_lgbm(
             },
         },
     )
-    # Also write canonical crypto_lgbm_manifest.json
     canonical_manifest_path = os.path.join(output_dir, "crypto_lgbm_manifest.json")
     with open(canonical_manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
@@ -118,19 +180,26 @@ def train_crypto_lgbm(
 
 def train_crypto_ppo(
     symbol: str = "BTC/USDT",
-    timeframe: str = "1h",
+    timeframe: str = "1m",
     limit: int = 1000,
-    episodes: int = 12,
+    episodes: int = 10,
     allow_synthetic: bool = False,
     output_dir: str = MODELS_DIR,
+    prefer_cache: bool = True,
 ) -> dict[str, Any]:
     os.makedirs(output_dir, exist_ok=True)
-    loader = CryptoDataLoader(symbol=symbol, timeframe=timeframe)
-    res = loader.fetch_ohlcv_result(limit=limit, symbol=symbol, timeframe=timeframe, allow_synthetic=allow_synthetic)
-    any_synthetic = bool(res.is_synthetic or res.source == DataSource.SYNTHETIC)
+    df_raw, src_label, any_synthetic, cache_name = _load_historical_or_live_ohlcv(
+        symbol=symbol,
+        timeframe=timeframe,
+        limit=limit,
+        allow_synthetic=allow_synthetic,
+        prefer_cache=prefer_cache,
+    )
+    if len(df_raw) > 90000:
+        df_raw = df_raw.iloc[-90000:].copy()
 
     fe = CryptoFeatureEngineer()
-    df_feats = fe.compute_features(res.df, timeframe=timeframe).dropna().copy()
+    df_feats = fe.compute_features(df_raw, timeframe=timeframe).dropna().copy()
     feature_cols = list(fe.feature_columns)
 
     # Chronological Train (75%), Purge (12 bars), OOS Test (remaining)
@@ -141,7 +210,9 @@ def train_crypto_ppo(
     df_train = df_feats.iloc[:split_idx].copy()
     df_test = df_feats.iloc[test_start:].copy()
 
-    env_train = CryptoTradingEnv(df_train, feature_cols, initial_balance=10000.0)
+    env_fee = 0.0002 if timeframe == '1m' else 0.0005
+    env_slip = 0.0001 if timeframe == '1m' else 0.0002
+    env_train = CryptoTradingEnv(df_train, feature_cols, initial_balance=10000.0, fee_rate=env_fee, slippage=env_slip)
     agent = PPOAgent(state_dim=env_train.state_dim, action_dim=1, lr=3e-4)
 
     for _ in range(max(1, int(episodes))):
@@ -162,7 +233,7 @@ def train_crypto_ppo(
         agent.train_step(states, actions, log_probs, advantages, returns, k_epochs=4, batch_size=64)
 
     # Evaluate on untouched OOS test slice
-    env_test = CryptoTradingEnv(df_test, feature_cols, initial_balance=10000.0)
+    env_test = CryptoTradingEnv(df_test, feature_cols, initial_balance=10000.0, fee_rate=env_fee, slippage=env_slip)
     obs = env_test.reset()
     done = False
     while not done:
@@ -184,9 +255,15 @@ def train_crypto_ppo(
             "symbol": symbol,
             "timeframe": timeframe,
             "feature_columns": feature_cols,
-            "data_source": "SYNTHETIC" if any_synthetic else "LIVE",
+            "data_source": "SYNTHETIC" if any_synthetic else ("HISTORICAL_CACHE" if cache_name else "LIVE"),
+            "total_bars": int(len(df_raw)),
+            "cache_file": cache_name,
             "is_synthetic": any_synthetic,
-            "deployment_stage": "RESEARCH_ONLY" if any_synthetic else "LOCAL_PAPER_READY",
+            "deployment_stage": "QUARANTINED",
+            "approved_for_inference": False,
+            "approved_for_order_entry": False,
+            "validation_gate_version": "ppo-governance-v2",
+            "rejection_reason": "SYNTHETIC_DATA" if any_synthetic else "OOS_DRAWDOWN_STOP_OR_NONPOSITIVE_PERFORMANCE",
             "oos_metrics": {
                 "oos_return_pct": round(oos_total_ret * 100.0, 2),
                 "oos_sharpe": round(oos_sharpe, 3),
@@ -199,9 +276,11 @@ def train_crypto_ppo(
 
 def train_taiwan_ranker(
     watchlist: list[str] | None = None,
-    period: str = "2y",
+    period: str = "5y",
     allow_synthetic: bool = False,
     output_dir: str = MODELS_DIR,
+    prefer_cache: bool = True,
+    **kwargs,
 ) -> dict[str, Any]:
     import hashlib
     os.makedirs(output_dir, exist_ok=True)
@@ -257,7 +336,11 @@ def train_taiwan_ranker(
         "feature_cols": feature_cols,
         "data_source": "SYNTHETIC" if any_synthetic else "LIVE_YFINANCE",
         "is_synthetic": any_synthetic,
-        "deployment_stage": "RESEARCH_ONLY" if any_synthetic else "LOCAL_PAPER_READY",
+        "deployment_stage": "RESEARCH_ONLY" if any_synthetic else "REPORTING_ONLY",
+        "approved_for_inference": not any_synthetic,
+        "approved_for_order_entry": False,
+        "validation_gate_version": "taiwan-governance-v2",
+        "rejection_reason": "SYNTHETIC_DATA" if any_synthetic else "ORDER_ENTRY_NOT_APPROVED",
         "oos_metrics": {
             "rank_ic": metrics.get("rank_ic"),
             "rmse": metrics.get("rmse"),
@@ -283,9 +366,10 @@ def main(argv: list[str] | None = None) -> int:
         default="BTC/USDT,ETH/USDT,SOL/USDT",
         help="Comma-separated crypto symbols",
     )
-    parser.add_argument("--timeframe", type=str, default="1h", help="Bar timeframe")
+    parser.add_argument("--timeframe", type=str, default="1m", help="Bar timeframe (default: 1m ultra-short-term)")
     parser.add_argument("--limit", type=int, default=800, help="Historical bars per symbol")
     parser.add_argument("--episodes", type=int, default=10, help="PPO training episodes")
+    parser.add_argument("--no-cache", action="store_true", help="Ignore local data_cache CSVs and fetch live bars")
     parser.add_argument(
         "--output-dir",
         type=str,
@@ -314,6 +398,7 @@ def main(argv: list[str] | None = None) -> int:
                 limit=args.limit,
                 allow_synthetic=args.allow_synthetic,
                 output_dir=args.output_dir,
+                prefer_cache=not args.no_cache,
             )
             print(f"[✓] crypto_lgbm trained -> {res['model_path']} (SHA-256: {res['manifest']['sha256'][:12]}...)")
         elif tgt == "crypto_ppo":
@@ -324,12 +409,14 @@ def main(argv: list[str] | None = None) -> int:
                 episodes=args.episodes,
                 allow_synthetic=args.allow_synthetic,
                 output_dir=args.output_dir,
+                prefer_cache=not args.no_cache,
             )
             print(f"[✓] crypto_ppo trained -> {res['model_path']} (SHA-256: {res['manifest']['sha256'][:12]}...)")
         elif tgt == "taiwan_ranker":
             res = train_taiwan_ranker(
                 allow_synthetic=args.allow_synthetic,
                 output_dir=args.output_dir,
+                prefer_cache=not args.no_cache,
             )
             print(f"[✓] taiwan_ranker trained -> {res['model_path']} (SHA-256: {res['manifest']['sha256'][:12]}...)")
     return 0

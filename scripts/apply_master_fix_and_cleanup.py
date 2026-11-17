@@ -1175,70 +1175,8 @@ def update_configs_and_launcher(repo_root: Path) -> str:
         if additions:
             _atomic_write(env_ex, txt.rstrip() + "\n" + "\n".join(additions) + "\n")
 
-    env_file = repo_root / ".env"
-    if env_file.exists():
-        env_txt = env_file.read_text(encoding="utf-8")
-        changed = False
-        for key, val in [
-            ("BRAIN_SIMULATION_ENABLED", "true"),
-            ("BRAIN_AUTO_SUBMIT_ENABLED", "true"),
-        ]:
-            if f"{key}=" in env_txt:
-                new_env_txt = re.sub(rf"(?m)^{key}=.*$", f"{key}={val}", env_txt)
-                if new_env_txt != env_txt:
-                    env_txt = new_env_txt
-                    changed = True
-            else:
-                env_txt = env_txt.rstrip() + f"\n{key}={val}\n"
-                changed = True
-        for key, val in [
-            ("BRAIN_MAX_DAILY_SUBMISSIONS", "2"),
-            ("BRAIN_HIGH_BAR_SHARPE", "1.80"),
-            ("BRAIN_DAILY_FLUSH_HOUR", "22"),
-        ]:
-            if f"{key}=" not in env_txt:
-                env_txt = env_txt.rstrip() + f"\n{key}={val}\n"
-                changed = True
-        if changed:
-            _atomic_write(env_file, env_txt)
-
-    gi_file = repo_root / ".gitignore"
-    if gi_file.exists():
-        gi_txt = gi_file.read_text(encoding="utf-8")
-        extra_ignores = [
-            ".patch_backups/",
-            ".post_v5_backups/",
-            ".patch_backup_manifest.json",
-            ".post_v5_delta_manifest.json",
-            "temp/",
-            "quant_envs/",
-            ".antigravity-stage0/",
-            "stage0_*.txt",
-            "stage0_*.json",
-            ".ruff_cache/",
-        ]
-        missing = [item for item in extra_ignores if item not in gi_txt]
-        if missing:
-            gi_txt = gi_txt.rstrip() + "\n\n# Local workspace & patch backups\n" + "\n".join(missing) + "\n"
-            _atomic_write(gi_file, gi_txt)
-
-    bat_file = repo_root / "啟動量化交易平台.bat"
-    bat_content = """@echo off
-chcp 65001 >nul
-title Antigravity 量化操盤平台一鍵啟動
-echo ========================================================
-echo   Antigravity 自動化量化操盤平台 (台股 + 加密合約 + WorldQuant)
-echo ========================================================
-echo.
-set "VENV_PY=G:\\我的雲端硬碟\\.quant_envs\\antigravity\\Scripts\\python.exe"
-if not exist "%VENV_PY%" set "VENV_PY=python"
-echo [1] 正在啟動本機 Web 操盤與 WorldQuant 遠端送測服務 (Port 8000)...
-start http://127.0.0.1:8000
-"%VENV_PY%" -m web_ui.server
-pause
-"""
-    _atomic_write(bat_file, bat_content)
-    return "UPDATED"
+    # Governance rule: migration/cleanup scripts must never enable runtime
+    # capabilities in a real .env file. Operators opt in outside source control.
 
 
 def _force_remove_dir(dp: Path) -> bool:

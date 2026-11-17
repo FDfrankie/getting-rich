@@ -69,6 +69,10 @@ class BrainSimulationJob:
         }
         self.safe_error: str | None = None
         self.is_duplicate: bool = False
+        self.vault_id: int | None = None
+        self.auto_submit: bool = False
+        self.submitted_to_brain: bool = False
+        self.submit_result: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         sharpe = self.metrics.get("sharpe")
@@ -112,6 +116,9 @@ class BrainSimulationJob:
                 else ("AUTH_ERROR" if status_str == "AUTH_FAILED" else "SIMULATION_FAILED")
             ),
             "retryable": status_str in ("TIMEOUT", "FAILED"),
+            "vault_id": self.vault_id,
+            "brain_submitted": self.submitted_to_brain,
+            "brain_submit": self.submit_result,
         }
         return res
 
@@ -141,16 +148,21 @@ class BrainJobQueue:
         default_poll_interval: float = 2.0,
         autostart: bool = True,
         on_complete_callback: Any = None,
+        on_fail_callback: Any = None,
         db_path: str | None = None,
+        num_workers: int | None = None,
     ) -> None:
         self.brain_client = brain_client
         self.default_poll_interval = float(default_poll_interval)
         self.on_complete_callback = on_complete_callback
+        self.on_fail_callback = on_fail_callback
         self.db_path = db_path
         self._jobs: dict[str, BrainSimulationJob] = {}
         self._key_to_job_id: dict[str, str] = {}
         self._lock = threading.Lock()
+        self.num_workers = max(1, int(num_workers if num_workers is not None else os.getenv("BRAIN_QUEUE_WORKERS", "3")))
         self._worker_thread: threading.Thread | None = None
+        self._worker_threads: list[threading.Thread] = []
         self._pending_queue: list[str] = []
         self._running: bool = False
         self._init_persistence()
@@ -242,13 +254,19 @@ class BrainJobQueue:
             conn.close()
 
     def _start_worker(self) -> None:
-        self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
-        self._worker_thread.start()
+        self._worker_threads = [t for t in self._worker_threads if t.is_alive()]
+        while len(self._worker_threads) < self.num_workers:
+            t = threading.Thread(target=self._worker_loop, daemon=True)
+            t.start()
+            self._worker_threads.append(t)
+        self._worker_thread = self._worker_threads[0] if self._worker_threads else None
 
     def create_job(
         self,
         expression: str,
         settings: Mapping[str, Any] | None = None,
+        vault_id: int | None = None,
+        auto_submit: bool = False,
     ) -> tuple[BrainSimulationJob, bool]:
         key = compute_simulation_key(expression, settings)
         with self._lock:
@@ -264,6 +282,8 @@ class BrainJobQueue:
                 expression=expression,
                 settings=dict(settings or {}),
             )
+            job.vault_id = vault_id
+            job.auto_submit = bool(auto_submit)
             self._jobs[job_id] = job
             self._key_to_job_id[key] = job_id
             self._pending_queue.append(job_id)
@@ -272,7 +292,7 @@ class BrainJobQueue:
 
     def start(self) -> None:
         with self._lock:
-            if self._worker_thread and self._worker_thread.is_alive():
+            if any(t.is_alive() for t in self._worker_threads):
                 return
             self._running = True
             self._start_worker()
@@ -281,16 +301,16 @@ class BrainJobQueue:
         self._running = False
 
     def join(self, timeout: float = 2.0) -> None:
-        t = self._worker_thread
-        if t and t.is_alive():
-            t.join(timeout=timeout)
+        for t in list(self._worker_threads):
+            if t and t.is_alive():
+                t.join(timeout=timeout)
 
     def queue_depth(self) -> int:
         with self._lock:
             return len(self._pending_queue)
 
     def worker_alive(self) -> bool:
-        return bool(self._running and self._worker_thread and self._worker_thread.is_alive())
+        return bool(self._running and any(t.is_alive() for t in self._worker_threads))
 
     def get_job(self, job_id: str) -> BrainSimulationJob | None:
         with self._lock:
@@ -363,12 +383,19 @@ class BrainJobQueue:
                 "settings": job.settings,
                 "regular": job.expression,
             }
-            # Post simulation to get Location
-            resp = self.brain_client.session.post(
-                f"{self.brain_client.BASE_URL}/simulations",
-                json=payload,
-                timeout=self.brain_client.timeout,
-            )
+            # Post simulation to get Location (with 429 concurrent-limit linear backoff)
+            resp = None
+            for _attempt in range(3):
+                resp = self.brain_client.session.post(
+                    f"{self.brain_client.BASE_URL}/simulations",
+                    json=payload,
+                    timeout=self.brain_client.timeout,
+                )
+                if resp.status_code == 429:
+                    retry_after = float(resp.headers.get("Retry-After") or (10 * (_attempt + 1)))
+                    time.sleep(min(retry_after, 30.0))
+                    continue
+                break
             if resp.status_code in (401, 403):
                 with self._lock:
                     job.status = BrainJobStatus.AUTH_FAILED
@@ -498,5 +525,11 @@ class BrainJobQueue:
 
         except Exception as e:
             with self._lock:
-                job.status = BrainJobStatus.FAILED
                 job.safe_error = sanitize_error(e)
+            if callable(getattr(self, "on_fail_callback", None)):
+                try:
+                    self.on_fail_callback(job)
+                except Exception:
+                    pass
+            with self._lock:
+                job.status = BrainJobStatus.FAILED
