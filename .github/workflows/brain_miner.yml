@@ -1,0 +1,65 @@
+name: WorldQuant BRAIN Headless Miner
+
+on:
+  schedule:
+    - cron: "5 * * * *"
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: "Run duration in minutes"
+        required: false
+        default: "38"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: brain-miner-single
+  cancel-in-progress: false
+
+jobs:
+  mine-alphas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install lightweight runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests numpy pandas python-dotenv
+
+      - name: Run Headless BRAIN Alpha Miner
+        env:
+          BRAIN_EMAIL: ${{ secrets.BRAIN_EMAIL }}
+          BRAIN_PASSWORD: ${{ secrets.BRAIN_PASSWORD }}
+          BRAIN_SIMULATION_ENABLED: "true"
+          BRAIN_AUTO_SUBMIT_ENABLED: "true"
+          BRAIN_QUEUE_WORKERS: "2"
+          BRAIN_HIGH_BAR_SHARPE: "1.80"
+          BRAIN_DAILY_FLUSH_HOUR: "22"
+        run: |
+          DURATION="${{ github.event.inputs.duration_minutes || '38' }}"
+          python scripts/headless_brain_miner.py --duration-minutes "$DURATION" --queue-depth 6 --workers 2
+
+      - name: Persist updated Alpha Vault to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add worldquant_brain/alpha_vault.db worldquant_brain/verified_alphas.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(brain): persist headless miner results"
+            git pull --rebase origin main || true
+            git push origin main
+          else
+            echo "No new vault changes to commit."
+          fi
