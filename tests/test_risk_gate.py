@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from crypto_trading.risk_manager import DecisionAction, RiskManager
 from crypto_trading.settings import TradingMode
@@ -9,7 +9,7 @@ def test_risk_gate_happy_path():
     ctx = {
         "trading_mode": TradingMode.LOCAL_PAPER,
         "data_source": "binance_spot_usdt",
-        "data_timestamp": datetime.utcnow().isoformat(),
+        "data_timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "data_quality_passed": True,
         "reconciliation_fresh": True,
         "has_unknown_orders": False,
@@ -36,7 +36,7 @@ def test_risk_gate_happy_path():
 
 def test_risk_gate_fail_closed_on_stale_data():
     rm = RiskManager(initial_capital=10000.0)
-    stale_time = (datetime.utcnow() - timedelta(seconds=600)).isoformat()
+    stale_time = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=600)).isoformat()
     ctx = {
         "trading_mode": TradingMode.LOCAL_PAPER,
         "data_source": "binance_spot_usdt",
@@ -83,7 +83,7 @@ def test_risk_gate_drawdown_circuit_breaker():
     # 權益從 10000 跌至 9000 (10% 回撤 > 8% 限制)
     rm.update_capital(9000.0)
 
-    ctx = {"data_source": "test", "data_timestamp": datetime.utcnow().isoformat()}
+    ctx = {"data_source": "test", "data_timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat()}
     decision = rm.evaluate_order(
         "ETH/USDC",
         "BUY",
@@ -103,7 +103,7 @@ def test_risk_gate_min_notional_and_tick_step_rules():
     ctx = {
         "trading_mode": TradingMode.LOCAL_PAPER,
         "data_source": "test",
-        "data_timestamp": datetime.utcnow().isoformat(),
+        "data_timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
         "min_notional": 10.0,
         "step_size": 0.01,
         "tick_size": 0.1,

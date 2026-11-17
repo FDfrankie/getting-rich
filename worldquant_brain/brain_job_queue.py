@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import sqlite3
 import threading
 import time
 from collections.abc import Mapping
@@ -133,18 +135,111 @@ def sanitize_error(exc: Exception) -> str:
 
 
 class BrainJobQueue:
-    def __init__(self, brain_client: Any, default_poll_interval: float = 2.0, autostart: bool = True, on_complete_callback: Any = None) -> None:
+    def __init__(
+        self,
+        brain_client: Any,
+        default_poll_interval: float = 2.0,
+        autostart: bool = True,
+        on_complete_callback: Any = None,
+        db_path: str | None = None,
+    ) -> None:
         self.brain_client = brain_client
         self.default_poll_interval = float(default_poll_interval)
         self.on_complete_callback = on_complete_callback
+        self.db_path = db_path
         self._jobs: dict[str, BrainSimulationJob] = {}
         self._key_to_job_id: dict[str, str] = {}
         self._lock = threading.Lock()
         self._worker_thread: threading.Thread | None = None
         self._pending_queue: list[str] = []
         self._running: bool = False
+        self._init_persistence()
+        self._restore_jobs()
         if autostart:
             self.start()
+
+    def _init_persistence(self) -> None:
+        if not self.db_path or self.db_path == ":memory:":
+            return
+        os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
+        conn = sqlite3.connect(self.db_path, timeout=10.0)
+        try:
+            with conn:
+                conn.execute(
+                    """CREATE TABLE IF NOT EXISTS brain_jobs (
+                        job_id TEXT PRIMARY KEY,
+                        simulation_key TEXT NOT NULL,
+                        expression TEXT NOT NULL,
+                        settings_json TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        simulation_location TEXT,
+                        alpha_id TEXT,
+                        metrics_json TEXT,
+                        safe_error TEXT,
+                        created_at TEXT NOT NULL
+                    )"""
+                )
+        finally:
+            conn.close()
+
+    def _persist_job(self, job: BrainSimulationJob) -> None:
+        if not self.db_path or self.db_path == ":memory:":
+            return
+        conn = sqlite3.connect(self.db_path, timeout=10.0)
+        try:
+            with conn:
+                conn.execute(
+                    """INSERT OR REPLACE INTO brain_jobs
+                    (job_id, simulation_key, expression, settings_json, status, simulation_location, alpha_id, metrics_json, safe_error, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        job.job_id,
+                        job.simulation_key,
+                        job.expression,
+                        json.dumps(job.settings, ensure_ascii=False),
+                        job.status.value if isinstance(job.status, BrainJobStatus) else str(job.status),
+                        job.simulation_location,
+                        job.alpha_id,
+                        json.dumps(job.metrics, ensure_ascii=False),
+                        job.safe_error,
+                        job.created_at,
+                    ),
+                )
+        finally:
+            conn.close()
+
+    def _restore_jobs(self) -> None:
+        if not self.db_path or self.db_path == ":memory:" or not os.path.exists(self.db_path):
+            return
+        conn = sqlite3.connect(self.db_path, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute("SELECT * FROM brain_jobs ORDER BY created_at DESC LIMIT 200").fetchall()
+            for r in rows:
+                job = BrainSimulationJob(
+                    job_id=r["job_id"],
+                    simulation_key=r["simulation_key"],
+                    expression=r["expression"],
+                    settings=json.loads(r["settings_json"] or "{}"),
+                )
+                job.created_at = r["created_at"]
+                job.simulation_location = r["simulation_location"]
+                job.alpha_id = r["alpha_id"]
+                job.safe_error = r["safe_error"]
+                if r["metrics_json"]:
+                    job.metrics = json.loads(r["metrics_json"])
+                try:
+                    job.status = BrainJobStatus(r["status"])
+                except ValueError:
+                    job.status = BrainJobStatus.FAILED
+                self._jobs[job.job_id] = job
+                self._key_to_job_id[job.simulation_key] = job.job_id
+                if job.status in (BrainJobStatus.QUEUED, BrainJobStatus.SUBMITTED, BrainJobStatus.RUNNING):
+                    self._pending_queue.append(job.job_id)
+        except Exception:
+            pass
+        finally:
+            conn.close()
 
     def _start_worker(self) -> None:
         self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
@@ -172,6 +267,7 @@ class BrainJobQueue:
             self._jobs[job_id] = job
             self._key_to_job_id[key] = job_id
             self._pending_queue.append(job_id)
+            self._persist_job(job)
             return job, True
 
     def start(self) -> None:
@@ -337,6 +433,8 @@ class BrainJobQueue:
                 if state in ("COMPLETE", "COMPLETED"):
                     real_alpha_id = poll_data.get("alpha") or poll_data.get("alpha_id")
                     metrics_source = dict(poll_data)
+                    checks_passed = True
+                    failed_check_names: list[str] = []
                     if real_alpha_id:
                         try:
                             alpha_resp = self.brain_client.session.get(
@@ -347,8 +445,14 @@ class BrainJobQueue:
                                 alpha_json = alpha_resp.json()
                                 if isinstance(alpha_json, dict):
                                     metrics_source.update(alpha_json)
-                                    if isinstance(alpha_json.get("is"), dict):
-                                        metrics_source.update(alpha_json["is"])
+                                    is_blk = alpha_json.get("is")
+                                    if isinstance(is_blk, dict):
+                                        metrics_source.update(is_blk)
+                                        if isinstance(is_blk.get("checks"), list):
+                                            for chk in is_blk["checks"]:
+                                                if isinstance(chk, dict) and str(chk.get("result") or "").upper() in ("FAIL", "FAILED", "ERROR"):
+                                                    checks_passed = False
+                                                    failed_check_names.append(str(chk.get("name") or "CHECK"))
                         except Exception:
                             pass
 
@@ -357,7 +461,6 @@ class BrainJobQueue:
                     turnover = self.brain_client._number(metrics_source, "turnover")
                     margin = self.brain_client._number(metrics_source, "margin")
 
-                    # Sharpe 與 Fitness 必須是有效非空數字才算成功
                     has_metrics = (sharpe is not None) and (fitness is not None)
                     with self._lock:
                         if real_alpha_id:
@@ -368,9 +471,12 @@ class BrainJobQueue:
                             "fitness": fitness,
                             "turnover": turnover,
                             "margin": margin,
+                            "checks_passed": checks_passed,
+                            "failed_checks": failed_check_names,
                         }
                         if not has_metrics:
                             job.safe_error = "線上模擬完成但缺少有效 Sharpe 或 Fitness 指標"
+                        self._persist_job(job)
                     if has_metrics and callable(getattr(self, "on_complete_callback", None)):
                         try:
                             self.on_complete_callback(job)

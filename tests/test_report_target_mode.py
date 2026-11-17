@@ -1,1 +1,0 @@
-from tests.test_p10_taiwan_suite import TestReportTargetMode as TestReportTargetMode

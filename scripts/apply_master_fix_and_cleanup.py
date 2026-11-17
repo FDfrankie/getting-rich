@@ -38,6 +38,7 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -767,15 +768,28 @@ def patch_server(repo_root: Path) -> str:
 
     if "BRAIN_DAILY_FLUSH_HOUR" in txt and "db_path=self.alpha_vault.db_path" in txt:
         return "ALREADY_APPLIED"
-    if "on_complete_callback=self._on_brain_job_completed" not in new_txt:
+    if "db_path=self.alpha_vault.db_path" not in new_txt:
+        if "self.brain_job_queue = BrainJobQueue(self.brain_client, on_complete_callback=self._on_brain_job_completed)" in new_txt:
+            new_txt = new_txt.replace(
+                "self.brain_job_queue = BrainJobQueue(self.brain_client, on_complete_callback=self._on_brain_job_completed)",
+                "self.brain_job_queue = BrainJobQueue(self.brain_client, on_complete_callback=self._on_brain_job_completed, db_path=self.alpha_vault.db_path)",
+                1,
+            )
+        else:
+            new_txt = new_txt.replace(
+                "self.brain_job_queue = BrainJobQueue(self.brain_client)",
+                "self.brain_job_queue = BrainJobQueue(self.brain_client, on_complete_callback=self._on_brain_job_completed, db_path=self.alpha_vault.db_path)",
+                1,
+            )
+    if 'if path == "/api/status" or path == "/health":' in new_txt and "/api/health" not in new_txt:
         new_txt = new_txt.replace(
-            "self.brain_job_queue = BrainJobQueue(self.brain_client)",
-            "self.brain_job_queue = BrainJobQueue(self.brain_client, on_complete_callback=self._on_brain_job_completed, db_path=self.alpha_vault.db_path)",
+            'if path == "/api/status" or path == "/health":',
+            'if path == "/api/status" or path == "/health" or path == "/api/health":',
             1,
         )
 
     loop_pat = re.compile(
-        r"    def _background_alpha_miner_loop\(self\):.*?(?=\n    def _background_worker_loop\()",
+        r"(?:    def _on_brain_job_completed\(self, job\):.*?)?    def _background_alpha_miner_loop\(self\):.*?(?=\n    def _background_worker_loop\()",
         flags=re.DOTALL,
     )
     new_loop_and_cb = """    def _on_brain_job_completed(self, job):
@@ -1227,42 +1241,82 @@ pause
     return "UPDATED"
 
 
+def _force_remove_dir(dp: Path) -> bool:
+    import stat
+    def _on_rm_error(func, path, exc_info):
+        try:
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+        except Exception:
+            pass
+    try:
+        shutil.rmtree(dp, onerror=_on_rm_error)
+    except Exception:
+        pass
+    if dp.exists() and os.name == "nt":
+        subprocess.run(["cmd", "/c", "rmdir", "/s", "/q", str(dp)], capture_output=True)
+    return not dp.exists()
+
+
 def cleanup_redundant_files(repo_root: Path) -> list[str]:
     removed: list[str] = []
 
-    obsolete_scripts = [
+    obsolete_files = [
+        # Obsolete scripts & bundles in scripts/
         "scripts/apply_post_v5_delta_v3.py",
         "scripts/apply_post_v5_delta_v4.py",
+        "scripts/apply_post_v5_delta_v5.py",
+        "scripts/run_stage0_local_baseline.py",
         "scripts/apply_brain_submit_patch.py",
         "scripts/apply_brain_submit_patch_v2.py",
         "scripts/apply_brain_submit_patch_v3.py",
         "scripts/apply_stage0_final_fix.py",
         "scripts/apply_master_fix_and_cleanup_v1_old.py",
         "scripts/apply_master_fix_and_cleanup_v2_old.py",
+        "scripts/apply_master_fix_and_cleanup_v3_old.py",
         "scripts/run_all_training.py",
+        "scripts/collect_crypto_videos.py",
+        "scripts/fetch_top_transcripts.py",
         "scripts/antigravity_stage0_bundle.zip",
         "scripts/antigravity_stage0_bundle_winfix.zip",
         "scripts/antigravity_stage0_bundle_ready.zip",
         "scripts/antigravity_stage0_bundle_merged.zip",
         "scripts/antigravity_stage0_bundle_final.zip",
         "scripts/antigravity_stage0_bundle_complete.zip",
-    ]
-    for rel in obsolete_scripts:
-        p = repo_root / rel
-        if p.exists():
-            try:
-                p.unlink()
-                removed.append(rel)
-            except Exception:
-                pass
-
-    obsolete_root_files = [
+        # Obsolete root & data_persistence & reports files
         ".patch_backup_manifest.json",
         ".post_v5_delta_manifest.json",
         "ccxt_shim.py",
         "sitecustomize.py",
+        "verify_endpoints_tmp.py",
+        "開啟量化操盤平台.url",
+        "data_persistence/test_temp_state.db",
+        "data_persistence/test_temp_state.db-shm",
+        "data_persistence/test_temp_state.db-wal",
+        "data_persistence/crypto_video_topics.json",
+        "data_persistence/curated_transcripts.json",
+        "reports/stage0_pytest_tmp.txt",
+        "reports/stage0_execution_report.json",
+        "reports/stage0_verification_summary.json",
+        # 16 1-line duplicate re-export test files (already covered by test_p9/p10/p11 suites)
+        "tests/test_alpha_status_migration.py",
+        "tests/test_artifact_trust.py",
+        "tests/test_brain_auto_submit_gate.py",
+        "tests/test_brain_official_metrics.py",
+        "tests/test_brain_restart_recovery.py",
+        "tests/test_brain_submission_idempotency.py",
+        "tests/test_brain_submission_kill_switch.py",
+        "tests/test_brain_submission_quota.py",
+        "tests/test_brain_submission_recovery.py",
+        "tests/test_model_manifest.py",
+        "tests/test_notebook_drift.py",
+        "tests/test_ppo_action_distribution.py",
+        "tests/test_report_escaping.py",
+        "tests/test_report_target_mode.py",
+        "tests/test_scheduler_timezone.py",
+        "tests/test_taiwan_cross_sectional_ic.py",
     ]
-    for rel in obsolete_root_files:
+    for rel in obsolete_files:
         p = repo_root / rel
         if p.exists():
             try:
@@ -1278,12 +1332,14 @@ def cleanup_redundant_files(repo_root: Path) -> list[str]:
         ".antigravity-stage0",
         "quant_envs",
         ".venv",
+        "dist",
+        ".ruff_cache",
     ]
     for d in obsolete_dirs:
         dp = repo_root / d
         if dp.exists() and dp.is_dir():
-            shutil.rmtree(dp, ignore_errors=True)
-            removed.append(f"{d}/")
+            if _force_remove_dir(dp):
+                removed.append(f"{d}/")
 
     bkp_dir = repo_root / "data_persistence" / "backups"
     if bkp_dir.exists():

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -16,7 +16,7 @@ class FeeSchedule:
     """
 
     source: str = "binance_futures_default"
-    effective_time: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    effective_time: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     maker_fee_rate: float = 0.0002  # 2 bps (0.02%)
     taker_fee_rate: float = 0.0005  # 5 bps (0.05%)
     spread_bps: float = 1.0  # 1 bps (0.01%)

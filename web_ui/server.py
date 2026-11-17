@@ -79,7 +79,7 @@ class QuantAppContext:
         self.alpha_vault = AlphaVault()
         self.alpha_vault.seed_initial_verified_alphas()
         self.brain_client = BrainClient()
-        self.brain_job_queue = BrainJobQueue(self.brain_client, on_complete_callback=self._on_brain_job_completed)
+        self.brain_job_queue = BrainJobQueue(self.brain_client, on_complete_callback=self._on_brain_job_completed, db_path=self.alpha_vault.db_path)
         self.alpha_miner = ContinuousAlphaMiner(symbol=DEFAULT_SYMBOL)
 
         self.testnet_client = BinanceTestnetClient(settlement="USDC")
@@ -406,16 +406,26 @@ class QuantAppContext:
         self.add_log(f"已切換操盤策略至: 【{strat_name.upper()} 策略】(自動掛載優化權重)")
 
     def _on_brain_job_completed(self, job):
-        """當遠端 WorldQuant BRAIN 模擬完成且達標時，自動入庫並在配額內 (每日最多 2 顆) 自動送出"""
+        """當遠端 WorldQuant BRAIN 模擬完成且通過官方門檻與 IS-Check 時，入庫並依高標直出/擇優排程送出"""
         try:
             m = job.metrics or {}
             sharpe = m.get("sharpe")
             fitness = m.get("fitness")
             turnover = m.get("turnover") if m.get("turnover") is not None else 0.25
-            margin = m.get("margin") or 0.0
+            margin = m.get("margin")
+            checks_passed = m.get("checks_passed", True)
+            failed_checks = m.get("failed_checks") or []
             alpha_id = job.alpha_id
             if sharpe is None or fitness is None or not alpha_id:
                 return
+            if not checks_passed:
+                self.add_log(f"⚠️ [BRAIN 模擬未過 IS-Check] Alpha {alpha_id} 失敗項目 {failed_checks}，不予送出")
+                return
+            if margin is not None:
+                norm_margin = float(margin) / 10000.0 if float(margin) > 0.5 else float(margin)
+                if norm_margin < 0.0010:
+                    self.add_log(f"⚠️ [BRAIN 模擬未達 Margin 門檻] Alpha {alpha_id} Margin={norm_margin:.5f} < 10 bps，不予送出")
+                    return
             if self.alpha_vault.passes_qualification(float(sharpe), float(fitness), float(turnover)):
                 self.alpha_miner.total_accepted += 1
                 name = f"BRAIN_{alpha_id}"
@@ -425,37 +435,52 @@ class QuantAppContext:
                     sharpe=float(sharpe),
                     fitness=float(fitness),
                     turnover=float(turnover),
-                    margin=float(margin),
+                    margin=float(margin or 0.0),
                     category="BRAIN_VERIFIED",
                     notes=f"alpha_id={alpha_id}",
                     status_override="BRAIN_COMPLETE",
                 )
                 self.add_log(f"✅ [BRAIN 遠端模擬達標] {name} (Sharpe={sharpe}, Fitness={fitness}) 已存入倉庫")
                 if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
-                    sub_res = self.brain_client.submit_alpha(str(alpha_id))
-                    if sub_res.get("success"):
-                        self.add_log(f"🏆 [BRAIN 自動正式提交成功] Alpha {alpha_id} 已送出至官方平台！")
+                    high_bar = float(os.getenv("BRAIN_HIGH_BAR_SHARPE", "1.80"))
+                    if float(sharpe) >= high_bar:
+                        sub_res = self.brain_client.submit_alpha(str(alpha_id), enforce_checks=True)
+                        if sub_res.get("success"):
+                            self.add_log(f"🏆 [BRAIN 高標直出成功] Alpha {alpha_id} (Sharpe={sharpe}) 已正式送出！")
+                        else:
+                            self.add_log(f"ℹ️ [BRAIN 自動提交略過] Alpha {alpha_id}: {sub_res.get('status')} ({sub_res.get('error')})")
                     else:
-                        self.add_log(f"ℹ️ [BRAIN 自動提交略過] Alpha {alpha_id}: {sub_res.get('status')} ({sub_res.get('error')})")
+                        self.brain_client.stage_candidate_for_daily_selection(
+                            str(alpha_id), job.expression, float(sharpe), float(fitness), float(turnover), float(margin or 0.0)
+                        )
+                        self.add_log(f"📥 [BRAIN 擇優暫存] Alpha {alpha_id} (Sharpe={sharpe}) 已排入每日 2 顆擇優候選池")
         except Exception:
             pass
 
     def _background_alpha_miner_loop(self):
-        """24/7 背景持續自動挖掘 Alpha 因子 Worker"""
-        print("🧬 [Alpha Miner Worker] 24/7 自動因子挖掘引擎已啟動！")
+        """24/7 背景持續自動挖掘 Alpha 因子 Worker (全程遠端 BRAIN 模擬 + 每日 22:00 擇優結算送出)"""
+        print("🧬 [Alpha Miner Worker] 24/7 遠端 BRAIN 因子挖掘引擎已啟動！")
         while True:
             try:
                 self.heartbeats["alpha_miner"] = time.time()
                 if os.getenv("BRAIN_SIMULATION_ENABLED", "").lower() == "true" and not self.brain_client.offline_mode:
                     if self.brain_job_queue.queue_depth() < 3:
-                        cand = self.alpha_miner.generate_candidate_expression()
+                        cand = self.alpha_miner.generate_unique_candidate()
                         job, is_new = self.brain_job_queue.create_job(cand["expression"])
                         if is_new:
                             self.alpha_miner.total_mined += 1
                             self.add_log(f"🚀 [BRAIN 線上送測] 已排入遠端模擬: {cand['name']} (Job {job.job_id})")
+                    if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
+                        from datetime import datetime, timedelta, timezone
+                        taipei_now = datetime.now(timezone(timedelta(hours=8)))
+                        if taipei_now.hour >= int(os.getenv("BRAIN_DAILY_FLUSH_HOUR", "22")):
+                            flushed = self.brain_client.flush_daily_candidates()
+                            for sr in flushed:
+                                if sr.get("success"):
+                                    self.add_log(f"🏆 [BRAIN 每日擇優結算送出] Alpha {sr.get('alpha_id')} 已正式送出！")
             except Exception:
                 pass
-            time.sleep(30)  # 每 30 秒挖掘一輪，嚴格控制 CPU/RAM 避免 OOM
+            time.sleep(30)
 
     def _background_worker_loop(self):
         """24/7 背景獨立常駐執行緒，不依賴 HTTP 請求或前端瀏覽器"""
@@ -1074,12 +1099,8 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             turnover = float(post_data.get("turnover", 25.0))
             category = post_data.get("category", "Momentum")
             notes = post_data.get("notes", "")
-
             brain_alpha_id = str(post_data.get("brain_alpha_id") or post_data.get("alpha_id") or "").strip()
-            brain_submit_res = None
-            if brain_alpha_id:
-                brain_submit_res = APP_STATE.brain_client.submit_alpha(brain_alpha_id)
-            # 透過 AlphaVault 保存
+
             res = APP_STATE.alpha_vault.save_alpha(
                 name=name,
                 expression=expr,
@@ -1089,12 +1110,21 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 category=category,
                 notes=notes,
             )
-            if brain_submit_res is not None:
+            if not res.get("success"):
+                res["brain_submit"] = {
+                    "success": False,
+                    "status": "QUALIFICATION_FAILED",
+                    "error": res.get("message", "未達 BRAIN 門檻，已攔截提交"),
+                }
+                return self._send_json_response(res)
+
+            if brain_alpha_id:
+                brain_submit_res = APP_STATE.brain_client.submit_alpha(brain_alpha_id, enforce_checks=True)
                 res["brain_submit"] = brain_submit_res
                 if brain_submit_res.get("success"):
-                    res["message"] = f"Alpha 已入庫並正式提交至 WorldQuant BRAIN (ID: {brain_alpha_id})！"
+                    res["message"] = f"Alpha 已入庫並通過官方 IS-Check 正式提交至 WorldQuant BRAIN (ID: {brain_alpha_id})！"
                 else:
-                    res["message"] = f"Alpha 已入庫，但官方提交未完成 [{brain_submit_res.get('status')}]: {brain_submit_res.get('error')}"
+                    res["message"] = f"Alpha 已入庫，但官方提交被攔截或未完成 [{brain_submit_res.get('status')}]: {brain_submit_res.get('error')}"
             return self._send_json_response(res)
 
         # 🚀 POST /api/brain/simulations：建立非同步送測 job (符合 docs/BRAIN_WEB_API_ASYNC_FIX_SPEC.md)

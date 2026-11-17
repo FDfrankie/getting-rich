@@ -35,7 +35,7 @@ class TestPostV5Delta(unittest.TestCase):
             price=1000.0,
             context={
                 "data_source": "TEST",
-                "data_timestamp": datetime.utcnow().isoformat(),
+                "data_timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                 "data_quality_passed": True,
                 "reconciliation_fresh": True,
                 "has_unknown_orders": False,

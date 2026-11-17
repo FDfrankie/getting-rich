@@ -123,6 +123,64 @@ class ContinuousAlphaMiner:
         return None
 
 
+    def _dedup_db_path(self) -> str:
+        return getattr(self.vault, "db_path", None) or os.path.join(os.path.dirname(__file__), "alpha_vault.db")
+
+    def has_tried_expression(self, expression: str) -> bool:
+        import hashlib, sqlite3
+        expr_hash = hashlib.sha256(expression.strip().encode("utf-8")).hexdigest()
+        db_p = self._dedup_db_path()
+        if not db_p or db_p == ":memory:" or not os.path.exists(db_p):
+            return False
+        conn = sqlite3.connect(db_p, timeout=10.0)
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS brain_tried_expressions (expr_hash TEXT PRIMARY KEY, expression TEXT NOT NULL, created_at TEXT NOT NULL)"
+            )
+            cur = conn.execute("SELECT 1 FROM brain_tried_expressions WHERE expr_hash = ?", (expr_hash,))
+            return cur.fetchone() is not None
+        finally:
+            conn.close()
+
+    def mark_expression_tried(self, expression: str) -> None:
+        import hashlib, sqlite3
+        from datetime import datetime, timezone
+        expr_hash = hashlib.sha256(expression.strip().encode("utf-8")).hexdigest()
+        db_p = self._dedup_db_path()
+        if not db_p or db_p == ":memory:":
+            return
+        os.makedirs(os.path.dirname(os.path.abspath(db_p)), exist_ok=True)
+        conn = sqlite3.connect(db_p, timeout=10.0)
+        try:
+            with conn:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS brain_tried_expressions (expr_hash TEXT PRIMARY KEY, expression TEXT NOT NULL, created_at TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO brain_tried_expressions (expr_hash, expression, created_at) VALUES (?, ?, ?)",
+                    (expr_hash, expression.strip(), datetime.now(timezone.utc).isoformat()),
+                )
+        finally:
+            conn.close()
+
+    def generate_unique_candidate(self, max_attempts: int = 25) -> dict[str, str]:
+        """Generate a novel FASTEXPR expression (with evolutionary mutation from top verified alphas) not yet tried in SQLite."""
+        # 30% chance to mutate a verified alpha from vault if available
+        verified = [a for a in self.vault.list_alphas() if a.get("status") in ("BRAIN_COMPLETE", "VERIFIED", "TEMPLATE_SEED")]
+        for _ in range(max_attempts):
+            if verified and random.random() < 0.30:
+                base = random.choice(verified)
+                decay_w = random.choice([3, 5, 8, 12])
+                cand_expr = f"ts_decay_linear({base['expression']}, {decay_w})"
+                cand = {"name": f"Evolved_{base['name'][:20]}_{decay_w}", "expression": cand_expr}
+            else:
+                cand = self.generate_candidate_expression()
+            if not self.has_tried_expression(cand["expression"]):
+                self.mark_expression_tried(cand["expression"])
+                return cand
+        self.mark_expression_tried(cand["expression"])
+        return cand
+
 if __name__ == "__main__":
     miner = ContinuousAlphaMiner()
     print("[*] 正在測試 ContinuousAlphaMiner 自動挖掘...")

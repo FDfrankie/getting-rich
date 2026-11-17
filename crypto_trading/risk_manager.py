@@ -1,7 +1,7 @@
 from decimal import Decimal
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -135,7 +135,7 @@ class RiskManager:
         if last_data_time:
             try:
                 dt = datetime.fromisoformat(last_data_time)
-                staleness = (datetime.utcnow() - dt).total_seconds()
+                staleness = (datetime.now(timezone.utc).replace(tzinfo=None) - dt).total_seconds()
                 max_stale = ctx.get("max_stale_seconds", 300)
                 if staleness > max_stale:
                     reasons.append(f"Stale market data: age {staleness:.1f}s > {max_stale}s")
@@ -161,7 +161,7 @@ class RiskManager:
                 test_cur.execute("CREATE TABLE IF NOT EXISTS _db_write_probe (id INTEGER PRIMARY KEY, ts TEXT)")
                 test_cur.execute(
                     "REPLACE INTO _db_write_probe (id, ts) VALUES (1, ?)",
-                    (datetime.utcnow().isoformat(),),
+                    (datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),),
                 )
                 test_conn.commit()
                 test_conn.close()

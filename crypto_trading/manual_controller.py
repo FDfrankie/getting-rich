@@ -60,7 +60,7 @@ class ManualPositionController:
         tp_price: float | None = None,
     ) -> dict[str, Any]:
         """鎖定幣種倉位為手動接管"""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             cur = conn.cursor()
@@ -98,7 +98,7 @@ class ManualPositionController:
 
     def unlock_symbol(self, symbol: str) -> dict[str, Any]:
         """解除手動鎖定，交還給 Bot 自動交易"""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             cur = conn.cursor()
@@ -144,7 +144,7 @@ class ManualPositionController:
                     # TTL 已過期，自動解鎖
                     cur.execute(
                         "UPDATE manual_overrides SET is_locked = 0, updated_at = ? WHERE symbol = ?",
-                        (datetime.utcnow().isoformat(), symbol),
+                        (datetime.now(timezone.utc).isoformat(), symbol),
                     )
                     conn.commit()
                     conn.close()
@@ -162,7 +162,7 @@ class ManualPositionController:
         take_profit: float | None = None,
     ) -> dict[str, Any]:
         """設定或更新停損停利保護單"""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with _DB_LOCK:
             conn = sqlite3.connect(self.db_path, timeout=15.0)
             cur = conn.cursor()
@@ -194,7 +194,7 @@ class ManualPositionController:
 
     def manual_close_position(self, client, symbol: str, current_position: dict[str, Any]) -> dict[str, Any]:
         """單筆全平"""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         contracts = float(current_position.get("contracts", 0.0))
         side = current_position.get("side", "LONG").upper()
         close_side = "SELL" if side == "LONG" else "BUY"
@@ -234,7 +234,7 @@ class ManualPositionController:
         reduce_amount: float,
     ) -> dict[str, Any]:
         """部分減倉"""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         side = current_position.get("side", "LONG").upper()
         close_side = "SELL" if side == "LONG" else "BUY"
 
