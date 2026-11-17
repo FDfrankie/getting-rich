@@ -31,6 +31,13 @@ class CryptoTradingEnv:
         reward_type: str = "sharpe_differential",  # 'sharpe_differential' or 'pnl_risk_adjusted'
     ):
         self.df = df_features.reset_index(drop=True)
+        self._feat_arr = np.nan_to_num(
+            self.df[feature_cols].to_numpy(dtype=np.float32),
+            nan=0.0,
+            posinf=1.0,
+            neginf=-1.0,
+        )
+        self._close_arr = self.df["Close"].to_numpy(dtype=np.float64)
         self.feature_cols = feature_cols
         self.initial_balance = initial_balance
         self.fee_rate = fee_rate
@@ -63,12 +70,8 @@ class CryptoTradingEnv:
         return self._get_observation()
 
     def _get_observation(self) -> np.ndarray:
-        current_row = self.df.loc[self.current_step]
-        feat_vec = current_row[self.feature_cols].values.astype(np.float32)
-        # Handle possible NaN/inf in input features
-        feat_vec = np.nan_to_num(feat_vec, nan=0.0, posinf=1.0, neginf=-1.0)
-
-        current_price = current_row["Close"]
+        feat_vec = self._feat_arr[self.current_step]
+        current_price = float(self._close_arr[self.current_step])
         unrealized_pnl = 0.0
         if self.position != 0 and self.entry_price > 0:
             unrealized_pnl = self.position * (current_price - self.entry_price) / self.entry_price
@@ -83,9 +86,9 @@ class CryptoTradingEnv:
         action: Target position weight in [-1.0, 1.0].
         """
         action = float(np.clip(action, -1.0, 1.0))
-        current_price = self.df.loc[self.current_step, "Close"]
+        current_price = float(self._close_arr[self.current_step])
         next_step = self.current_step + 1
-        next_price = self.df.loc[next_step, "Close"]
+        next_price = float(self._close_arr[next_step])
 
         # 1. Price change return
         price_ret = (next_price - current_price) / current_price

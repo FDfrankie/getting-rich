@@ -1,5 +1,5 @@
 # 📊 台股量化決策報告【盤前晨報】(2026-11-17)
-*最後交易日: 2026-11-14 | 產出時間: 2026-11-17 22:47:13 (Asia/Taipei) | 系統: Antigravity Automated Quant Agent*
+*最後交易日: 2026-11-14 | 產出時間: 2026-11-17 23:15:33 (Asia/Taipei) | 系統: Antigravity Automated Quant Agent*
 
 ---
 ## 🧭 1. 大盤環境與多空溫度診斷

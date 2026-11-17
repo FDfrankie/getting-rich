@@ -2,14 +2,14 @@
   "target": "crypto_ppo",
   "model_name": "crypto_ppo_agent",
   "version": "1.0.0",
-  "sha256": "b0fb363a4ef2980cd4d202949d69dc527cbdb33bedbf0a6051a51222cfe5f8e8",
-  "weights_sha256": "b0fb363a4ef2980cd4d202949d69dc527cbdb33bedbf0a6051a51222cfe5f8e8",
+  "sha256": "062eb5a8e0bb98ac663f586476723d9554f442546763f635be3a167c2d26388b",
+  "weights_sha256": "062eb5a8e0bb98ac663f586476723d9554f442546763f635be3a167c2d26388b",
   "framework": "pytorch_ppo",
   "state_dim": 23,
   "action_dim": 1,
-  "trained_at": "2026-11-17T14:03:58.276699+00:00",
+  "trained_at": "2026-11-17T15:12:12.748761+00:00",
   "symbol": "BTC/USDT",
-  "timeframe": "1h",
+  "timeframe": "1m",
   "feature_columns": [
     "log_ret_1",
     "log_ret_3",
@@ -33,12 +33,14 @@
     "hl_location",
     "obv_slope_10"
   ],
-  "data_source": "LIVE",
+  "data_source": "HISTORICAL_CACHE",
+  "total_bars": 90000,
+  "cache_file": "BTC_USDT_1m_180d.csv",
   "is_synthetic": false,
   "deployment_stage": "LOCAL_PAPER_READY",
   "oos_metrics": {
-    "oos_return_pct": 1.91,
-    "oos_sharpe": 7.425,
-    "test_bars": 173
+    "oos_return_pct": -25.0,
+    "oos_sharpe": -113.666,
+    "test_bars": 22473
   }
 }

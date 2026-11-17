@@ -35,3 +35,7 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "W"]
 ignore = ["E501", "E402", "E741", "F811"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [".git", "quant_envs", "temp", ".antigravity-stage0", ".post_v5_backups", ".patch_backups", ".venv", "dist"]
