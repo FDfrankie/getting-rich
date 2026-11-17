@@ -1,0 +1,46 @@
+{
+  "target": "taiwan_ranker",
+  "model_name": "taiwan_stock_ranker",
+  "version": "1.0.0",
+  "sha256": "e5f9c798c892aee19554fafc5a95c213697e84fd0694577d1a06419c543cacb0",
+  "weights_sha256": "e5f9c798c892aee19554fafc5a95c213697e84fd0694577d1a06419c543cacb0",
+  "framework": "lightgbm",
+  "universe_symbols": [
+    "2330.TW",
+    "2454.TW",
+    "2317.TW",
+    "2382.TW",
+    "3231.TW",
+    "2308.TW",
+    "2603.TW",
+    "2609.TW",
+    "3008.TW",
+    "3443.TW"
+  ],
+  "feature_cols": [
+    "mom_5d",
+    "mom_10d",
+    "mom_20d",
+    "mom_60d",
+    "bias_ma5",
+    "ma5_slope_5d",
+    "bias_ma20",
+    "ma20_slope_5d",
+    "bias_ma60",
+    "ma60_slope_5d",
+    "hist_vol_20",
+    "atr_ratio_14",
+    "vol_surge",
+    "rsi_14",
+    "k_9",
+    "d_9"
+  ],
+  "data_source": "LIVE_YFINANCE",
+  "is_synthetic": false,
+  "deployment_stage": "LOCAL_PAPER_READY",
+  "oos_metrics": {
+    "rank_ic": 0.011120490857161625,
+    "rmse": 0.09433294275328141
+  },
+  "trained_at": "2026-11-17T14:04:04.036476+00:00"
+}

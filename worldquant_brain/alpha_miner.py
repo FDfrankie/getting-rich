@@ -38,6 +38,9 @@ class ContinuousAlphaMiner:
 
         # 基礎算子與數據欄位基因池
         self.fields = ["close", "open", "high", "low", "volume", "vwap", "returns"]
+        self.fundamental_fields = ["operating_cashflow", "operating_income", "sales", "assets", "liabilities", "debt", "equity", "cap", "ebitda"]
+        self.sentiment_fields = ["target_price", "eps_consensus_mean"]
+        self.group_ops = ["subindustry", "industry", "sector"]
         self.ts_ops = [
             ("ts_decay_linear", [3, 5, 10]),
             ("ts_rank", [5, 10, 20]),
@@ -47,13 +50,16 @@ class ContinuousAlphaMiner:
         ]
 
     def generate_candidate_expression(self) -> dict[str, str]:
-        """基因變異生成新的 Alpha 表達式"""
+        """基因變異生成新的 Alpha 表達式 (涵蓋價量、基本面、分析師預期與跨產業中性化)"""
         field_a = random.choice(self.fields)
         field_b = random.choice(["volume", "vwap", "returns"])
         op_name, window_choices = random.choice(self.ts_ops)
         window = random.choice(window_choices)
+        grp = random.choice(self.group_ops)
+        f1 = random.choice(self.fundamental_fields)
+        f2 = random.choice(["assets", "cap", "equity", "sales"])
 
-        pattern = random.choice([1, 2, 3, 4])
+        pattern = random.choice([1, 2, 3, 4, 5, 6, 7])
         if pattern == 1:
             expr = f"-1 * {op_name}(ts_correlation({field_a}, {field_b}, {window}), {window})"
             name = f"Auto_{field_a}_{field_b}_Reversal_{window}"
@@ -61,11 +67,24 @@ class ContinuousAlphaMiner:
             expr = f"rank({op_name}({field_a}, {window})) - rank(ts_decay_linear({field_b}, {window}))"
             name = f"Auto_MultiField_Spread_{field_a}_{window}"
         elif pattern == 3:
-            expr = f"group_neutralize(rank(ts_delta({field_a}, {window})) / (ts_std_dev({field_a}, 20) + 1e-4), subindustry)"
+            expr = f"group_neutralize(rank(ts_delta({field_a}, {window})) / (ts_std_dev({field_a}, 20) + 1e-4), {grp})"
             name = f"Auto_Normalized_Momentum_{field_a}_{window}"
-        else:
+        elif pattern == 4:
             expr = f"signed_power(ts_rank({field_a}, {window}) - 0.5, 2) * -1"
             name = f"Auto_Nonlinear_MeanRevert_{field_a}_{window}"
+        elif pattern == 5:
+            expr = f"group_neutralize(rank({f1} / (abs({f2}) + 0.001)), {grp})"
+            name = f"Auto_Fundamental_Quality_{f1}_{grp}"
+        elif pattern == 6:
+            s_field = random.choice(self.sentiment_fields)
+            if s_field == "target_price":
+                expr = f"group_neutralize(rank((target_price - close) / (close + 1e-4)), {grp})"
+            else:
+                expr = f"ts_decay_linear(group_rank(eps_consensus_mean - ts_delay(eps_consensus_mean, 20), {grp}), 5)"
+            name = f"Auto_Analyst_Sentiment_{s_field}_{grp}"
+        else:
+            expr = f"group_rank(ts_delta(close, {window}) / (ts_std_dev(close, 20) + 1e-4), {grp}) + group_rank({f1} / (cap + 0.001), {grp})"
+            name = f"Auto_Hybrid_PriceFund_{f1}_{grp}_{window}"
 
         return {"name": name, "expression": expr}
 

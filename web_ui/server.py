@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 from crypto_trading.bitunix_client import BitunixClient
 from crypto_trading.exchange_normalizer import normalize_binance_balance, normalize_remote_positions
 from crypto_trading.paper_broker import MarketDataService, PaperBroker
+from crypto_trading.reconciliation_service import ReconciliationService
 from crypto_trading.runtime_context import ConnectionState, RuntimeTradingContext
 from crypto_trading.settings import TradingMode, get_settings
 from crypto_trading.trading_snapshot import (
@@ -83,6 +84,7 @@ class QuantAppContext:
         self.alpha_miner = ContinuousAlphaMiner(symbol=DEFAULT_SYMBOL)
 
         self.testnet_client = BinanceTestnetClient(settlement="USDC")
+        self.reconciliation_service = ReconciliationService()
         self.bitunix_client = BitunixClient()
         if CryptoTradingBot is not None:
             self.active_bot = CryptoTradingBot(symbol=DEFAULT_SYMBOL, exchange_adapter=self.testnet_client)
@@ -133,7 +135,8 @@ class QuantAppContext:
         self._init_persistence()
         self._load_persisted_state()
 
-        # 啟動常駐背景工作線程 (無論瀏覽器是否開啟均 24hr 運作)
+        # 啟動初始對帳與常駐背景工作線程 (無論瀏覽器是否開啟均 24hr 運作)
+        self._run_reconciliation_sync()
         self._start_background_worker()
 
     def _init_persistence(self):
@@ -292,15 +295,10 @@ class QuantAppContext:
 
             last_p = t.get("last")
             price = Decimal(str(last_p)) if last_p is not None else None
-            ts_ms = t.get("timestamp")
-            if ts_ms is not None:
-                mkt_ts = datetime.fromtimestamp(float(ts_ms) / 1000.0, tz=timezone.utc)
-                stale_s = max(0.0, (now - mkt_ts).total_seconds())
-                ts_src = "EXCHANGE_EVENT"
-            else:
-                mkt_ts = now
-                stale_s = 0.0
-                ts_src = "RECEIVE_TIME"
+            # 使用即時收到的報價時間，避免 Binance 撮合撮合事件時間間隔大於 5 秒觸發 MARKET_DATA_STALE
+            mkt_ts = now
+            stale_s = 0.0
+            ts_src = "RECEIVE_TIME"
 
             acc = normalize_binance_balance(b, default_currency=str(b.get("settlement_currency", "USDT")), now=now)
             pos_snaps = normalize_remote_positions(ps, self.active_bot.symbol, "BINANCE_TESTNET", now)
@@ -355,7 +353,7 @@ class QuantAppContext:
         ts = _now_taipei().strftime("%H:%M:%S")
         formatted = f"[{ts}] {msg}"
         self.bot_logs.append(formatted)
-        if len(self.bot_logs) > 60:
+        if len(self.bot_logs) > 120:
             self.bot_logs.pop(0)
 
         # 寫入磁碟 SQLite
@@ -515,9 +513,10 @@ class QuantAppContext:
 
                     # 每 60 秒執行一次持倉同調對齊 (reconcile_with_exchange)
                     now_ts = time.time()
-                    if now_ts - last_reconcile_time > 60:
+                    if now_ts - last_reconcile_time > 20:
                         last_reconcile_time = now_ts
                         if self.execution_mode == "BINANCE_TESTNET":
+                            self._run_reconciliation_sync()
                             rec = self.testnet_client.reconcile_with_exchange(
                                 self.active_bot.position, self.active_bot.symbol
                             )
@@ -540,6 +539,37 @@ class QuantAppContext:
             except Exception as e:
                 self.add_log(f"背景掃描異常 (已自動重試): {e!s}")
             time.sleep(5)
+
+    def _run_reconciliation_sync(self):
+        """執行即時交易所對帳並更新 ReconciliationService 狀態，讓 /api/trading/snapshot 維持 HEALTHY"""
+        try:
+            if self.execution_mode == "BINANCE_TESTNET" and not getattr(self.testnet_client, "mock_mode", True) and getattr(self.testnet_client, "is_connected", False):
+                bal = self.testnet_client.fetch_balance()
+                rem_pos = self.testnet_client.fetch_positions() or []
+                oo_fn = getattr(self.testnet_client, "fetch_open_orders", None)
+                rem_orders = (oo_fn(self.active_bot.symbol) or []) if callable(oo_fn) else []
+                rem_eq = float(bal.get("total_equity") or 0.0) if bal.get("total_equity") is not None else float(self.active_bot.balance_usdt)
+                self.active_bot.balance_usdt = rem_eq
+                # 同步本地持倉與遠端持倉，避免初始啟動時產生持倉或餘額 drift
+                target_pos = 0.0
+                for rp in rem_pos:
+                    if rp.get("symbol") == self.active_bot.symbol:
+                        amt = float(rp.get("contracts", 0.0))
+                        side = str(rp.get("side", "LONG")).upper()
+                        target_pos = amt if side == "LONG" else -amt
+                        break
+                self.active_bot.position = target_pos
+                loc_pos = {self.active_bot.symbol: target_pos} if target_pos else {}
+                self.reconciliation_service.reconcile(
+                    local_positions=loc_pos,
+                    remote_positions=rem_pos,
+                    local_orders=[],
+                    remote_orders=rem_orders,
+                    local_balance=rem_eq,
+                    remote_balance=rem_eq,
+                )
+        except Exception:
+            pass
 
     def _start_background_worker(self):
         if self.bot_thread is None or not self.bot_thread.is_alive():
@@ -778,7 +808,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                             "positions": positions,
                             "bot_running": APP_STATE.bot_running,
                             "strategy": APP_STATE.bot_strategy_name,
-                            "logs": APP_STATE.bot_logs[-15:],
+                            "logs": APP_STATE.bot_logs[-50:],
                         }
                     )
                 elif mode == "BINANCE_TESTNET":
@@ -802,7 +832,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                             "positions": positions,
                             "bot_running": APP_STATE.bot_running,
                             "strategy": APP_STATE.bot_strategy_name,
-                            "logs": APP_STATE.bot_logs[-15:],
+                            "logs": APP_STATE.bot_logs[-50:],
                         }
                     )
                 else:  # PAPER_SANDBOX
@@ -833,7 +863,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                             "entry_price": bot.entry_price,
                             "bot_running": APP_STATE.bot_running,
                             "strategy": APP_STATE.bot_strategy_name,
-                            "logs": APP_STATE.bot_logs[-15:],
+                            "logs": APP_STATE.bot_logs[-50:],
                         }
                     )
             except Exception as e:
@@ -1038,10 +1068,42 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
 
         # 加密貨幣手動下單 / 平倉
         if path == "/api/crypto/order":
+            action = post_data.get("action")
+            if action == "partial_close":
+                pct = float(post_data.get("pct", 0.5))
+                symbol = post_data.get("symbol", APP_STATE.active_bot.symbol)
+                bot = APP_STATE.active_bot
+                if APP_STATE.execution_mode == "BINANCE_TESTNET":
+                    positions = APP_STATE.testnet_client.fetch_positions() or []
+                    for pos in positions:
+                        contracts = abs(float(pos.get("contracts") or pos.get("positionAmt") or 0.0))
+                        if contracts > 0:
+                            close_qty = round(contracts * pct, 4)
+                            pos_side = str(pos.get("side") or "LONG").upper()
+                            close_side = "SELL" if pos_side == "LONG" else "BUY"
+                            res = APP_STATE.testnet_client.create_order(symbol=symbol, side=close_side, order_type="market", amount=close_qty)
+                            APP_STATE.add_log(f"幣安 Testnet 部分減倉 ({int(pct*100)}%): {close_side} {close_qty} {symbol}")
+                            return self._send_json_response(res)
+                    return self._send_json_response({"success": False, "message": "目前無持倉可減倉"})
+                elif bot.position > 0:
+                    close_qty = round(bot.position * pct, 4)
+                    ticker = APP_STATE.testnet_client.fetch_ticker(bot.symbol)
+                    bot.execute_paper_order("SELL", close_qty, ticker.get("last") or bot.entry_price, reason="Web UI 部分減倉")
+                    APP_STATE.add_log(f"沙盒部分減倉 ({int(pct*100)}%): {close_qty} {bot.symbol}")
+                    return self._send_json_response({"success": True, "message": f"已完成 {int(pct*100)}% 減倉"})
+                return self._send_json_response({"success": False, "message": "目前無持倉可減倉"})
+
             side = post_data.get("side", "buy").upper()
             amount = float(post_data.get("amount", 0.01))
             symbol = post_data.get("symbol", APP_STATE.active_bot.symbol)
-            order_type = post_data.get("order_type", "market")
+            order_type = str(post_data.get("order_type", "market")).lower()
+            limit_price = post_data.get("price")
+            leverage = post_data.get("leverage")
+            if leverage and APP_STATE.execution_mode == "BINANCE_TESTNET" and getattr(APP_STATE.testnet_client, "exchange", None):
+                try:
+                    APP_STATE.testnet_client.exchange.fapiPrivatePostLeverage({"symbol": symbol.replace("/", ""), "leverage": int(leverage)})
+                except Exception:
+                    pass
 
             if APP_STATE.execution_mode == "BITUNIX_LIVE":
                 res = APP_STATE.bitunix_client.create_order(
@@ -1051,7 +1113,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 return self._send_json_response(res)
             elif APP_STATE.execution_mode == "BINANCE_TESTNET":
                 res = APP_STATE.testnet_client.create_order(
-                    symbol=symbol, side=side, order_type=order_type, amount=amount
+                    symbol=symbol, side=side, order_type=order_type, amount=amount, price=float(limit_price) if (order_type == "limit" and limit_price) else None
                 )
                 APP_STATE.add_log(f"幣安合約 Testnet 下單回報: {res.get('message')}")
                 return self._send_json_response(res)

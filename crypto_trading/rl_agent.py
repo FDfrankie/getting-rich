@@ -61,6 +61,8 @@ class PPOAgent:
         device: str = "cpu",
     ):
         self.device = torch.device(device if torch.cuda.is_available() and device != "cpu" else "cpu")
+        self.state_dim = state_dim
+        self.action_dim = action_dim
         self.gamma = gamma
         self.gae_lambda = gae_lambda
         self.clip_epsilon = clip_epsilon
@@ -176,7 +178,10 @@ class PPOAgent:
             "value_loss": value_loss_accum / num_updates,
         }
 
-    def save(self, filepath: str):
+    def save(self, filepath: str, metadata: dict | None = None):
+        import hashlib
+        import json
+        from datetime import datetime, timezone
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
         torch.save(
             {
@@ -185,6 +190,32 @@ class PPOAgent:
             },
             filepath,
         )
+        h = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            while chunk := f.read(8192):
+                h.update(chunk)
+        sha = h.hexdigest()
+
+        manifest = {
+            "target": "crypto_ppo",
+            "model_name": "crypto_ppo_agent",
+            "version": "1.0.0",
+            "sha256": sha,
+            "weights_sha256": sha,
+            "framework": "pytorch_ppo",
+            "state_dim": self.state_dim,
+            "action_dim": self.action_dim,
+            "trained_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if metadata:
+            manifest.update(metadata)
+            manifest["sha256"] = sha
+            manifest["weights_sha256"] = sha
+
+        mf_path = os.path.splitext(filepath)[0] + "_manifest.json"
+        with open(mf_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+        return manifest
 
     def load(self, filepath: str):
         checkpoint = torch.load(filepath, map_location=self.device)

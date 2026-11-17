@@ -28,13 +28,15 @@ from crypto_trading.feature_engineer import CryptoFeatureEngineer
 
 
 class CryptoMLTrainer:
-    def __init__(self, model_type: str = "lightgbm", task: str = "regression"):
+    def __init__(self, model_type: str = "lightgbm", task: str = "regression", **kwargs):
         """
         model_type: 'lightgbm' or 'xgboost'
         task: 'regression' (predict forward return) or 'classification' (predict directional up/down)
         """
         self.model_type = model_type.lower()
         self.task = task.lower()
+        self.horizon = kwargs.get("horizon", 3)
+        self.timeframe = kwargs.get("timeframe", "1h")
         self.feature_engineer = CryptoFeatureEngineer()
         self.model = None
         self.feature_names: list[str] = []
@@ -189,12 +191,16 @@ class CryptoMLTrainer:
             "mean_rank_ic": float(np.mean([m["rank_ic"] for m in all_metrics])),
             "mean_accuracy": float(np.mean([m["directional_accuracy"] for m in all_metrics])),
             "mean_sharpe": float(np.mean([m["annualized_sharpe"] for m in all_metrics])),
+            "mean_turnover": float(np.mean([m.get("turnover", 0.05) for m in all_metrics])),
             "top_10_features": feat_imp[:10],
         }
         return summary
 
-    def save_weights(self, path: str):
+    def save_weights(self, path: str, metadata: dict[str, Any] | None = None):
         """Saves model instance, feature names, and configuration."""
+        import hashlib
+        import json
+        from datetime import datetime, timezone
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         bundle = {
             "model": self.model,
@@ -204,6 +210,32 @@ class CryptoMLTrainer:
             "cv_results": self.cv_results,
         }
         joblib.dump(bundle, path)
+
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            while chunk := f.read(8192):
+                h.update(chunk)
+        sha = h.hexdigest()
+
+        manifest = {
+            "target": "crypto_lgbm",
+            "model_name": "crypto_lgbm_weights",
+            "version": "1.0.0",
+            "sha256": sha,
+            "weights_sha256": sha,
+            "framework": self.model_type,
+            "feature_columns": self.feature_names,
+            "trained_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if metadata:
+            manifest.update(metadata)
+            manifest["sha256"] = sha
+            manifest["weights_sha256"] = sha
+
+        mf_path = os.path.splitext(path)[0] + "_manifest.json"
+        with open(mf_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+        return manifest
 
     @classmethod
     def load_weights(cls, path: str) -> "CryptoMLTrainer":

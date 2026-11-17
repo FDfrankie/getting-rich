@@ -188,34 +188,54 @@ class BinanceTestnetClient:
             assets = acc.get("assets", [])
             total_usdt = 0.0
             free_usdt = 0.0
+            upnl_usdt = 0.0
+            margin_usdt = 0.0
             total_usdc = 0.0
             free_usdc = 0.0
+            upnl_usdc = 0.0
+            margin_usdc = 0.0
             balances = {}
             for a in assets:
                 asset_name = a.get("asset")
                 wallet_bal = float(a.get("walletBalance", 0.0))
                 avail_bal = float(a.get("availableBalance", 0.0))
+                upnl_val = float(a.get("unrealizedProfit", 0.0) or 0.0)
+                margin_val = float(a.get("marginBalance", wallet_bal + upnl_val) or (wallet_bal + upnl_val))
                 if wallet_bal > 0 or avail_bal > 0:
                     balances[asset_name] = wallet_bal
                 if asset_name == "USDT":
                     total_usdt = wallet_bal
                     free_usdt = avail_bal
+                    upnl_usdt = upnl_val
+                    margin_usdt = margin_val
                 elif asset_name == "USDC":
                     total_usdc = wallet_bal
                     free_usdc = avail_bal
+                    upnl_usdc = upnl_val
+                    margin_usdc = margin_val
 
             selected_total = total_usdc if self.settlement == "USDC" else total_usdt
             selected_free = free_usdc if self.settlement == "USDC" else free_usdt
+            selected_upnl = upnl_usdc if self.settlement == "USDC" else upnl_usdt
+            selected_margin = margin_usdc if self.settlement == "USDC" else margin_usdt
 
             return {
                 "mode": "OFFICIAL_BINANCE_TESTNET",
-                "total_equity": round(selected_total, 2),
+                "total_equity": round(selected_margin, 2),
+                "wallet_balance": round(selected_total, 2),
+                "unrealized_pnl": round(selected_upnl, 2),
                 "free_balance": round(selected_free, 2),
                 "total_usdt": round(total_usdt, 2),
                 "total_usdc": round(total_usdc, 2),
                 "settlement_currency": self.settlement,
                 "zero_fee_usdc": self.settlement == "USDC",
                 "balances": balances,
+                "info": {
+                    "totalWalletBalance": str(round(selected_total, 8)),
+                    "totalUnrealizedProfit": str(round(selected_upnl, 8)),
+                    "totalMarginBalance": str(round(selected_margin, 8)),
+                    "availableBalance": str(round(selected_free, 8)),
+                },
             }
         except Exception as e:
             return {

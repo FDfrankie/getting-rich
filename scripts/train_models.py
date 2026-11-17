@@ -203,8 +203,10 @@ def train_taiwan_ranker(
     allow_synthetic: bool = False,
     output_dir: str = MODELS_DIR,
 ) -> dict[str, Any]:
+    import hashlib
     os.makedirs(output_dir, exist_ok=True)
-    symbols = [s for s in (watchlist or DEFAULT_WATCHLIST) if not TaiwanStockMLRanker.is_inverse_etf(s)]
+    is_inv = getattr(TaiwanStockMLRanker, "is_inverse_etf", lambda s: str(s).endswith("R.TW"))
+    symbols = [s for s in (watchlist or DEFAULT_WATCHLIST) if not is_inv(s)]
     stock_dfs: dict[str, pd.DataFrame] = {}
     any_synthetic = False
 
@@ -233,28 +235,37 @@ def train_taiwan_ranker(
             df_s.index = pd.date_range(end=datetime.now(timezone.utc).date(), periods=len(df_s), freq="B")
             stock_dfs[sym] = df_s
 
-    ranker = TaiwanStockMLRanker(model_type="lightgbm", target_mode="RAW_RETURN")
-    clean_df, feature_cols = ranker.prepare_dataset(stock_dfs, exclude_inverse_etfs=True)
+    ranker = TaiwanStockMLRanker(model_type="lightgbm")
+    clean_df, feature_cols = ranker.prepare_dataset(stock_dfs)
     metrics = ranker.train_model(clean_df, test_fraction=0.20, embargo_days=5)
 
     out_path = os.path.join(output_dir, "taiwan_stock_ranker.joblib")
-    manifest = ranker.save_model(
-        out_path,
-        metadata={
-            "target": "taiwan_ranker",
-            "universe_symbols": list(stock_dfs.keys()),
-            "feature_cols": feature_cols,
-            "data_source": "SYNTHETIC" if any_synthetic else "LIVE_YFINANCE",
-            "is_synthetic": any_synthetic,
-            "deployment_stage": "RESEARCH_ONLY" if any_synthetic else "LOCAL_PAPER_READY",
-            "oos_metrics": {
-                "rank_ic": metrics["rank_ic"],
-                "daily_mean_ic": metrics["daily_mean_ic"],
-                "icir": metrics["icir"],
-                "mae": metrics["mae"],
-            },
+    ranker.save_model(out_path)
+    h = hashlib.sha256()
+    with open(out_path, "rb") as f:
+        while chunk := f.read(8192):
+            h.update(chunk)
+    sha = h.hexdigest()
+    manifest = {
+        "target": "taiwan_ranker",
+        "model_name": "taiwan_stock_ranker",
+        "version": "1.0.0",
+        "sha256": sha,
+        "weights_sha256": sha,
+        "framework": "lightgbm",
+        "universe_symbols": list(stock_dfs.keys()),
+        "feature_cols": feature_cols,
+        "data_source": "SYNTHETIC" if any_synthetic else "LIVE_YFINANCE",
+        "is_synthetic": any_synthetic,
+        "deployment_stage": "RESEARCH_ONLY" if any_synthetic else "LOCAL_PAPER_READY",
+        "oos_metrics": {
+            "rank_ic": metrics.get("rank_ic"),
+            "rmse": metrics.get("rmse"),
         },
-    )
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with open(os.path.join(output_dir, "taiwan_stock_manifest.json"), "w", encoding="utf-8") as mf:
+        json.dump(manifest, mf, indent=2, ensure_ascii=False)
     return {"metrics": metrics, "manifest": manifest, "model_path": out_path}
 
 

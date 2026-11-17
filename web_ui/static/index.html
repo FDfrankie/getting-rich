@@ -243,49 +243,90 @@
 
       <!-- 快速交易面板與活動日誌 -->
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <!-- 手動下單盤面 -->
-        <div class="glass-card rounded-2xl p-4 md:p-5 lg:col-span-1 space-y-4">
-          <h3 class="font-bold text-sm text-slate-200 flex items-center space-x-2">
-            <i class="fa-solid fa-gamepad text-indigo-400"></i>
-            <span>手動閃電下單</span>
-          </h3>
+        <!-- 手動下單盤面 (比照幣安合約官網型式) -->
+        <div class="glass-card rounded-2xl p-4 md:p-5 lg:col-span-1 space-y-3">
+          <div class="flex items-center justify-between">
+            <h3 class="font-bold text-sm text-slate-200 flex items-center space-x-2">
+              <i class="fa-solid fa-gamepad text-amber-400"></i>
+              <span>合約委託下單</span>
+            </h3>
+            <div class="flex items-center space-x-1.5 text-[10px]">
+              <span class="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-bold">全倉 Cross</span>
+              <select id="leverageSelect" class="bg-slate-800 border border-amber-500/40 rounded px-1.5 py-0.5 text-amber-300 font-bold focus:outline-none">
+                <option value="1">1x</option>
+                <option value="2" selected>2x</option>
+                <option value="3">3x</option>
+                <option value="5">5x</option>
+                <option value="10">10x</option>
+              </select>
+            </div>
+          </div>
 
-          <div class="space-y-3">
+          <!-- 市價單 / 限價單 切換頁籤 -->
+          <div id="orderTypeTabs" class="grid grid-cols-2 bg-slate-900 p-1 rounded-xl border border-slate-800 text-xs font-bold">
+            <button type="button" id="tabOrderMarket" onclick="setOrderType('market')" class="py-1.5 rounded-lg bg-amber-500 text-slate-950 transition">市價單 (Market)</button>
+            <button type="button" id="tabOrderLimit" onclick="setOrderType('limit')" class="py-1.5 rounded-lg text-slate-400 hover:text-white transition">限價單 (Limit)</button>
+          </div>
+
+          <div class="space-y-2.5">
+            <div class="flex items-center justify-between text-[11px] text-slate-400">
+              <span>可用保證金: <strong id="availBalanceLabel" class="text-slate-200">--</strong> USDC</span>
+              <span id="orderSymbolLabel" class="font-mono text-indigo-300">BTC/USDT</span>
+            </div>
+
+            <!-- 限價輸入框 (選限價單時顯示) -->
+            <div id="limitPriceBox" class="hidden">
+              <div class="flex items-center justify-between text-[10px] text-slate-400 mb-1">
+                <span>委託價格 (USDT)</span>
+                <button type="button" onclick="fillBestPrice()" class="text-amber-400 hover:underline">填入最新市價 (BBO)</button>
+              </div>
+              <input type="number" id="orderLimitPrice" step="0.1" placeholder="輸入限價價格" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-amber-500">
+            </div>
+
             <div>
-              <label class="text-xs text-slate-400">當前標的下單數量 (<span id="orderSymbolLabel">BTC/USDT</span>)</label>
+              <label class="text-[11px] text-slate-400">委託數量</label>
               <div class="flex items-center space-x-2 mt-1">
-                <input type="number" id="orderAmount" step="0.001" value="0.01" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
+                <input type="number" id="orderAmount" step="0.001" value="0.01" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-indigo-500">
                 <span id="orderAssetUnit" class="text-xs text-slate-400 font-bold">BTC</span>
               </div>
+              <!-- 倉位比例快捷鍵 -->
+              <div class="grid grid-cols-4 gap-1.5 mt-1.5 text-[10px]">
+                <button type="button" onclick="setOrderPct(0.25)" class="py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-semibold">25%</button>
+                <button type="button" onclick="setOrderPct(0.50)" class="py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-semibold">50%</button>
+                <button type="button" onclick="setOrderPct(0.75)" class="py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-semibold">75%</button>
+                <button type="button" onclick="setOrderPct(1.00)" class="py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-semibold">100%</button>
+              </div>
             </div>
 
-            <!-- 持倉精細控制：50% 減倉、手動鎖定開關、SL/TP 設定 -->
+            <!-- 止盈 / 止損 -->
             <div class="grid grid-cols-2 gap-2 text-xs">
               <div>
-                <label class="text-[10px] text-slate-400">停損 (SL)</label>
-                <input type="number" id="inputSL" placeholder="價格" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white">
+                <label class="text-[10px] text-slate-400">止盈 (TP)</label>
+                <input type="number" id="inputTP" placeholder="目標價格" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-emerald-300 font-mono">
               </div>
               <div>
-                <label class="text-[10px] text-slate-400">停利 (TP)</label>
-                <input type="number" id="inputTP" placeholder="價格" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-white">
+                <label class="text-[10px] text-slate-400">止損 (SL)</label>
+                <input type="number" id="inputSL" placeholder="觸發價格" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-rose-300 font-mono">
               </div>
             </div>
 
-            <div class="flex items-center justify-between text-xs py-1 px-1">
+            <div class="flex items-center justify-between text-[11px] pt-0.5">
+              <label class="text-slate-400 flex items-center space-x-1.5 cursor-pointer">
+                <input type="checkbox" id="reduceOnlyCheckbox" class="rounded bg-slate-800 border-slate-700 text-amber-500 focus:ring-0">
+                <span>只減倉 (Reduce-Only)</span>
+              </label>
               <label class="text-slate-400 flex items-center space-x-1.5 cursor-pointer">
                 <input type="checkbox" id="manualOverrideCheckbox" class="rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
-                <span class="font-bold text-amber-300">手動鎖定開關 (Manual Override)</span>
+                <span class="font-bold text-amber-300">手動鎖定</span>
               </label>
             </div>
 
             <div class="grid grid-cols-2 gap-2 pt-1">
-              <button data-opens-position="true" onclick="executeOrder('BUY')" class="w-full py-2 rounded-xl font-bold text-xs bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition flex items-center justify-center space-x-1">
-                <i class="fa-solid fa-arrow-trend-up"></i>
-                <span>市價做多 (Long)</span>
+              <button data-opens-position="true" onclick="executeOrder('BUY')" class="w-full py-2.5 rounded-xl font-bold text-xs bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition flex items-center justify-center space-x-1">
+                <span>買入 / 開多 (Long)</span>
               </button>
-              <button data-opens-position="true" onclick="executeOrder('SELL')" class="w-full py-2 rounded-xl font-bold text-xs bg-rose-600 hover:bg-rose-500 text-white shadow-lg transition flex items-center justify-center space-x-1">
-                <i class="fa-solid fa-arrow-trend-down"></i>
-                <span>市價做空 (Short)</span>
+              <button data-opens-position="true" onclick="executeOrder('SELL')" class="w-full py-2.5 rounded-xl font-bold text-xs bg-rose-600 hover:bg-rose-500 text-white shadow-lg transition flex items-center justify-center space-x-1">
+                <span>賣出 / 開空 (Short)</span>
               </button>
             </div>
 
@@ -1059,6 +1100,12 @@
               ? `${Number(d.total_equity).toLocaleString()} <span class="text-xs font-normal text-slate-400">USDT</span>`
               : `<span class="text-slate-500">unavailable</span> <span class="text-xs font-normal text-slate-400">USDT</span>`;
           }
+          if (d.current_price) lastKnownPrice = Number(d.current_price);
+          if (d.free_balance !== undefined && d.free_balance !== null) {
+            lastFreeBalance = Number(d.free_balance);
+            const ab = document.getElementById('availBalanceLabel');
+            if (ab) ab.innerText = lastFreeBalance.toLocaleString(undefined, {maximumFractionDigits: 2});
+          }
           const prcElem = document.getElementById('cryptoPrice');
           if (prcElem) {
             prcElem.innerHTML = (d.current_price !== undefined && d.current_price !== null)
@@ -1136,6 +1183,41 @@
       fetchCryptoData();
     }
 
+    let currentOrderType = 'market';
+    let lastKnownPrice = 0;
+    let lastFreeBalance = 0;
+
+    function setOrderType(t) {
+      currentOrderType = t;
+      const mBtn = document.getElementById('tabOrderMarket');
+      const lBtn = document.getElementById('tabOrderLimit');
+      const box = document.getElementById('limitPriceBox');
+      if (t === 'limit') {
+        lBtn.className = 'py-1.5 rounded-lg bg-amber-500 text-slate-950 transition';
+        mBtn.className = 'py-1.5 rounded-lg text-slate-400 hover:text-white transition';
+        box?.classList.remove('hidden');
+        fillBestPrice();
+      } else {
+        mBtn.className = 'py-1.5 rounded-lg bg-amber-500 text-slate-950 transition';
+        lBtn.className = 'py-1.5 rounded-lg text-slate-400 hover:text-white transition';
+        box?.classList.add('hidden');
+      }
+    }
+
+    function fillBestPrice() {
+      const el = document.getElementById('orderLimitPrice');
+      if (el && lastKnownPrice > 0) el.value = lastKnownPrice.toFixed(1);
+    }
+
+    function setOrderPct(pct) {
+      const lev = parseFloat(document.getElementById('leverageSelect')?.value || '1');
+      const refPrice = (currentOrderType === 'limit' ? parseFloat(document.getElementById('orderLimitPrice')?.value) : 0) || lastKnownPrice;
+      if (refPrice > 0 && lastFreeBalance > 0) {
+        const qty = (lastFreeBalance * lev * pct * 0.98) / refPrice;
+        document.getElementById('orderAmount').value = Math.max(0.001, Math.floor(qty * 1000) / 1000).toFixed(3);
+      }
+    }
+
     async function executeOrder(side) {
       const amount = parseFloat(document.getElementById('orderAmount').value) || 0.01;
       const isManual = document.getElementById('manualOverrideCheckbox')?.checked || false;
@@ -1149,6 +1231,10 @@
           amount,
           symbol: currentChartSymbol,
           manual_override: isManual,
+          order_type: currentOrderType,
+          price: currentOrderType === 'limit' ? parseFloat(document.getElementById('orderLimitPrice')?.value || '0') : null,
+          leverage: parseInt(document.getElementById('leverageSelect')?.value || '2', 10),
+          reduce_only: document.getElementById('reduceOnlyCheckbox')?.checked || false,
           stop_loss: sl ? parseFloat(sl) : null,
           take_profit: tp ? parseFloat(tp) : null
         })
