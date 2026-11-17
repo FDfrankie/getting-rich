@@ -38,6 +38,7 @@ class ContinuousAlphaMiner:
 
         # 基礎算子與數據欄位基因池
         self.fields = ["close", "open", "high", "low", "volume", "vwap", "returns"]
+        # Strictly verified BRAIN FASTEXPR operators & fields
         self.fundamental_fields = ["operating_cashflow", "operating_income", "sales", "assets", "liabilities", "debt", "equity", "cap", "ebitda"]
         self.sentiment_fields = ["target_price", "eps_consensus_mean"]
         self.group_ops = ["subindustry", "industry", "sector"]
@@ -49,8 +50,29 @@ class ContinuousAlphaMiner:
             ("ts_delta", [1, 3, 5]),
         ]
 
+    def generate_candidate_settings(self) -> dict[str, Any]:
+        """Rotate proven WorldQuant BRAIN simulation settings (Neutralization, Decay, Truncation)."""
+        return {
+            "instrumentType": "EQUITY",
+            "region": "USA",
+            "universe": random.choice(["TOP3000", "TOP1000"]),
+            "delay": 1,
+            "decay": random.choice([0, 4, 6, 8]),
+            "neutralization": random.choice(["SUBINDUSTRY", "INDUSTRY", "SECTOR"]),
+            "truncation": random.choice([0.01, 0.05, 0.08]),
+            "pasteurization": "ON",
+            "unitHandling": "VERIFY",
+            "nanHandling": "OFF",
+            "language": "FASTEXPR",
+            "visualization": False,
+        }
+
     def generate_candidate_expression(self) -> dict[str, str]:
-        """基因變異生成新的 Alpha 表達式 (涵蓋價量、基本面、分析師預期與跨產業中性化)"""
+        """
+        基因變異生成新的 Alpha 表達式：
+        結合 Kakushadze (2016)《101 Formulaic Alphas》(arXiv:1601.00991) 低相關性結構、
+        量價微結構、基本面品質與分析師預期修正。
+        """
         field_a = random.choice(self.fields)
         field_b = random.choice(["volume", "vwap", "returns"])
         op_name, window_choices = random.choice(self.ts_ops)
@@ -59,7 +81,7 @@ class ContinuousAlphaMiner:
         f1 = random.choice(self.fundamental_fields)
         f2 = random.choice(["assets", "cap", "equity", "sales"])
 
-        pattern = random.choice([1, 2, 3, 4, 5, 6, 7])
+        pattern = random.choice([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
         if pattern == 1:
             expr = f"-1 * {op_name}(ts_correlation({field_a}, {field_b}, {window}), {window})"
             name = f"Auto_{field_a}_{field_b}_Reversal_{window}"
@@ -82,9 +104,21 @@ class ContinuousAlphaMiner:
             else:
                 expr = f"ts_decay_linear(group_rank(eps_consensus_mean - ts_delay(eps_consensus_mean, 20), {grp}), 5)"
             name = f"Auto_Analyst_Sentiment_{s_field}_{grp}"
-        else:
+        elif pattern == 7:
             expr = f"group_rank(ts_delta(close, {window}) / (ts_std_dev(close, 20) + 1e-4), {grp}) + group_rank({f1} / (cap + 0.001), {grp})"
             name = f"Auto_Hybrid_PriceFund_{f1}_{grp}_{window}"
+        elif pattern == 8:
+            # Alpha#101-style intraday body-to-range efficiency
+            expr = f"group_neutralize(ts_decay_linear((close - open) / ((high - low) + 0.001), {window}), {grp})"
+            name = f"Alpha101_IntradayEfficiency_{grp}_{window}"
+        elif pattern == 9:
+            # Alpha#12-style volume-price divergence
+            expr = f"group_neutralize(signed_power(ts_delta(volume, 1), 1) * (-1 * ts_delta(close, {window})), {grp})"
+            name = f"Alpha101_VolPriceDivergence_{grp}_{window}"
+        else:
+            # Alpha#6 / Alpha#54-style VWAP-close mean reversion damped by ts_decay_linear
+            expr = f"ts_decay_linear(-1 * ts_correlation(open, volume, {window}) * rank((close - vwap) / (vwap + 1e-4)), 5)"
+            name = f"Alpha101_VwapReversion_{window}"
 
         return {"name": name, "expression": expr}
 
