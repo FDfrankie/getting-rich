@@ -61,6 +61,11 @@ from worldquant_brain.alpha_miner import ContinuousAlphaMiner
 from worldquant_brain.alpha_vault import AlphaVault
 from worldquant_brain.brain_client import BrainClient
 from worldquant_brain.brain_job_queue import BrainJobQueue
+from worldquant_brain.alpha_experiment_store import AlphaExperimentStore
+from worldquant_brain.brain_scheduler import BrainDailyScheduler
+from worldquant_brain.manual_priority_queue import ManualPriorityQueue
+from worldquant_brain.score_tracker import ScoreTracker
+from observability.audit_log import AuditLog
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -79,6 +84,11 @@ class QuantAppContext:
 
         self.alpha_vault = AlphaVault()
         self.alpha_vault.seed_initial_verified_alphas()
+        self.alpha_experiments = AlphaExperimentStore(self.alpha_vault.db_path)
+        self.brain_scheduler = BrainDailyScheduler(self.alpha_vault.db_path, int(os.getenv("BRAIN_DAILY_FLUSH_HOUR", "22")))
+        self.manual_brain_queue = ManualPriorityQueue(self.alpha_vault.db_path)
+        self.brain_score_tracker = ScoreTracker(self.alpha_vault.db_path)
+        self.audit_log = AuditLog(self.alpha_vault.db_path)
         self.brain_client = BrainClient()
         self.brain_job_queue = BrainJobQueue(self.brain_client, on_complete_callback=self._on_brain_job_completed, on_fail_callback=self._on_brain_job_failed, db_path=self.alpha_vault.db_path)
         self.alpha_miner = ContinuousAlphaMiner(symbol=DEFAULT_SYMBOL)
@@ -404,8 +414,34 @@ class QuantAppContext:
             self.active_bot = CryptoTradingBot(symbol=self.active_bot.symbol, strategy=strat, exchange_adapter=adapter)
         self.add_log(f"已切換操盤策略至: 【{strat_name.upper()} 策略】(自動掛載優化權重)")
 
+    def _record_brain_experiment_started(self, job) -> None:
+        try:
+            self.alpha_experiments.start_experiment(
+                job.job_id, job.expression, source=getattr(job, "source", "AUTO_MINING"),
+                priority=int(getattr(job, "priority", 20)), settings=getattr(job, "settings", {}),
+            )
+            self.audit_log.write(
+                component="brain_queue", action="experiment_queued", outcome="OK",
+                entity_type="brain_job", entity_id=job.job_id,
+                details={"source": getattr(job, "source", "AUTO_MINING"), "priority": getattr(job, "priority", 20)},
+            )
+        except Exception:
+            pass
+
     def _on_brain_job_failed(self, job):
-        """當 WorldQuant BRAIN 模擬失敗 (例如使用了不存在的函式或 operator) 時，從 Vault 清單移除不保留"""
+        """當 WorldQuant BRAIN 模擬失敗時，記錄至經驗庫並從 Vault 清單移除不佔版面"""
+        try:
+            self.alpha_experiments.complete_experiment(
+                job.job_id,
+                {
+                    "status": "FAILED",
+                    "failure_code": "BRAIN_SIMULATION_FAILED",
+                    "safe_error": getattr(job, "safe_error", None),
+                    "simulation_id": getattr(job, "alpha_id", None),
+                },
+            )
+        except Exception:
+            pass
         try:
             vid = getattr(job, "vault_id", None)
             if vid is not None:
@@ -496,11 +532,24 @@ class QuantAppContext:
                     self.alpha_vault.delete_alpha(int(vid))
                 return
 
+            try:
+                self.alpha_experiments.complete_experiment(
+                    job.job_id,
+                    {
+                        "status": "BRAIN_COMPLETE",
+                        "simulation_id": str(alpha_id),
+                        "sharpe": float(sharpe),
+                        "fitness": float(fitness),
+                        "turnover": float(turnover),
+                        "margin": margin,
+                        "is_check_status": "PASS" if checks_passed else "FAIL",
+                    },
+                )
+            except Exception:
+                pass
             self.alpha_miner.total_accepted += 1
-            should_try_submit = bool(getattr(job, "auto_submit", False)) or (
-                os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true"
-                and float(sharpe) >= float(os.getenv("BRAIN_HIGH_BAR_SHARPE", "1.80"))
-            )
+            # Only direct manual auto_submit jobs submit immediately; background mined alphas enter the daily pool so only the highest-profitability top 2 are submitted per day.
+            should_try_submit = bool(getattr(job, "auto_submit", False)) and not bool(getattr(job, "simulation_only", True))
 
             submitted_ok = False
             if should_try_submit:
@@ -551,8 +600,11 @@ class QuantAppContext:
                     while self.brain_job_queue.queue_depth() < int(os.getenv('BRAIN_QUEUE_TARGET_DEPTH', '8')):
                         cand = self.alpha_miner.generate_unique_candidate()
                         sim_settings = self.alpha_miner.generate_candidate_settings()
-                        job, is_new = self.brain_job_queue.create_job(cand["expression"], settings=sim_settings)
+                        job, is_new = self.brain_job_queue.create_job(
+                            cand["expression"], settings=sim_settings, priority=20, source="AUTO_MINING", simulation_only=True
+                        )
                         if is_new:
+                            self._record_brain_experiment_started(job)
                             self.alpha_miner.total_mined += 1
                             self.add_log(f"🚀 [BRAIN 線上送測] 已排入遠端模擬: {cand['name']} (Job {job.job_id})")
                         else:
@@ -560,11 +612,22 @@ class QuantAppContext:
                     if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
                         from datetime import datetime, timedelta, timezone
                         taipei_now = datetime.now(timezone(timedelta(hours=8)))
-                        if taipei_now.hour >= int(os.getenv("BRAIN_DAILY_FLUSH_HOUR", "22")):
-                            flushed = self.brain_client.flush_daily_candidates()
-                            for sr in flushed:
+                        claim = self.brain_scheduler.claim_due_run(worker_id=f"web-{os.getpid()}", now=taipei_now)
+                        if claim.acquired:
+                            max_daily = int(os.getenv("BRAIN_MAX_DAILY_SUBMISSIONS", "2") or "2")
+                            flushed = self.brain_client.flush_daily_candidates(max_daily_submissions=max_daily)
+                            sub_cnt = 0
+                            for sr in (flushed or []):
                                 if sr.get("success"):
-                                    self.add_log(f"🏆 [BRAIN 每日擇優結算送出] Alpha {sr.get('alpha_id')} 已正式送出！")
+                                    sub_cnt += 1
+                                    aid = str(sr.get("alpha_id") or "")
+                                    for a in self.alpha_vault.list_alphas():
+                                        if a.get("brain_alpha_id") == aid or a.get("name") == f"BRAIN_{aid}":
+                                            self.alpha_vault.delete_alpha(int(a["id"]))
+                                    self.add_log(f"🏆 [BRAIN 每日最高分擇優送出] Alpha {aid} 已正式送出並移出待送清單！")
+                            self.brain_scheduler.finish(
+                                claim.run_id, status="COMPLETED", considered=len(flushed or []), submitted=sub_cnt, now=taipei_now
+                            )
             except Exception:
                 pass
             time.sleep(5)
@@ -639,6 +702,13 @@ class QuantAppContext:
                 rem_orders = (oo_fn(self.active_bot.symbol) or []) if callable(oo_fn) else []
                 rem_eq = float(bal.get("total_equity") or 0.0) if bal.get("total_equity") is not None else float(self.active_bot.balance_usdt)
                 self.active_bot.balance_usdt = rem_eq
+                rm = getattr(self.active_bot, "risk_manager", None)
+                if rm is not None and rem_eq > 0 and not getattr(self, "_risk_capital_anchored", False):
+                    rm.initial_capital = rem_eq
+                    rm.peak_capital = rem_eq
+                    rm.current_capital = rem_eq
+                    rm.is_halted = False
+                    self._risk_capital_anchored = True
                 # 同步本地持倉與遠端持倉，避免初始啟動時產生持倉或餘額 drift
                 target_pos = 0.0
                 for rp in rem_pos:
@@ -1080,6 +1150,9 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 return self._send_json_response({"success": False, "error": str(e)}, status=500)
 
+        if path == "/api/brain/schedule":
+            return self._send_json_response(APP_STATE.brain_scheduler.status())
+
         # API: 已找到的官方 BRAIN Alpha 清單（不受每日提交配額或後續 Gate 隱藏）
         if path == "/api/brain/alphas/discovered":
             discovered = APP_STATE.alpha_vault.list_discovered_alphas()
@@ -1295,6 +1368,48 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                     res["deleted_from_vault"] = False
                     res["message"] = f"Alpha 模擬資料已保留，但官方提交未完成 [{brain_submit_res.get('status')}]: {brain_submit_res.get('error')}"
             return self._send_json_response(res)
+
+        # POST /api/brain/submit_direct：對已有官方 brain_alpha_id 的因子直接執行 IS-Check + 正式 Submit（不再重跑 Simulate），送出成功即從清單移除
+        if path == "/api/brain/submit_direct":
+            try:
+                brain_alpha_id = str(post_data.get("brain_alpha_id") or post_data.get("alpha_id") or "").strip()
+                if brain_alpha_id.startswith("BRAIN_"):
+                    brain_alpha_id = brain_alpha_id[len("BRAIN_"):]
+                vault_id = post_data.get("vault_id")
+                if not brain_alpha_id:
+                    return self._send_error_json("MISSING_BRAIN_ALPHA_ID", "缺少官方 BRAIN Alpha ID，請先執行模擬", status=400)
+                max_daily = int(os.getenv("BRAIN_MAX_DAILY_SUBMISSIONS", "2") or "2")
+                sub_res = APP_STATE.brain_client.submit_alpha(brain_alpha_id, max_daily_submissions=max_daily, enforce_checks=True)
+                if sub_res.get("success"):
+                    if vault_id is not None and str(vault_id).isdigit():
+                        APP_STATE.alpha_vault.delete_alpha(int(vault_id))
+                    APP_STATE.add_log(f"🏆 [BRAIN 直接正式送出成功] Alpha {brain_alpha_id} 已通過官方驗證並正式送出，已移出清單！")
+                    return self._send_json_response({"success": True, "alpha_id": brain_alpha_id, "message": f"Alpha {brain_alpha_id} 已正式送出至 WorldQuant BRAIN 並從清單移除！", "result": sub_res})
+                return self._send_json_response({"success": False, "alpha_id": brain_alpha_id, "message": f"未通過官方提交檢查或已達每日上限 [{sub_res.get('status')}]: {sub_res.get('error')}", "result": sub_res})
+            except Exception as exc:
+                return self._send_error_json("SUBMIT_DIRECT_FAILED", str(exc), status=500)
+
+        if path == "/api/brain/simulations/manual":
+            try:
+                expr = str(post_data.get("expression") or "").strip()
+                if not expr:
+                    return self._send_error_json("INVALID_EXPRESSION", "Alpha expression is required", status=400)
+                requested_by = str(post_data.get("requested_by") or "manual-ui")
+                priority = max(80, min(100, int(post_data.get("priority", 100))))
+                job, is_new = APP_STATE.brain_job_queue.create_job(
+                    expr, settings=post_data.get("settings"), auto_submit=False,
+                    priority=priority, source="MANUAL", requested_by=requested_by,
+                    manual_note=post_data.get("manual_note"), simulation_only=True,
+                )
+                if is_new:
+                    APP_STATE._record_brain_experiment_started(job)
+                return self._send_json_response({
+                    "success": True, "created": is_new, "job_id": job.job_id,
+                    "priority": job.priority, "source": job.source,
+                    "simulation_only": True, "status": job.status.value,
+                }, status=202)
+            except Exception as exc:
+                return self._send_error_json("MANUAL_QUEUE_FAILED", type(exc).__name__, status=500)
 
         # 🚀 POST /api/brain/simulations：建立非同步送測 job (符合 docs/BRAIN_WEB_API_ASYNC_FIX_SPEC.md)
         if path == "/api/brain/simulations":

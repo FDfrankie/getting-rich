@@ -1592,13 +1592,26 @@
     }
 
     // 3. WorldQuant BRAIN Alpha 倉庫
+    async function submitDirectAlpha(vaultId, brainAlphaId) {
+      try {
+        const res = await fetch('/api/brain/submit_direct', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ vault_id: vaultId, brain_alpha_id: brainAlphaId })
+        });
+        const d = await res.json();
+        alert(d.message || (d.success ? '已正式送出！' : '送出未完成'));
+        fetchAlphas();
+      } catch (e) {
+        alert('直接送出失敗: ' + e);
+      }
+    }
+
     function renderAlphaActionButton(a) {
       const st = String(a.status || '').toUpperCase();
-      if (st === 'BRAIN_COMPLETE') {
-        return `<button onclick="testAlpha('${a.id}', '${encodeURIComponent(a.expression)}', 'worldquant')" class="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold transition">🔍 執行 IS-Check / 重測</button>`;
-      }
-      if (st === 'SUBMISSION_CANDIDATE' || st === 'IS_CHECK_PASSED') {
-        return `<button onclick="testAlpha('${a.id}', '${encodeURIComponent(a.expression)}', 'worldquant')" class="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold transition">🚀 正式提交</button>`;
+      const rawId = String(a.brain_alpha_id || a.name || '').replace(/^BRAIN_/, '');
+      if (st === 'BRAIN_COMPLETE' || st === 'SUBMISSION_CANDIDATE' || st === 'IS_CHECK_PASSED') {
+        return `<button onclick="submitDirectAlpha('${a.id}', '${rawId}')" class="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold transition">🚀 驗證並正式 Submit（不重跑模擬）</button>`;
       }
       if (st === 'SUBMITTED') {
         return `<span class="text-[10px] text-emerald-400 font-bold">✅ 已正式提交</span>`;

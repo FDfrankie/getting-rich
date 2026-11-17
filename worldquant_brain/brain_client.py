@@ -459,7 +459,8 @@ class BrainClient:
         import sqlite3
         from datetime import datetime, timezone
         day = day_str or self._today_taipei()
-        score = float(sharpe) + 0.5 * float(fitness)
+        norm_m = float(margin) / 10000.0 if float(margin) > 0.5 else float(margin)
+        score = float(sharpe) * 0.55 + float(fitness) * 0.35 + norm_m * 100.0 - float(turnover) * 0.15
         now_iso = datetime.now(timezone.utc).isoformat()
         db_p = self._quota_db()
         os.makedirs(os.path.dirname(os.path.abspath(db_p)), exist_ok=True)

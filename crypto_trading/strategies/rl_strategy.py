@@ -66,17 +66,8 @@ class RLAlphaStrategy(BaseStrategy):
                 decision = validate_model_manifest(self.weights_path, require_inference_approval=True)
                 if not decision.allowed:
                     self.is_ready = False
-                    self.model_status = (
-                        "UNVERIFIED_MODEL_QUARANTINED"
-                        if decision.status in {
-                            "MANIFEST_MISSING",
-                            "MANIFEST_INVALID",
-                            "MODEL_QUARANTINED",
-                            "SYNTHETIC_MODEL_QUARANTINED",
-                            "INFERENCE_NOT_APPROVED",
-                        }
-                        else decision.status
-                    )
+                    self.governance_status = decision.status
+                    self.model_status = "UNVERIFIED_MODEL_QUARANTINED"
                     return False
                 meta = decision.manifest
             self.agent = PPOAgent(state_dim=state_dim, action_dim=1)

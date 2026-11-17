@@ -72,6 +72,14 @@ class BrainSimulationJob:
         self.vault_id: int | None = None
         self.auto_submit: bool = False
         self.submitted_to_brain: bool = False
+        self.priority: int = 20
+        self.source: str = "AUTO_MINING"
+        self.requested_by: str | None = None
+        self.manual_note: str | None = None
+        self.simulation_only: bool = True
+        self.queued_at: str = self.created_at
+        self.claimed_by: str | None = None
+        self.claimed_at: str | None = None
         self.submit_result: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -119,6 +127,10 @@ class BrainSimulationJob:
             "vault_id": self.vault_id,
             "brain_submitted": self.submitted_to_brain,
             "brain_submit": self.submit_result,
+            "priority": self.priority, "source": self.source,
+            "requested_by": self.requested_by, "manual_note": self.manual_note,
+            "simulation_only": self.simulation_only, "queued_at": self.queued_at,
+            "claimed_by": self.claimed_by, "claimed_at": self.claimed_at,
         }
         return res
 
@@ -188,9 +200,25 @@ class BrainJobQueue:
                         alpha_id TEXT,
                         metrics_json TEXT,
                         safe_error TEXT,
-                        created_at TEXT NOT NULL
+                        created_at TEXT NOT NULL,
+                        priority INTEGER NOT NULL DEFAULT 20,
+                        source TEXT NOT NULL DEFAULT 'AUTO_MINING',
+                        requested_by TEXT, manual_note TEXT,
+                        simulation_only INTEGER NOT NULL DEFAULT 1,
+                        queued_at TEXT, claimed_by TEXT, claimed_at TEXT
                     )"""
                 )
+                existing = {row[1] for row in conn.execute("PRAGMA table_info(brain_jobs)")}
+                for declaration in (
+                    "priority INTEGER NOT NULL DEFAULT 20",
+                    "source TEXT NOT NULL DEFAULT 'AUTO_MINING'", "requested_by TEXT",
+                    "manual_note TEXT", "simulation_only INTEGER NOT NULL DEFAULT 1",
+                    "queued_at TEXT", "claimed_by TEXT", "claimed_at TEXT",
+                ):
+                    if declaration.split()[0] not in existing:
+                        conn.execute(f"ALTER TABLE brain_jobs ADD COLUMN {declaration}")
+                conn.execute("UPDATE brain_jobs SET queued_at=COALESCE(queued_at, created_at)")
+                conn.execute("CREATE INDEX IF NOT EXISTS ix_brain_jobs_priority ON brain_jobs(status, priority DESC, queued_at ASC)")
         finally:
             conn.close()
 
@@ -202,8 +230,8 @@ class BrainJobQueue:
             with conn:
                 conn.execute(
                     """INSERT OR REPLACE INTO brain_jobs
-                    (job_id, simulation_key, expression, settings_json, status, simulation_location, alpha_id, metrics_json, safe_error, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (job_id, simulation_key, expression, settings_json, status, simulation_location, alpha_id, metrics_json, safe_error, created_at, priority, source, requested_by, manual_note, simulation_only, queued_at, claimed_by, claimed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         job.job_id,
                         job.simulation_key,
@@ -213,8 +241,9 @@ class BrainJobQueue:
                         job.simulation_location,
                         job.alpha_id,
                         json.dumps(job.metrics, ensure_ascii=False),
-                        job.safe_error,
-                        job.created_at,
+                        job.safe_error, job.created_at, job.priority, job.source,
+                        job.requested_by, job.manual_note, int(job.simulation_only),
+                        job.queued_at, job.claimed_by, job.claimed_at,
                     ),
                 )
         finally:
@@ -238,6 +267,15 @@ class BrainJobQueue:
                 job.simulation_location = r["simulation_location"]
                 job.alpha_id = r["alpha_id"]
                 job.safe_error = r["safe_error"]
+                keys = set(r.keys())
+                job.priority = int(r["priority"]) if "priority" in keys else 20
+                job.source = r["source"] if "source" in keys else "AUTO_MINING"
+                job.requested_by = r["requested_by"] if "requested_by" in keys else None
+                job.manual_note = r["manual_note"] if "manual_note" in keys else None
+                job.simulation_only = bool(r["simulation_only"]) if "simulation_only" in keys else True
+                job.queued_at = (r["queued_at"] if "queued_at" in keys else None) or job.created_at
+                job.claimed_by = r["claimed_by"] if "claimed_by" in keys else None
+                job.claimed_at = r["claimed_at"] if "claimed_at" in keys else None
                 if r["metrics_json"]:
                     job.metrics = json.loads(r["metrics_json"])
                 try:
@@ -267,6 +305,9 @@ class BrainJobQueue:
         settings: Mapping[str, Any] | None = None,
         vault_id: int | None = None,
         auto_submit: bool = False,
+        priority: int = 20, source: str = "AUTO_MINING",
+        requested_by: str | None = None, manual_note: str | None = None,
+        simulation_only: bool = True,
     ) -> tuple[BrainSimulationJob, bool]:
         key = compute_simulation_key(expression, settings)
         with self._lock:
@@ -283,7 +324,13 @@ class BrainJobQueue:
                 settings=dict(settings or {}),
             )
             job.vault_id = vault_id
-            job.auto_submit = bool(auto_submit)
+            job.auto_submit = bool(auto_submit) and not bool(simulation_only)
+            job.priority = int(priority)
+            job.source = str(source or "AUTO_MINING")
+            job.requested_by = requested_by
+            job.manual_note = manual_note
+            job.simulation_only = bool(simulation_only)
+            job.queued_at = datetime.now(timezone.utc).isoformat()
             self._jobs[job_id] = job
             self._key_to_job_id[key] = job_id
             self._pending_queue.append(job_id)
@@ -321,8 +368,16 @@ class BrainJobQueue:
             job_to_run = None
             with self._lock:
                 if self._pending_queue:
+                    self._pending_queue.sort(key=lambda jid: (
+                        -int(getattr(self._jobs.get(jid), "priority", 20)),
+                        str(getattr(self._jobs.get(jid), "queued_at", "")),
+                    ))
                     job_id = self._pending_queue.pop(0)
                     job_to_run = self._jobs.get(job_id)
+                    if job_to_run is not None:
+                        job_to_run.claimed_by = threading.current_thread().name
+                        job_to_run.claimed_at = datetime.now(timezone.utc).isoformat()
+                        self._persist_job(job_to_run)
 
             if job_to_run:
                 self._execute_job(job_to_run)
