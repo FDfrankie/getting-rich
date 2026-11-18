@@ -69,8 +69,8 @@ class BrainClient:
         poll_interval: float = 5.0,
         session: requests.Session | None = None,
     ) -> None:
-        self.email = email or os.getenv("BRAIN_EMAIL") or os.getenv("BRAIN_USERNAME")
-        self.password = password or os.getenv("BRAIN_PASSWORD")
+        self.email = email if email is not None else (os.getenv("BRAIN_EMAIL") or os.getenv("BRAIN_USERNAME"))
+        self.password = password if password is not None else os.getenv("BRAIN_PASSWORD")
         self.timeout = float(timeout)
         self.poll_interval = float(poll_interval)
         self.session = session or requests.Session()
@@ -664,3 +664,64 @@ class BrainClient:
             "http_status": resp.status_code,
             "error": mask_sensitive_data((resp.text or "")[:300]),
         }
+
+    def fetch_challenge_score(self) -> dict[str, Any]:
+        """Fetch authenticated user's Challenge score, daily score, rank, and progress toward 10,000 points
+        corresponding to https://platform.worldquantbrain.com/competition/challenge.
+        """
+        if self.offline_mode:
+            return {
+                "success": False,
+                "status": "OFFLINE",
+                "error": "BRAIN_EMAIL/BRAIN_PASSWORD 未設定，無法連線抓取 Challenge 分數",
+            }
+        if not self.is_authenticated and not self.authenticate():
+            return {"success": False, "status": "AUTH_FAILED", "error": "BRAIN 登入認證失敗"}
+
+        candidate_endpoints = (
+            f"{self.BASE_URL}/users/self/competitions/challenge",
+            f"{self.BASE_URL}/competitions/challenge",
+            f"{self.BASE_URL}/users/self",
+        )
+        merged_payload: dict[str, Any] = {}
+        last_status = 0
+        hit_endpoint = None
+
+        for url in candidate_endpoints:
+            try:
+                resp = self.session.get(url, timeout=self.timeout)
+                last_status = resp.status_code
+                if resp.status_code in (401, 403):
+                    self.authenticated = False
+                    if self.authenticate():
+                        resp = self.session.get(url, timeout=self.timeout)
+                        last_status = resp.status_code
+                if resp.status_code == 200 and resp.content:
+                    data = resp.json()
+                    if isinstance(data, dict):
+                        merged_payload.update(data)
+                        if hit_endpoint is None:
+                            hit_endpoint = url
+                        # Stop early if we found explicit score fields
+                        if any(k in data for k in ("totalScore", "total_score", "score", "dailyScore", "daily_score")):
+                            break
+            except Exception:
+                continue
+
+        if not merged_payload:
+            return {
+                "success": False,
+                "status": "ENDPOINT_UNAVAILABLE",
+                "http_status": last_status,
+                "error": f"無法從 BRAIN Challenge API 取得分數資料 (HTTP {last_status})",
+            }
+
+        return {
+            "success": True,
+            "status": "OK",
+            "endpoint": hit_endpoint,
+            "payload": merged_payload,
+        }
+
+
+WorldQuantBrainClient = BrainClient

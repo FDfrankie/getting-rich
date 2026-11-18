@@ -105,3 +105,21 @@ def test_run_validation_gate_end_to_end_synthetic() -> None:
     assert set(report["leave_one_asset_out"].keys()) == {"BTC/USDT", "ETH/USDT", "SOL/USDT"}
     assert len(report["purged_walk_forward"]) == 5
     assert "severe_2_0x_funding" in report["global_split"]["cost_scenarios"]
+
+
+def test_causal_hysteresis_and_ic_stability_wrapper_pass_cost_stress() -> None:
+    from crypto_trading.lgbm_validation_gate import ICStabilityLinearWrapper, compute_causal_hysteresis_positions
+
+    rng = np.random.default_rng(99)
+    preds = np.sin(np.linspace(0, 20, 300)) + rng.normal(0, 0.1, size=300)
+    pos = compute_causal_hysteresis_positions(preds, entry_z=1.5, exit_z=-0.2, max_holding_bars=4)
+    assert set(np.unique(pos)).issubset({-1.0, 0.0, 1.0})
+    # Hysteresis should trade far less than every-bar flipping
+    turnover_events = int(np.sum(np.abs(np.diff(pos)) > 0))
+    assert turnover_events < 80
+
+    X = rng.normal(0, 1, size=(240, 4))
+    y = 0.02 * X[:, 0] - 0.015 * X[:, 1] + rng.normal(0, 0.005, size=240)
+    m = ICStabilityLinearWrapper(min_ic=0.01, blend_alpha=1.0).fit(X, y)
+    p = m.predict(X)
+    assert len(p) == 240

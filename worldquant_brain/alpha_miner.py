@@ -81,7 +81,7 @@ class ContinuousAlphaMiner:
         f1 = random.choice(self.fundamental_fields)
         f2 = random.choice(["assets", "cap", "equity", "sales"])
 
-        pattern = random.choice([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+        pattern = random.choice([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
         if pattern == 1:
             expr = f"-1 * {op_name}(ts_corr({field_a}, {field_b}, {window}), {window})"
             name = f"Auto_{field_a}_{field_b}_Reversal_{window}"
@@ -135,11 +135,31 @@ class ContinuousAlphaMiner:
             # Official BRAIN: Option6 IV surface slope gated by forecast R^2 confidence
             expr = f"trade_when(ts_mean(opt6_fcstr2imp, 60) > 0.5, -1 * ts_zscore(opt6_slopeavg1m, 60), -1)"
             name = f"BRAIN_Opt6_Slope_Regime_{window}"
-        else:
+        elif pattern == 15:
             # Official BRAIN: Sub-Universe safe liquidity-weighted decay on ts_av_diff
             sig = f"-1 * ts_av_diff(close, {window}) / (ts_std_dev(close, 20) + 0.0001)"
             expr = f"ts_decay_linear({sig}, 5) * rank(volume * close) + ts_decay_linear({sig}, 10) * (1 - rank(volume * close))"
             name = f"BRAIN_LiqDecay_AvDiff_{window}"
+        elif pattern == 16:
+            # High-Margin Cashflow-to-Enterprise-Value Yield with Hump Turnover Control
+            expr = f"hump(group_neutralize(winsorize(rank(operating_cashflow / (cap + debt + 0.001)), std=4), {grp}), hump=0.01)"
+            name = f"BRAIN_CashflowEV_Hump_{grp}"
+        elif pattern == 17:
+            # Multi-Horizon Information Ratio (ts_ir) Momentum with Volume Confirmation
+            expr = f"group_neutralize(ts_decay_linear(rank(ts_ir(returns, 20)) * rank(volume / (ts_mean(volume, 20) + 0.001)), 5), {grp})"
+            name = f"BRAIN_InfoRatio_VolConfirm_{grp}_{window}"
+        elif pattern == 18:
+            # Analyst EPS Revision Velocity orthogonalized to 20d Return via ts_regression
+            expr = f"group_neutralize(ts_decay_linear(ts_regression(rank(eps_consensus_mean - ts_delay(eps_consensus_mean, 20)), rank(ts_delta(close, 20)), 20, lag=0, rettype=0), 5), {grp})"
+            name = f"BRAIN_Orthogonal_EPS_Rev_{grp}"
+        elif pattern == 19:
+            # Gross Profitability & De-leveraging Quality Factor (Novy-Marx style)
+            expr = f"hump(group_neutralize(rank(operating_income / (assets + 0.001)) - rank(ts_delta(debt / (assets + 0.001), 60)), {grp}), hump=0.015)"
+            name = f"BRAIN_Quality_Deleverage_{grp}"
+        else:
+            # Volatility-Gated Intraday VWAP Accumulation (trade_when low turnover)
+            expr = f"trade_when(ts_std_dev(returns, 20) < ts_mean(ts_std_dev(returns, 20), 60), group_neutralize(ts_decay_linear((close - vwap) / (high - low + 0.001), {window}), {grp}), -1)"
+            name = f"BRAIN_VolGated_VwapAccum_{grp}_{window}"
 
         return {"name": name, "expression": expr}
 

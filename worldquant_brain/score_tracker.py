@@ -212,6 +212,30 @@ class ScoreTracker:
             "observed_at": latest.observed_at,
         }
 
+    def history(self, limit: int = 30) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM brain_score_snapshots ORDER BY observed_at DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        out = []
+        for r in reversed(rows):
+            out.append({
+                "snapshot_id": r["snapshot_id"],
+                "observed_at": r["observed_at"],
+                "taipei_date": r["taipei_date"],
+                "total_score": r["total_score"],
+                "daily_score": r["daily_score"],
+                "daily_cap": r["daily_cap"],
+                "rank_value": r["rank_value"],
+                "submission_days_60d": r["submission_days_60d"],
+                "uniqueness": r["uniqueness"],
+                "is_score": r["is_score"],
+                "source": r["source"],
+                "cap_evidence": r["cap_evidence"],
+            })
+        return out
+
     def summary(self) -> dict[str, Any]:
         latest = self.latest()
         return {"latest": asdict(latest) if latest else None, "cap": self.cap_status()}

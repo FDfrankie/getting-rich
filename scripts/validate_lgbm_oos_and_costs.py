@@ -18,7 +18,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from crypto_trading.feature_engineer import CryptoFeatureEngineer
-from crypto_trading.lgbm_validation_gate import run_validation_gate
+from crypto_trading.lgbm_validation_gate import ICStabilityLinearWrapper, run_validation_gate
 
 
 def load_panel(symbols: list[str], timeframe: str = "1m", horizon: int = 15) -> tuple[pd.DataFrame, list[str]]:
@@ -90,35 +90,47 @@ def update_manifests(report: dict[str, Any]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate crypto_lgbm with Global Split, Purged WF, LOAO, and Cost Stress.")
     parser.add_argument("--symbols", default="BTC/USDT,ETH/USDT,SOL/USDT")
-    parser.add_argument("--timeframe", default="1m")
-    parser.add_argument("--horizon", type=int, default=15)
-    parser.add_argument("--update-manifests", action="store_true")
+    parser.add_argument("--timeframe", default="1h")
+    parser.add_argument("--horizon", type=int, default=1)
+    parser.add_argument("--report-only", action="store_true", default=True, help="Read-only validation (default)")
+    parser.add_argument("--update-manifests", action="store_true", help="Explicitly update manifests after review")
     args = parser.parse_args()
 
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
     panel, feature_cols = load_panel(symbols, timeframe=args.timeframe, horizon=args.horizon)
 
     def make_lgbm():
-        return lgb.LGBMRegressor(
-            n_estimators=200,
-            learning_rate=0.03,
-            num_leaves=31,
-            max_depth=5,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            reg_alpha=0.1,
-            reg_lambda=1.0,
-            random_state=42,
-            n_jobs=-1,
-            verbosity=-1,
+        return ICStabilityLinearWrapper(
+            base_factory=lambda: lgb.LGBMRegressor(
+                n_estimators=120,
+                learning_rate=0.03,
+                num_leaves=15,
+                max_depth=4,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                reg_alpha=0.5,
+                reg_lambda=2.0,
+                random_state=42,
+                n_jobs=-1,
+                verbosity=-1,
+            ),
+            min_ic=0.015,
+            blend_alpha=1.0,
         )
 
+    bars_8h = 8.0 if args.timeframe == "1h" else (32.0 if args.timeframe == "15m" else (96.0 if args.timeframe == "5m" else 480.0))
+    embargo = 15 if args.timeframe == "1h" else max(60, 3 * args.horizon)
     report = run_validation_gate(
         panel,
         feature_cols,
         make_lgbm,
         purge_bars=args.horizon,
-        embargo_bars=max(60, 3 * args.horizon),
+        embargo_bars=embargo,
+        use_hysteresis=True,
+        entry_z=1.8,
+        exit_z=-0.5,
+        max_holding_bars=4,
+        bars_per_8h=bars_8h,
     )
 
     out_dir = BASE_DIR / "reports"

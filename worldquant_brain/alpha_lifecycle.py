@@ -116,3 +116,54 @@ def submission_eligibility(alpha: Mapping[str, Any]) -> SubmissionEligibility:
     if alpha.get("rejection_code"):
         reasons.append("REJECTED")
     return SubmissionEligibility(not reasons, tuple(reasons))
+
+
+class QualityStage(str, Enum):
+    CANDIDATE = "CANDIDATE"
+    SIMULATED = "SIMULATED"
+    SUBMIT_READY = "SUBMIT_READY"
+    BRAIN_GOOD = "BRAIN_GOOD"
+    ROBUST_GOOD = "ROBUST_GOOD"
+    PORTFOLIO_GOOD = "PORTFOLIO_GOOD"
+    PROMOTION_READY = "PROMOTION_READY"
+
+
+_QUALITY_STAGE_ORDER: tuple[QualityStage, ...] = (
+    QualityStage.CANDIDATE,
+    QualityStage.SIMULATED,
+    QualityStage.SUBMIT_READY,
+    QualityStage.BRAIN_GOOD,
+    QualityStage.ROBUST_GOOD,
+    QualityStage.PORTFOLIO_GOOD,
+    QualityStage.PROMOTION_READY,
+)
+
+
+def derive_quality_stage(
+    *,
+    officially_simulated: bool,
+    submit_ready: bool,
+    brain_good: bool,
+    robust_good: bool,
+    portfolio_good: bool = False,
+) -> QualityStage:
+    """Stage 7: Strict non-skipping QualityStage derivation from verified official evidence & evaluators only."""
+    if not officially_simulated:
+        return QualityStage.CANDIDATE
+    if not submit_ready:
+        return QualityStage.SIMULATED
+    if not brain_good:
+        return QualityStage.SUBMIT_READY
+    if not robust_good:
+        return QualityStage.BRAIN_GOOD
+    if not portfolio_good:
+        return QualityStage.ROBUST_GOOD
+    return QualityStage.PROMOTION_READY
+
+
+def require_quality_stage_progression(current: QualityStage, target: QualityStage) -> None:
+    """Enforce sequential stage progression without skipping intermediate gates."""
+    cur_idx = _QUALITY_STAGE_ORDER.index(current)
+    tgt_idx = _QUALITY_STAGE_ORDER.index(target)
+    if tgt_idx > cur_idx + 1:
+        raise ValueError(f"Cannot skip quality stages: {current.value} -> {target.value}")

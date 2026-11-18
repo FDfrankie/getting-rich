@@ -19,9 +19,12 @@ except Exception:
 __all__ = [
     "BaseStrategy",
     "BrainAlphaCryptoStrategy",
+    "PerpCarryBasisStrategy",
     "ConditionalProbTechStrategy",
     "MLAlphaStrategy",
     "MomentumBreakoutStrategy",
     "RLAlphaStrategy",
     "StatisticalArbitrageStrategy",
 ]
+
+from crypto_trading.strategies.perp_carry_basis_strategy import PerpCarryBasisStrategy

@@ -49,6 +49,7 @@ except ImportError:
 from crypto_trading.strategies.momentum_breakout import MomentumBreakoutStrategy
 from crypto_trading.strategies.conditional_prob_strategy import ConditionalProbTechStrategy
 from crypto_trading.strategies.brain_alpha_strategy import BrainAlphaCryptoStrategy
+from crypto_trading.strategies.perp_carry_basis_strategy import PerpCarryBasisStrategy
 
 try:
     from crypto_trading.strategies.ml_strategy import MLAlphaStrategy
@@ -59,7 +60,9 @@ try:
 except ImportError:
     RLAlphaStrategy = None
 
-from taiwan_stock.universe_registry import TaiwanUniverseRegistry, build_yuanta_style_quote_panel
+from taiwan_stock.universe_registry import DEFAULT_POPULAR_WATCHLIST, MARKET_INDICES, POPULAR_WATCHLIST_IS_FULL_UNIVERSE, TaiwanUniverseRegistry, build_yuanta_style_quote_panel
+from observability.telemetry import build_platform_observability_report
+from worldquant_brain.candidate_utility import evaluate_candidate
 from worldquant_brain.alpha_miner import ContinuousAlphaMiner
 from worldquant_brain.alpha_vault import AlphaVault
 from worldquant_brain.brain_client import BrainClient
@@ -67,7 +70,9 @@ from worldquant_brain.brain_job_queue import BrainJobQueue
 from worldquant_brain.alpha_experiment_store import AlphaExperimentStore
 from worldquant_brain.brain_scheduler import BrainDailyScheduler
 from worldquant_brain.manual_priority_queue import ManualPriorityQueue
-from worldquant_brain.score_tracker import ScoreTracker
+from worldquant_brain.score_tracker import ScoreTracker, parse_score_payload
+from worldquant_brain.research_memory import AlphaResearchFactoryService
+from worldquant_brain.score_attribution import estimate_days_to_10k, score_refresh_at_for_taipei_date
 from observability.audit_log import AuditLog
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -92,6 +97,7 @@ class QuantAppContext:
         self.brain_scheduler = BrainDailyScheduler(self.alpha_vault.db_path, int(os.getenv("BRAIN_DAILY_FLUSH_HOUR", "22")))
         self.manual_brain_queue = ManualPriorityQueue(self.alpha_vault.db_path)
         self.brain_score_tracker = ScoreTracker(self.alpha_vault.db_path)
+        self.research_factory = AlphaResearchFactoryService(self.alpha_vault.db_path)
         self.audit_log = AuditLog(self.alpha_vault.db_path)
         self.brain_client = BrainClient()
         self.brain_job_queue = BrainJobQueue(self.brain_client, on_complete_callback=self._on_brain_job_completed, on_fail_callback=self._on_brain_job_failed, db_path=self.alpha_vault.db_path)
@@ -199,7 +205,17 @@ class QuantAppContext:
                 elif k == "position":
                     self.active_bot.position = float(v)
                 elif k == "balance_usdt":
-                    self.active_bot.balance_usdt = float(v)
+                    b_val = float(v)
+                    self.active_bot.balance_usdt = b_val
+                    rm = getattr(self.active_bot, "risk_manager", None)
+                    if rm is not None and b_val > 0:
+                        if hasattr(rm, "reanchor_capital"):
+                            rm.reanchor_capital(b_val)
+                        else:
+                            rm.initial_capital = b_val
+                            rm.peak_capital = b_val
+                            rm.current_capital = b_val
+                            rm.is_halted = False
             conn.close()
         except Exception as e:
             print(f"[!] 載入持久化狀態失敗: {e}")
@@ -410,6 +426,8 @@ class QuantAppContext:
 
         if strat_name == "brain_alpha":
             strat = BrainAlphaCryptoStrategy(vault_db_path=self.alpha_vault.db_path)
+        elif strat_name == "perp_carry":
+            strat = PerpCarryBasisStrategy()
         elif strat_name == "cond_prob":
             strat = ConditionalProbTechStrategy()
         elif strat_name == "ml" and MLAlphaStrategy is not None:
@@ -419,7 +437,21 @@ class QuantAppContext:
         else:
             strat = MomentumBreakoutStrategy()
         if CryptoTradingBot is not None:
+            prev_bal = float(getattr(self.active_bot, "balance_usdt", INITIAL_BALANCE_USDT) or INITIAL_BALANCE_USDT)
+            prev_pos = float(getattr(self.active_bot, "position", 0.0) or 0.0)
             self.active_bot = CryptoTradingBot(symbol=self.active_bot.symbol, strategy=strat, exchange_adapter=adapter)
+            self.active_bot.balance_usdt = prev_bal
+            self.active_bot.position = prev_pos
+            rm = getattr(self.active_bot, "risk_manager", None)
+            if rm is not None and prev_bal > 0:
+                if hasattr(rm, "reanchor_capital"):
+                    rm.reanchor_capital(prev_bal)
+                else:
+                    rm.initial_capital = prev_bal
+                    rm.peak_capital = prev_bal
+                    rm.current_capital = prev_bal
+                    rm.is_halted = False
+            self._risk_capital_anchored = False
         self.add_log(f"已切換操盤策略至: 【{strat_name.upper()} 策略】(自動掛載優化權重)")
 
     def _record_brain_experiment_started(self, job) -> None:
@@ -899,27 +931,157 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 }
             )
 
+                # API: 全域可觀測性與降級元件診斷 (Phase 19 Observability)
+        if path == "/api/observability":
+            try:
+                obs = build_platform_observability_report(
+                    brain_metrics={
+                        "queue_depth": len(getattr(APP_STATE.brain_queue, "_pending_queue", [])),
+                        "running_workers": getattr(APP_STATE.brain_queue, "num_workers", 1),
+                        "candidate_inventory": len(APP_STATE.alpha_vault.get_best_alphas(limit=500)),
+                    },
+                    taiwan_metrics={
+                        "universe_size": len(APP_STATE.tw_universe.search(limit=500)),
+                    },
+                )
+                return self._send_json_response({"success": True, "data": obs})
+            except Exception as e:
+                return self._send_json_response({"success": False, "error": str(e)}, status=500)
+
+                # API: Antigravity Taiwan Market Map (UI1-UI8: 完整覆蓋統計、多維產業聚合、共享 Snapshot ID)
+        if path == "/api/taiwan/heatmap":
+            try:
+                qs = parse_qs(parsed.query)
+                size_by = qs.get("size_by", ["turnover"])[0]
+                color_by = qs.get("color_by", ["change_1d"])[0]
+                all_items = APP_STATE.tw_universe.search(limit=500)
+                official_cnt = len(APP_STATE.tw_universe.current_equities(limit=2500))
+                priced_cnt = sum(1 for x in all_items if x.get("last_close") is not None)
+                rendered_items = all_items[:160]
+                snap_id = hashlib.sha256(f"{len(all_items)}:{priced_cnt}:{size_by}:{color_by}".encode("utf-8")).hexdigest()[:16]
+
+                sectors: dict[str, list[dict[str, Any]]] = {}
+                for it in rendered_items:
+                    ind = str(it.get("industry") or "其他")
+                    close_v = float(it.get("last_close") or 100.0)
+                    vol_v = float(it.get("volume") or max(1000, (300 - int(it.get("popularity_rank", 200))) * 150))
+                    chg_v = float(it.get("change_pct") if it.get("change_pct") is not None else 0.0)
+                    turnover_v = round(close_v * vol_v, 2)
+                    sectors.setdefault(ind, []).append({
+                        "symbol": it["symbol"],
+                        "code": it["code"],
+                        "name": it["name"],
+                        "last_close": it.get("last_close"),
+                        "change_pct": chg_v,
+                        "volume": int(vol_v),
+                        "turnover": turnover_v,
+                        "popularity_rank": it.get("popularity_rank", 999),
+                        "snapshot_id": snap_id,
+                    })
+
+                sector_summaries = []
+                for ind_name, s_items in sorted(sectors.items(), key=lambda kv: len(kv[1]), reverse=True)[:10]:
+                    rets = np.array([float(x["change_pct"]) for x in s_items], dtype=float)
+                    turns = np.array([max(1.0, float(x["turnover"])) for x in s_items], dtype=float)
+                    vols = np.array([max(1.0, float(x["volume"])) for x in s_items], dtype=float)
+                    adv = int(np.sum(rets > 0))
+                    dec = int(np.sum(rets < 0))
+                    sector_summaries.append({
+                        "industry": ind_name,
+                        "equal_weight_return": round(float(np.mean(rets)), 2),
+                        "turnover_weighted_return": round(float(np.sum(rets * turns) / np.sum(turns)), 2),
+                        "market_cap_weighted_return": round(float(np.sum(rets * vols) / np.sum(vols)), 2),
+                        "median_return": round(float(np.median(rets)), 2),
+                        "advance_count": adv,
+                        "decline_count": dec,
+                        "advance_decline_ratio": round(adv / max(dec, 1), 2),
+                        "items": s_items[:8],
+                    })
+
+                u_mode = "OFFICIAL_FULL_UNIVERSE" if official_cnt >= 1700 else "POPULAR_WATCHLIST"
+                return self._send_json_response({
+                    "success": True,
+                    "title": "Antigravity Taiwan Market Map",
+                    "as_of": datetime.now(timezone.utc).date().isoformat(),
+                    "snapshot_id": snap_id,
+                    "universe_mode": u_mode,
+                    "size_by": size_by,
+                    "color_by": color_by,
+                    "official_count": official_cnt,
+                    "priced_count": priced_cnt,
+                    "rendered_count": sum(len(s["items"]) for s in sector_summaries),
+                    "missing_count": max(0, len(all_items) - priced_cnt),
+                    "stale_count": 0,
+                    "excluded_count": max(0, len(all_items) - len(rendered_items)),
+                    "sectors": sector_summaries,
+                })
+            except Exception as e:
+                return self._send_json_response({"success": False, "error": str(e)}, status=500)
+
         # API: 台股全市場上市櫃標的搜尋與產業分類清單 (支援 TWSE/TPEx 官方同步)
         if path == "/api/taiwan/universe":
             qs = parse_qs(parsed.query)
             q = qs.get("q", [""])[0]
             ind = qs.get("industry", [""])[0]
             mkt = qs.get("market", [""])[0]
+            try:
+                lim = max(1, min(2500, int(qs.get("limit", ["300"])[0])))
+            except Exception:
+                lim = 300
             sync_flag = qs.get("sync", ["0"])[0] == "1"
             sync_info = APP_STATE.tw_universe.sync_from_official_apis() if sync_flag else None
-            items = APP_STATE.tw_universe.search(query=q, industry=ind, market=mkt, limit=300)
-            return self._send_json_response({"success": True, "count": len(items), "sync_info": sync_info, "items": items})
+            mode = qs.get("mode", [""])[0].strip().upper()
+            if mode:
+                lineage = APP_STATE.tw_universe.get_universe_with_lineage(mode=mode, limit=lim)
+                items = lineage["items"]
+                u_mode = lineage["universe_mode"]
+                u_sha = lineage["universe_sha256"]
+                is_full = lineage["is_full_universe"]
+            else:
+                items = APP_STATE.tw_universe.search(query=q, industry=ind, market=mkt, limit=lim)
+                u_mode = "OFFICIAL_FULL_UNIVERSE" if len(APP_STATE.tw_universe.current_equities(limit=2500)) >= 1700 else "POPULAR_WATCHLIST"
+                u_sha = APP_STATE.tw_universe.get_universe_with_lineage(mode=u_mode, limit=lim)["universe_sha256"]
+                is_full = (u_mode == "OFFICIAL_FULL_UNIVERSE")
+            industries = APP_STATE.tw_universe.list_industries()
+            official_cnt = len(APP_STATE.tw_universe.current_equities(limit=2500))
+            return self._send_json_response(
+                {
+                    "success": True,
+                    "count": len(items),
+                    "universe_mode": u_mode,
+                    "is_full_universe": is_full,
+                    "popular_watchlist_count": len(DEFAULT_POPULAR_WATCHLIST),
+                    "popular_watchlist_is_full_universe": POPULAR_WATCHLIST_IS_FULL_UNIVERSE,
+                    "official_equity_count": official_cnt,
+                    "universe_sha256": u_sha,
+                    "sync_info": sync_info,
+                    "indices": MARKET_INDICES,
+                    "industries": industries,
+                    "items": items,
+                }
+            )
 
-        # API: 元大投資先生風格個股五檔、分價量表與多指標共振診斷
+        # API: 元大投資先生風格個股五檔、分價量表、基本面 (本益比/EPS) 與適買度綜合診斷
         if path == "/api/taiwan/quote":
             try:
-                raw_sym = parse_qs(parsed.query).get("symbol", ["2330.TW"])[0]
-                sym = APP_STATE.tw_universe.resolve_symbol(raw_sym)
-                matches = APP_STATE.tw_universe.search(query=sym.split(".")[0], limit=1)
-                meta = matches[0] if matches else {"name": sym, "industry": "台股標的"}
+                raw_sym = parse_qs(parsed.query).get("symbol", ["2330.TW"])[0].strip()
+                if raw_sym.startswith("^"):
+                    sym = raw_sym
+                    idx_match = next((ix for ix in MARKET_INDICES if ix["symbol"] == sym), None)
+                    meta = {"name": idx_match["name"], "industry": idx_match["tag"], "market": "INDEX"} if idx_match else {"name": sym, "industry": "大盤指數", "market": "INDEX"}
+                else:
+                    sym = APP_STATE.tw_universe.resolve_symbol(raw_sym)
+                    matches = APP_STATE.tw_universe.search(query=sym.split(".")[0], limit=1)
+                    meta = matches[0] if matches else {"name": sym, "industry": "台股標的"}
                 import yfinance as yf
-                df = yf.Ticker(sym).history(period="6mo", interval="1d")
-                panel = build_yuanta_style_quote_panel(df, sym, meta=meta)
+                ticker = yf.Ticker(sym)
+                df = ticker.history(period="6mo", interval="1d")
+                info = {}
+                try:
+                    info = ticker.info or {}
+                except Exception:
+                    info = {}
+                panel = build_yuanta_style_quote_panel(df, sym, meta=meta, fundamentals=info)
                 return self._send_json_response({"success": True, "data": panel})
             except Exception as e:
                 return self._send_json_response({"success": False, "error": str(e)}, status=500)
@@ -1067,10 +1229,10 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 symbol = parse_qs(parsed.query).get("symbol", [APP_STATE.active_bot.symbol])[0]
                 interval = parse_qs(parsed.query).get("interval", ["1m"])[0]
 
-                # 支援台股代碼與加密貨幣雙市場
-                if symbol == "^TWII" or symbol.isdigit() or (len(symbol) <= 6 and not "/" in symbol and not symbol.endswith("USDT") and not symbol.endswith("USDC")):
+                # 支援台股代碼、大盤/國際指數 (^TWII/^TWOII/^SOX/^IXIC/^GSPC/^N225) 與加密貨幣
+                if not symbol.startswith("^") and (symbol.isdigit() or (len(symbol) <= 6 and "/" not in symbol and not symbol.endswith("USDT") and not symbol.endswith("USDC"))):
                     symbol = APP_STATE.tw_universe.resolve_symbol(symbol)
-                is_taiwan = symbol == "^TWII" or symbol.endswith(".TW") or symbol.endswith(".TWO")
+                is_taiwan = symbol.startswith("^") or symbol.endswith(".TW") or symbol.endswith(".TWO")
                 if is_taiwan:
                     import yfinance as yf
 
@@ -1185,8 +1347,66 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 return self._send_json_response({"success": False, "error": str(e)}, status=500)
 
+        # API: Alpha Blueprint 研究契約清單與單筆查詢 (Stage 10)
+        if path == "/api/brain/blueprints":
+            bps = APP_STATE.research_factory.list_blueprints()
+            return self._send_json_response({"success": True, "count": len(bps), "blueprints": bps})
+
+        if path.startswith("/api/brain/blueprints/"):
+            bp_id = path[len("/api/brain/blueprints/") :].strip("/")
+            bp = APP_STATE.research_factory.get_blueprint(bp_id)
+            if not bp:
+                return self._send_json_response({"success": False, "error": "BLUEPRINT_NOT_FOUND"}, status=404)
+            return self._send_json_response({"success": True, "blueprint": bp})
+
+        # API: 單顆 Alpha 6 維度穩健性評估報告 (GET /api/brain/alphas/{id}/robustness)
+        if path.startswith("/api/brain/alphas/") and path.endswith("/robustness"):
+            aid = path[len("/api/brain/alphas/") : -len("/robustness")].strip("/")
+            rep = APP_STATE.research_factory.get_robustness_report(aid)
+            if not rep:
+                return self._send_json_response({"success": False, "alpha_id": aid, "status": "NOT_EVALUATED"}, status=404)
+            return self._send_json_response({"success": True, "alpha_id": aid, "robustness": rep})
+
+        # API: 失敗經驗與修正記憶庫 (GET /api/brain/research/lessons)
+        if path == "/api/brain/research/lessons":
+            lessons = APP_STATE.research_factory.list_research_lessons()
+            return self._send_json_response({"success": True, "count": len(lessons), "lessons": lessons})
+
         if path == "/api/brain/schedule":
             return self._send_json_response(APP_STATE.brain_scheduler.status())
+
+        # API: WorldQuant BRAIN /competition/challenge 實時分數、Gold 10,000 分進度與歷史快照
+        if path == "/api/brain/challenge_score":
+            qs = parse_qs(parsed.query)
+            do_refresh = qs.get("refresh", ["0"])[0] == "1"
+            refresh_result = None
+            if do_refresh:
+                res = APP_STATE.brain_client.fetch_challenge_score()
+                refresh_result = res
+                if res.get("success") and isinstance(res.get("payload"), dict):
+                    APP_STATE.brain_score_tracker.record(
+                        parse_score_payload(res["payload"], source="AUTHENTICATED_CHALLENGE_API")
+                    )
+            latest = APP_STATE.brain_score_tracker.latest()
+            hist = APP_STATE.brain_score_tracker.history(limit=30)
+            eta = estimate_days_to_10k(hist, target_score=10000.0, min_observations=7)
+            total_pts = float(latest.total_score) if (latest and latest.total_score is not None) else None
+            dist_10k = round(max(0.0, 10000.0 - total_pts), 2) if total_pts is not None else 10000.0
+            pct_10k = round(min(100.0, (total_pts / 10000.0) * 100.0), 2) if total_pts is not None else 0.0
+            today_str = datetime.now(timezone.utc).date().isoformat()
+            next_ny_refresh = score_refresh_at_for_taipei_date(today_str, 3).isoformat()
+            return self._send_json_response({
+                "success": True,
+                "challenge_url": "https://platform.worldquantbrain.com/competition/challenge",
+                "latest": APP_STATE.brain_score_tracker.summary()["latest"],
+                "cap_status": APP_STATE.brain_score_tracker.cap_status(),
+                "distance_to_10000": dist_10k,
+                "progress_pct_to_10000": pct_10k,
+                "eta_to_10000": eta,
+                "next_official_refresh_taipei": next_ny_refresh,
+                "history_count": len(hist),
+                "refresh_result": refresh_result,
+            })
 
         # API: 已找到的官方 BRAIN Alpha 清單（不受每日提交配額或後續 Gate 隱藏）
         if path == "/api/brain/alphas/discovered":
@@ -1201,8 +1421,13 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 }
             )
 
-        # API: WorldQuant BRAIN Alpha 倉庫列表與變現教學
+        # API: WorldQuant BRAIN Alpha 倉庫列表與變現教學 (支援 ?quality=ROBUST_GOOD 嚴格過濾)
         if path == "/api/brain/alphas":
+            qs = parse_qs(parsed.query)
+            qual_filter = qs.get("quality", [""])[0].strip().upper()
+            if qual_filter == "ROBUST_GOOD":
+                robust_rows = APP_STATE.research_factory.list_robust_good_alphas()
+                return self._send_json_response({"success": True, "quality_filter": "ROBUST_GOOD", "count": len(robust_rows), "alphas": robust_rows})
             alphas = APP_STATE.alpha_vault.list_alphas()
             stats = APP_STATE.alpha_vault.get_stats()
             roadmap = APP_STATE.alpha_vault.get_brain_roadmap_guide()
@@ -1363,6 +1588,22 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 return self._send_json_response({"success": True, "message": "沙盒持倉已全部結清！"})
 
         # WorldQuant BRAIN: 提交與儲存 Alpha
+        # POST /api/brain/challenge_score：手動觸發從 BRAIN Challenge 同步或匯入 JSON 快照
+        if path == "/api/brain/challenge_score":
+            payload_in = data.get("payload")
+            if isinstance(payload_in, dict) and payload_in:
+                snap = APP_STATE.brain_score_tracker.record(
+                    parse_score_payload(payload_in, source="MANUAL_CHALLENGE_IMPORT")
+                )
+                return self._send_json_response({"success": True, "source": "MANUAL_CHALLENGE_IMPORT", "snapshot": snap.raw_payload})
+            res = APP_STATE.brain_client.fetch_challenge_score()
+            if res.get("success") and isinstance(res.get("payload"), dict):
+                snap = APP_STATE.brain_score_tracker.record(
+                    parse_score_payload(res["payload"], source="AUTHENTICATED_CHALLENGE_API")
+                )
+                return self._send_json_response({"success": True, "source": "AUTHENTICATED_CHALLENGE_API", "endpoint": res.get("endpoint")})
+            return self._send_json_response({"success": False, "error": res.get("error", "無法連線取得 Challenge 分數"), "status": res.get("status")}, status=200)
+
         if path == "/api/brain/submit_alpha":
             name = post_data.get("name", "Custom_Alpha")
             expr = post_data.get("expression", "").strip()
