@@ -211,5 +211,17 @@ class TestAlphaDiversityUpgrade(unittest.TestCase):
         )
         self.assertTrue(res.allowed, f"Expected approved=True, got {res}")
 
+
+    def test_persist_job_survives_sqlite_disk_io_error(self):
+        from unittest.mock import patch
+        from worldquant_brain.brain_job_queue import BrainJobQueue, BrainSimulationJob
+        db_file = str(pathlib.Path(tempfile.mkdtemp()) / "io_err.db")
+        class _OfflineClient:
+            offline_mode = True
+        q = BrainJobQueue(_OfflineClient(), db_path=db_file)
+        job = BrainSimulationJob(job_id="j_io", simulation_key="k_io", expression="rank(close)", settings={})
+        with patch("sqlite3.connect", side_effect=sqlite3.OperationalError("disk I/O error")):
+            q._persist_job(job)
+
 if __name__ == "__main__":
     unittest.main()
