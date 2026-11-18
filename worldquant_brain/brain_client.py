@@ -69,8 +69,8 @@ class BrainClient:
         poll_interval: float = 5.0,
         session: requests.Session | None = None,
     ) -> None:
-        self.email = email if email is not None else (os.getenv("BRAIN_EMAIL") or os.getenv("BRAIN_USERNAME"))
-        self.password = password if password is not None else os.getenv("BRAIN_PASSWORD")
+        self.email = email or os.getenv("BRAIN_EMAIL") or os.getenv("BRAIN_USERNAME")
+        self.password = password or os.getenv("BRAIN_PASSWORD")
         self.timeout = float(timeout)
         self.poll_interval = float(poll_interval)
         self.session = session or requests.Session()
@@ -478,10 +478,27 @@ class BrainClient:
                 conn.execute(
                     "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)"
                 )
-                conn.execute(
-                    "INSERT OR REPLACE INTO brain_candidate_pool (alpha_id, expression, sharpe, fitness, turnover, margin, score, candidate_date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)",
-                    (str(alpha_id), str(expression), float(sharpe), float(fitness), float(turnover), float(margin), score, day, now_iso),
-                )
+                self.ensure_novelty_survey_tables(conn)
+                from worldquant_brain.alpha_novelty import find_duplicate
+                dup_chk = find_duplicate(expression, [])
+                if dup_chk.blocked and dup_chk.reason == "PUBLIC_EXPRESSION_DENYLIST":
+                    return
+                from worldquant_brain.alpha_miner import extract_expression_skeleton
+                new_skel = extract_expression_skeleton(expression)
+                existing_rows = conn.execute("SELECT alpha_id, expression, score FROM brain_candidate_pool WHERE candidate_date = ? AND status = 'PENDING'", (day,)).fetchall()
+                skip_clone = False
+                for er in existing_rows:
+                    if extract_expression_skeleton(er[1]) == new_skel and er[0] != str(alpha_id):
+                        if float(er[2]) >= float(score):
+                            skip_clone = True
+                            break
+                        else:
+                            conn.execute("DELETE FROM brain_candidate_pool WHERE alpha_id = ?", (er[0],))
+                if not skip_clone:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO brain_candidate_pool (alpha_id, expression, sharpe, fitness, turnover, margin, score, candidate_date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)",
+                        (str(alpha_id), str(expression), float(sharpe), float(fitness), float(turnover), float(margin), score, day, now_iso),
+                    )
         finally:
             conn.close()
 
@@ -503,19 +520,73 @@ class BrainClient:
                 "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)"
             )
             rows = conn.execute(
-                "SELECT alpha_id FROM brain_candidate_pool WHERE candidate_date = ? AND status = 'PENDING' ORDER BY score DESC, sharpe DESC LIMIT ?",
-                (day, remaining),
+                "SELECT alpha_id FROM brain_candidate_pool WHERE candidate_date = ? AND status = 'PENDING' ORDER BY score DESC, sharpe DESC",
+                (day,),
             ).fetchall()
         finally:
             conn.close()
 
         results: list[dict[str, Any]] = []
+        submitted_count = 0
         for row in rows:
-            res = self.submit_alpha(str(row["alpha_id"]), max_daily_submissions=limit, enforce_checks=True, day_str=day)
-            results.append(res)
-            if res.get("status") == "DAILY_QUOTA_REACHED":
+            if submitted_count >= remaining:
                 break
+            aid = str(row["alpha_id"])
+            res = self.submit_alpha(aid, max_daily_submissions=limit, enforce_checks=True, day_str=day)
+            results.append(res)
+            status_val = str(res.get("status") or "")
+            if res.get("success"):
+                submitted_count += 1
+            elif status_val == "DAILY_QUOTA_REACHED":
+                break
+            elif status_val == "SUBMISSION_CHECK_FAILED":
+                err_txt = str(res.get("error") or "").upper()
+                new_status = "FAILED_CORR" if ("CORRELATION" in err_txt or "CORR" in err_txt) else "FAILED_CHECKS"
+                try:
+                    c2 = sqlite3.connect(db_p, timeout=10.0)
+                    c2.execute("UPDATE brain_candidate_pool SET status = ? WHERE alpha_id = ?", (new_status, aid))
+                    c2.commit()
+                    c2.close()
+                except Exception:
+                    pass
         return results
+
+    def fetch_self_correlation(self, alpha_id: str) -> dict[str, Any]:
+        """Query /alphas/{alpha_id}/correlations/self and /alphas/{alpha_id} IS-checks to detect self/prod correlation failures early."""
+        if self.offline_mode or not alpha_id:
+            return {"checked": False, "passed": None, "self_correlation": None, "prod_correlation": None, "reason": "OFFLINE_OR_EMPTY"}
+        if not self.is_authenticated() and not self.authenticate():
+            return {"checked": False, "passed": None, "self_correlation": None, "prod_correlation": None, "reason": "AUTH_FAILED"}
+        self_corr = None
+        prod_corr = None
+        passed = True
+        reasons: list[str] = []
+        try:
+            r_corr = self.session.get(f"{self.BASE_URL}/alphas/{alpha_id}/correlations/self", timeout=min(self.timeout, 15.0))
+            if r_corr.status_code == 200:
+                cdata = r_corr.json() or {}
+                if isinstance(cdata, dict):
+                    val = cdata.get("max") if cdata.get("max") is not None else cdata.get("value")
+                    if val is not None:
+                        self_corr = float(val)
+        except Exception:
+            pass
+        chk = self.verify_alpha_for_submission(alpha_id)
+        for r in chk.get("reasons", []):
+            if "CORRELATION" in str(r).upper():
+                passed = False
+                reasons.append(str(r))
+        if self_corr is not None and self_corr >= 0.70:
+            passed = False
+            reasons.append(f"SELF_CORRELATION={self_corr:.4f} >= 0.70")
+        return {
+            "checked": True,
+            "alpha_id": alpha_id,
+            "passed": passed,
+            "self_correlation": self_corr,
+            "prod_correlation": prod_corr,
+            "reasons": reasons,
+        }
 
     def verify_alpha_for_submission(self, alpha_id: str) -> dict[str, Any]:
         """Verify official /alphas/{alpha_id} IS-checks (0 FAILs) and metrics before calling /submit."""
@@ -722,6 +793,169 @@ class BrainClient:
             "endpoint": hit_endpoint,
             "payload": merged_payload,
         }
+
+
+
+    def ensure_novelty_survey_tables(self, conn) -> None:
+        """Create the 6 idempotent novelty, survey, budget, and correlation precheck tables."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public_expression_denylist (
+                exact_hash TEXT PRIMARY KEY,
+                normalized_hash TEXT NOT NULL,
+                structural_hash TEXT NOT NULL,
+                expression TEXT NOT NULL,
+                source_title TEXT,
+                source_url TEXT,
+                license TEXT,
+                fields_json TEXT,
+                operators_json TEXT,
+                family TEXT,
+                imported_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS alpha_fingerprints (
+                alpha_id TEXT PRIMARY KEY,
+                exact_hash TEXT NOT NULL,
+                normalized_hash TEXT NOT NULL,
+                structural_hash TEXT NOT NULL,
+                fields_json TEXT,
+                operators_json TEXT,
+                family TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS field_catalog (
+                field_id TEXT PRIMARY KEY,
+                dataset_id TEXT,
+                category TEXT,
+                field_type TEXT,
+                description TEXT,
+                region TEXT,
+                universe TEXT,
+                delay INTEGER,
+                coverage REAL,
+                alpha_count INTEGER,
+                user_count INTEGER,
+                update_frequency TEXT,
+                availability TEXT,
+                metadata_hash TEXT NOT NULL,
+                last_probed_at TEXT,
+                vector_reducer_required INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS field_probe_cache (
+                field_id TEXT PRIMARY KEY,
+                metadata_hash TEXT NOT NULL,
+                long_count INTEGER,
+                short_count INTEGER,
+                turnover REAL,
+                nan_ratio REAL,
+                probed_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS simulation_queue_decisions (
+                decision_id TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL,
+                blueprint_family TEXT,
+                admitted INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                priority_score REAL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS correlation_prechecks (
+                precheck_id TEXT PRIMARY KEY,
+                candidate_id TEXT NOT NULL,
+                local_corr REAL NOT NULL,
+                shares_raw_fields INTEGER NOT NULL DEFAULT 0,
+                decision TEXT NOT NULL,
+                allowed_for_brain INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        try:
+            from worldquant_brain.alpha_novelty import seed_public_denylist
+            seed_public_denylist(conn)
+        except Exception:
+            pass
+
+    def fetch_data_fields(
+        self,
+        *,
+        region: str = "USA",
+        universe: str = "TOP3000",
+        delay: int = 1,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Fetch available data fields from WorldQuant BRAIN /data-fields endpoint."""
+        if self.offline_mode:
+            return []
+        if not self.is_authenticated() and not self.authenticate():
+            return []
+        try:
+            resp = self.session.get(
+                f"{self.BASE_URL}/data-fields",
+                params={
+                    "instrumentType": "EQUITY",
+                    "region": region,
+                    "universe": universe,
+                    "delay": int(delay),
+                    "limit": int(limit),
+                    "offset": int(offset),
+                },
+                timeout=min(self.timeout, 20.0),
+            )
+            if resp.status_code != 200:
+                return []
+            payload = resp.json() or {}
+            results = payload.get("results") if isinstance(payload, dict) else []
+            return list(results) if isinstance(results, list) else []
+        except Exception:
+            return []
+
+    def fetch_alpha_pnl(self, alpha_id: str) -> list[float]:
+        """Fetch daily PnL series from /alphas/{alpha_id}/recordsets/pnl for local correlation prechecks."""
+        if self.offline_mode or not alpha_id:
+            return []
+        if not self.is_authenticated() and not self.authenticate():
+            return []
+        try:
+            resp = self.session.get(
+                f"{self.BASE_URL}/alphas/{alpha_id}/recordsets/pnl",
+                timeout=min(self.timeout, 20.0),
+            )
+            if resp.status_code != 200:
+                return []
+            data = resp.json() or {}
+            records = data.get("records") if isinstance(data, dict) else []
+            out: list[float] = []
+            for row in (records or []):
+                if isinstance(row, (list, tuple)) and len(row) >= 2:
+                    try:
+                        out.append(float(row[1]))
+                    except (TypeError, ValueError):
+                        pass
+            return out
+        except Exception:
+            return []
 
 
 WorldQuantBrainClient = BrainClient

@@ -637,18 +637,20 @@ class QuantAppContext:
             try:
                 self.heartbeats["alpha_miner"] = time.time()
                 if os.getenv("BRAIN_SIMULATION_ENABLED", "").lower() == "true" and not self.brain_client.offline_mode:
-                    while self.brain_job_queue.queue_depth() < int(os.getenv('BRAIN_QUEUE_TARGET_DEPTH', '8')):
-                        cand = self.alpha_miner.generate_unique_candidate()
+                    target_depth = int(os.getenv('BRAIN_QUEUE_TARGET_DEPTH', '3') or '3')
+                    cooldown_sec = float(os.getenv('BRAIN_MINING_COOLDOWN_SEC', '0') or '0')
+                    last_mine_ts = getattr(self, "_last_brain_mine_ts", 0.0)
+                    if self.brain_job_queue.queue_depth() < target_depth and (time.time() - last_mine_ts) >= cooldown_sec:
+                        cand = self.alpha_miner.think_and_select_best_candidate(batch_size=12)
                         sim_settings = self.alpha_miner.generate_candidate_settings()
                         job, is_new = self.brain_job_queue.create_job(
                             cand["expression"], settings=sim_settings, priority=20, source="AUTO_MINING", simulation_only=True
                         )
                         if is_new:
+                            self._last_brain_mine_ts = time.time()
                             self._record_brain_experiment_started(job)
                             self.alpha_miner.total_mined += 1
-                            self.add_log(f"🚀 [BRAIN 線上送測] 已排入遠端模擬: {cand['name']} (Job {job.job_id})")
-                        else:
-                            break
+                            self.add_log(f"🧠 [BRAIN 慢工精選送測] {cand['name']} (本地評分={cand.get('local_quality_score')}) -> Job {job.job_id}")
                     if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
                         from datetime import datetime, timedelta, timezone
                         taipei_now = datetime.now(timezone(timedelta(hours=8)))
