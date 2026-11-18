@@ -12,9 +12,37 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from crypto_trading.data_loader import CryptoDataLoader
+try:
+    from crypto_trading.data_loader import CryptoDataLoader
+except ImportError:
+    CryptoDataLoader = None
 from worldquant_brain.alpha_vault import AlphaVault
+from worldquant_brain.alpha_novelty import find_duplicate
+from worldquant_brain.alpha_research_engines import (
+    DomainBanditAllocator,
+    FormulaMCTSSearch,
+    compute_dico_similarity_penalty,
+    warm_start_structural_mutate,
+)
 
+
+
+def extract_expression_skeleton(expression: str) -> str:
+    """Normalize numbers and strip outer ts_decay_linear/rank/group_neutralize wrappers to detect structural clones."""
+    import re
+    s = (expression or "").strip().lower()
+    # Unwrap repeated outer ts_decay_linear(..., N)
+    changed = True
+    while changed:
+        changed = False
+        m = re.match(r"^ts_decay_linear\((.+),\s*\d+\s*\)$", s)
+        if m:
+            s = m.group(1).strip()
+            changed = True
+    # Normalize numbers to N
+    s = re.sub(r"\b\d+(?:\.\d+)?\b", "N", s)
+    s = re.sub(r"\s+", "", s)
+    return s
 
 class ContinuousAlphaMiner:
     """
@@ -29,7 +57,7 @@ class ContinuousAlphaMiner:
 
     def __init__(self, symbol: str = "BTC/USDT"):
         self.symbol = symbol
-        self.loader = CryptoDataLoader(symbol=symbol)
+        self.loader = CryptoDataLoader(symbol=symbol) if CryptoDataLoader else None
         self.vault = AlphaVault()
         self.is_running = True
         self.total_mined = 0
@@ -66,6 +94,49 @@ class ContinuousAlphaMiner:
             "language": "FASTEXPR",
             "visualization": False,
         }
+
+    _DOMAIN_ROTATION = (
+        "FUNDAMENTAL_CF_EV",
+        "FUNDAMENTAL_ROA_DELEVERAGE",
+        "ANALYST_EPS_DISPERSION",
+        "SENTIMENT_BUZZ_MOMENTUM",
+        "OPTIONS_IV_SLOPE",
+        "PV_RESIDUAL_HUMP",
+        "VOLATILITY_LIQ_DECAY",
+    )
+
+    def generate_high_pass_domain_candidate(self, domain: str | None = None) -> dict[str, str]:
+        """Generate high-pass-rate, cross-domain BRAIN FASTEXPR formulas with built-in winsorize, hump, and group_neutralize."""
+        if not hasattr(self, "_domain_cursor"):
+            self._domain_cursor = 0
+        if domain is None:
+            domain = self._DOMAIN_ROTATION[self._domain_cursor % len(self._DOMAIN_ROTATION)]
+            self._domain_cursor += 1
+        grp = random.choice(["subindustry", "industry"])
+        w = random.choice([20, 40, 60, 120])
+        h = random.choice([0.008, 0.01, 0.015])
+        if domain == "FUNDAMENTAL_CF_EV":
+            num = random.choice(["operating_cashflow", "operating_income", "ebitda"])
+            expr = f"hump(group_neutralize(winsorize(rank({num} / (cap + debt + 0.001)), std=4), {grp}), hump={h})"
+            return {"name": f"HP_FundCF_{num}_{grp}", "expression": expr, "domain": domain}
+        if domain == "FUNDAMENTAL_ROA_DELEVERAGE":
+            expr = f"hump(group_neutralize(winsorize(rank(ebitda / (assets + 0.001)) - rank(ts_delta(debt / (assets + 0.001), 60)), std=4), {grp}), hump={h})"
+            return {"name": f"HP_FundQual_{grp}", "expression": expr, "domain": domain}
+        if domain == "ANALYST_EPS_DISPERSION":
+            expr = f"hump(group_neutralize(winsorize(rank(ts_zscore(eps_consensus_mean, {w})) - 0.5 * rank(target_price / (close + 0.001) - 1), std=4), {grp}), hump={h})"
+            return {"name": f"HP_Analyst_{grp}_{w}", "expression": expr, "domain": domain}
+        if domain == "SENTIMENT_BUZZ_MOMENTUM":
+            expr = f"hump(group_neutralize(winsorize(rank(ts_zscore(scl12_buzz, {w})) * rank(ts_delta(close, 5) / (close + 0.001)), std=4), {grp}), hump={h})"
+            return {"name": f"HP_Sentiment_{grp}_{w}", "expression": expr, "domain": domain}
+        if domain == "OPTIONS_IV_SLOPE":
+            expr = f"hump(group_neutralize(winsorize(rank(ts_zscore(opt6_slopeavg1m, {w})) * rank(opt6_fcstr2imp), std=4), {grp}), hump={h})"
+            return {"name": f"HP_Options_{grp}_{w}", "expression": expr, "domain": domain}
+        if domain == "PV_RESIDUAL_HUMP":
+            expr = f"hump(group_neutralize(winsorize(rank(-1 * ts_regression(returns, ts_mean(returns, 5), {w}, rettype=0)), std=4), {grp}), hump={h})"
+            return {"name": f"HP_PVResid_{grp}_{w}", "expression": expr, "domain": domain}
+        # VOLATILITY_LIQ_DECAY
+        expr = f"hump(group_neutralize(winsorize(rank(ts_av_diff(close, {w})) * rank(volume * close), std=4), {grp}), hump={h})"
+        return {"name": f"HP_VolLiq_{grp}_{w}", "expression": expr, "domain": domain}
 
     def generate_candidate_expression(self) -> dict[str, str]:
         """
@@ -257,23 +328,132 @@ class ContinuousAlphaMiner:
         finally:
             conn.close()
 
-    def generate_unique_candidate(self, max_attempts: int = 25) -> dict[str, str]:
-        """Generate a novel FASTEXPR expression (with evolutionary mutation from top verified alphas) not yet tried in SQLite."""
-        # 30% chance to mutate a verified alpha from vault if available
-        verified = [a for a in self.vault.list_alphas() if a.get("status") in ("BRAIN_COMPLETE", "VERIFIED", "TEMPLATE_SEED")]
-        for _ in range(max_attempts):
-            if verified and random.random() < 0.30:
+    def _count_recent_skeleton(self, skeleton: str) -> int:
+        import sqlite3
+        db_p = self._dedup_db_path()
+        if not db_p or db_p == ":memory:" or not os.path.exists(db_p):
+            return 0
+        try:
+            conn = sqlite3.connect(db_p, timeout=10.0)
+            rows = conn.execute("SELECT expression FROM brain_tried_expressions ORDER BY rowid DESC LIMIT 300").fetchall()
+            conn.close()
+            return sum(1 for (ex,) in rows if extract_expression_skeleton(ex) == skeleton)
+        except Exception:
+            return 0
+
+    def generate_unique_candidate(self, max_attempts: int = 35) -> dict[str, str]:
+        """Generate a structurally diverse, high-pass-rate FASTEXPR expression (eliminates nested ts_decay_linear clones)."""
+        verified = [
+            a for a in self.vault.list_alphas()
+            if a.get("status") in ("BRAIN_COMPLETE", "VERIFIED", "TEMPLATE_SEED")
+            and "ts_decay_linear(" not in str(a.get("expression") or "").lower()
+        ]
+        for attempt in range(max_attempts):
+            # 60% high-pass multi-domain rotation, 25% legacy diverse templates, 15% orthogonal mutation (no ts_decay_linear nesting)
+            r = random.random()
+            if r < 0.60:
+                cand = self.generate_high_pass_domain_candidate()
+            elif verified and r < 0.75:
                 base = random.choice(verified)
-                decay_w = random.choice([3, 5, 8, 12])
-                cand_expr = f"ts_decay_linear({base['expression']}, {decay_w})"
-                cand = {"name": f"Evolved_{base['name'][:20]}_{decay_w}", "expression": cand_expr}
+                w = random.choice([40, 60])
+                cand_expr = f"hump(group_neutralize(ts_regression({base['expression']}, returns, {w}, rettype=0), subindustry), hump=0.01)"
+                cand = {"name": f"Orthog_{base['name'][:16]}_{w}", "expression": cand_expr}
             else:
                 cand = self.generate_candidate_expression()
-            if not self.has_tried_expression(cand["expression"]):
+
+            skel = extract_expression_skeleton(cand["expression"])
+            if not find_duplicate(cand["expression"], []).blocked and not self.has_tried_expression(cand["expression"]) and self._count_recent_skeleton(skel) < 2:
                 self.mark_expression_tried(cand["expression"])
                 return cand
+        cand = self.generate_high_pass_domain_candidate()
         self.mark_expression_tried(cand["expression"])
         return cand
+
+
+    def _get_bandit(self) -> DomainBanditAllocator:
+        if not hasattr(self, "_bandit") or self._bandit is None:
+            db_p = self._dedup_db_path()
+            self._bandit = DomainBanditAllocator(db_path=db_p if db_p != ":memory:" else ":memory:")
+        return self._bandit
+
+    def _get_mcts(self) -> FormulaMCTSSearch:
+        if not hasattr(self, "_mcts") or self._mcts is None:
+            self._mcts = FormulaMCTSSearch()
+        return self._mcts
+
+    def record_domain_feedback(self, domain: str, *, sharpe: float | None, passed: bool, self_corr: float | None = None, branch: tuple[str, str, str] | None = None) -> float:
+        rew = self._get_bandit().record_outcome(domain, sharpe=sharpe, passed=passed, self_corr=self_corr)
+        if branch is not None:
+            self._get_mcts().backpropagate(branch, rew)
+        return rew
+
+    @staticmethod
+    def score_candidate_locally(expression: str, domain: str = "", existing_expressions: list[str] | None = None) -> float:
+        """Pre-score a candidate locally (structural quality minus DiCo/AlphaAgent similarity penalty)."""
+        expr = (expression or "").lower()
+        score = 50.0
+        if "winsorize(" in expr:
+            score += 15.0
+        if "hump(" in expr:
+            score += 15.0
+        if "group_neutralize(" in expr:
+            score += 12.0
+        if "ts_regression(" in expr:
+            score += 10.0
+        if any(k in expr for k in ("operating_cashflow", "ebitda", "eps_consensus_mean", "opt6_", "scl12_buzz")):
+            score += 12.0
+        if "ts_decay_linear(ts_decay_linear(" in expr:
+            score -= 60.0
+        # Penalize excessive nesting depth
+        depth = 0
+        max_d = 0
+        for ch in expr:
+            if ch == "(":
+                depth += 1
+                max_d = max(max_d, depth)
+            elif ch == ")":
+                depth = max(0, depth - 1)
+        if max_d > 6:
+            score -= (max_d - 6) * 15.0
+        if existing_expressions:
+            score -= compute_dico_similarity_penalty(expression, existing_expressions)
+        return round(score, 2)
+
+    def think_and_select_best_candidate(self, batch_size: int = 12) -> dict[str, Any]:
+        """Deliberate slowly using Bandit + MCTS + Warm-Start GP + DiCo similarity penalty."""
+        existing_exprs: list[str] = []
+        try:
+            if getattr(self, "vault", None) is not None:
+                existing_exprs = [str(a.get("expression") or "") for a in self.vault.list_alphas() if a.get("expression")]
+        except Exception:
+            existing_exprs = []
+
+        bandit = self._get_bandit()
+        mcts = self._get_mcts()
+        pool: list[tuple[float, dict[str, Any]]] = []
+        for i in range(max(3, int(batch_size))):
+            if i == 0:
+                # 1st slot: UCB Bandit-selected domain + MCTS branch
+                dom = bandit.select_domain()
+                branch = mcts.select_branch(dom)
+                cand = self.generate_high_pass_domain_candidate(domain=dom)
+                cand["mcts_branch"] = branch
+            elif i == 1 and existing_exprs:
+                # 2nd slot: Warm-Start GP structural swap from a proven seed
+                seed = random.choice(existing_exprs)
+                ws_expr = warm_start_structural_mutate(seed)
+                if ws_expr and not self.has_tried_expression(ws_expr):
+                    cand = {"name": "WarmStart_GP_Swap", "expression": ws_expr, "domain": "WARM_START_GP"}
+                else:
+                    cand = self.generate_unique_candidate()
+            else:
+                cand = self.generate_unique_candidate()
+            sc = self.score_candidate_locally(cand.get("expression", ""), cand.get("domain", ""), existing_expressions=existing_exprs)
+            pool.append((sc, cand))
+        pool.sort(key=lambda x: x[0], reverse=True)
+        best_score, best_cand = pool[0]
+        best_cand["local_quality_score"] = best_score
+        return best_cand
 
     def generate_near_miss_refinements(
         self,
@@ -349,6 +529,21 @@ class ContinuousAlphaMiner:
             "settings": s3,
             "reason": f"neutralization->{alt_neut}",
         })
+
+        # 3b. Correlation failure -> orthogonalize residual against market/close or shift to fundamental/analyst domain
+        if any("CORRELATION" in fc or "CORR" in fc for fc in failed):
+            candidates.insert(0, {
+                "name": "NearMiss_OrthogonalResid",
+                "expression": f"group_neutralize(ts_regression({expr}, close, 60, rettype=0), subindustry)",
+                "settings": dict(base_settings),
+                "reason": "SELF_CORRELATION_ORTHOGONALIZATION",
+            })
+            candidates.insert(1, {
+                "name": "NearMiss_VolScaleOrthog",
+                "expression": f"hump(group_rank(ts_regression({expr}, returns, 40, rettype=0), industry), hump=0.01)",
+                "settings": dict(base_settings),
+                "reason": "SELF_CORRELATION_RESIDUAL_RANK",
+            })
 
         # 4. Sub-Universe failure -> liquidity-weighted decay (official BRAIN formula)
         if "LOW_SUB_UNIVERSE_SHARPE" in failed or "SUB_UNIVERSE" in " ".join(failed):
