@@ -562,34 +562,108 @@ class BrainClient:
                     pass
         return results
 
-    def fetch_self_correlation(self, alpha_id: str) -> dict[str, Any]:
-        """Query /alphas/{alpha_id}/correlations/self and /alphas/{alpha_id} IS-checks to detect self/prod correlation failures early."""
+    def fetch_self_correlation(self, alpha_id: str, max_polls: int = 5) -> dict[str, Any]:
+        """Query /alphas/{alpha_id}/correlations/self (polling Retry-After & parsing records/max) and /alphas/{alpha_id}/check."""
         if self.offline_mode or not alpha_id:
             return {"checked": False, "passed": None, "self_correlation": None, "prod_correlation": None, "reason": "OFFLINE_OR_EMPTY"}
-        if not self.is_authenticated() and not self.authenticate():
+        if not self.is_authenticated and not self.authenticate():
             return {"checked": False, "passed": None, "self_correlation": None, "prod_correlation": None, "reason": "AUTH_FAILED"}
         self_corr = None
         prod_corr = None
         passed = True
         reasons: list[str] = []
+
+        # 1. Poll /alphas/{alpha_id}/correlations/self (BRAIN often returns Retry-After while computing)
         try:
-            r_corr = self.session.get(f"{self.BASE_URL}/alphas/{alpha_id}/correlations/self", timeout=min(self.timeout, 15.0))
-            if r_corr.status_code == 200:
-                cdata = r_corr.json() or {}
-                if isinstance(cdata, dict):
-                    val = cdata.get("max") if cdata.get("max") is not None else cdata.get("value")
-                    if val is not None:
-                        self_corr = float(val)
+            url_corr = f"{self.BASE_URL}/alphas/{alpha_id}/correlations/self"
+            for _ in range(max(1, int(max_polls))):
+                r_corr = self.session.get(url_corr, timeout=min(self.timeout, 15.0))
+                retry_hdr = r_corr.headers.get("Retry-After") if hasattr(r_corr, "headers") and r_corr.headers else None
+                if r_corr.status_code == 200 and getattr(r_corr, "content", None):
+                    cdata = r_corr.json() or {}
+                    if isinstance(cdata, dict):
+                        val = cdata.get("max") if cdata.get("max") is not None else cdata.get("value")
+                        if val is not None:
+                            self_corr = float(val)
+                        elif isinstance(cdata.get("records"), list) and cdata["records"]:
+                            vals = []
+                            for row in cdata["records"]:
+                                if isinstance(row, (list, tuple)) and len(row) >= 2:
+                                    try:
+                                        vals.append(float(row[1]))
+                                    except (TypeError, ValueError):
+                                        pass
+                                elif isinstance(row, dict) and row.get("correlation") is not None:
+                                    try:
+                                        vals.append(float(row["correlation"]))
+                                    except (TypeError, ValueError):
+                                        pass
+                            if vals:
+                                self_corr = max(vals)
+                        if self_corr is not None or not retry_hdr:
+                            break
+                if retry_hdr:
+                    try:
+                        time.sleep(min(float(retry_hdr), 3.0))
+                    except Exception:
+                        time.sleep(1.0)
+                else:
+                    break
         except Exception:
             pass
+
+        # 2. Poll /alphas/{alpha_id}/check (official submission check endpoint with SELF_CORRELATION / PROD_CORRELATION)
+        try:
+            url_chk = f"{self.BASE_URL}/alphas/{alpha_id}/check"
+            for _ in range(max(1, int(max_polls))):
+                r_chk = self.session.get(url_chk, timeout=min(self.timeout, 15.0))
+                retry_hdr = r_chk.headers.get("Retry-After") if hasattr(r_chk, "headers") and r_chk.headers else None
+                if r_chk.status_code == 200 and getattr(r_chk, "content", None):
+                    j = r_chk.json() or {}
+                    is_blk = j.get("is") if isinstance(j.get("is"), dict) else j
+                    checks = is_blk.get("checks") if isinstance(is_blk, dict) else None
+                    if isinstance(checks, list):
+                        for chk_item in checks:
+                            if not isinstance(chk_item, dict):
+                                continue
+                            cname = str(chk_item.get("name") or "").upper()
+                            cres = str(chk_item.get("result") or "").upper()
+                            cval = chk_item.get("value")
+                            if "SELF_CORRELATION" in cname and cval is not None and self_corr is None:
+                                try:
+                                    self_corr = float(cval)
+                                except (TypeError, ValueError):
+                                    pass
+                            if "PROD_CORRELATION" in cname and cval is not None:
+                                try:
+                                    prod_corr = float(cval)
+                                except (TypeError, ValueError):
+                                    pass
+                            if "CORRELATION" in cname and cres in ("FAIL", "FAILED", "ERROR"):
+                                passed = False
+                                reasons.append(f"{cname}={cres} (value={cval})")
+                        break
+                if retry_hdr:
+                    try:
+                        time.sleep(min(float(retry_hdr), 3.0))
+                    except Exception:
+                        time.sleep(1.0)
+                else:
+                    break
+        except Exception:
+            pass
+
+        # 3. Fallback to /alphas/{alpha_id} IS-checks
         chk = self.verify_alpha_for_submission(alpha_id)
         for r in chk.get("reasons", []):
-            if "CORRELATION" in str(r).upper():
+            if "CORRELATION" in str(r).upper() and str(r) not in reasons:
                 passed = False
                 reasons.append(str(r))
         if self_corr is not None and self_corr >= 0.70:
             passed = False
-            reasons.append(f"SELF_CORRELATION={self_corr:.4f} >= 0.70")
+            msg = f"SELF_CORRELATION={self_corr:.4f} >= 0.70"
+            if msg not in reasons:
+                reasons.append(msg)
         return {
             "checked": True,
             "alpha_id": alpha_id,
@@ -919,7 +993,7 @@ class BrainClient:
         """Fetch available data fields from WorldQuant BRAIN /data-fields endpoint."""
         if self.offline_mode:
             return []
-        if not self.is_authenticated() and not self.authenticate():
+        if not self.is_authenticated and not self.authenticate():
             return []
         try:
             resp = self.session.get(
@@ -946,7 +1020,7 @@ class BrainClient:
         """Fetch daily PnL series from /alphas/{alpha_id}/recordsets/pnl for local correlation prechecks."""
         if self.offline_mode or not alpha_id:
             return []
-        if not self.is_authenticated() and not self.authenticate():
+        if not self.is_authenticated and not self.authenticate():
             return []
         try:
             resp = self.session.get(
