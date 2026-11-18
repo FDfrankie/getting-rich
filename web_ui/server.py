@@ -69,6 +69,7 @@ from worldquant_brain.brain_client import BrainClient
 from worldquant_brain.brain_job_queue import BrainJobQueue
 from worldquant_brain.alpha_experiment_store import AlphaExperimentStore
 from worldquant_brain.brain_scheduler import BrainDailyScheduler
+from worldquant_brain.simulation_budget import Candidate as BudgetCandidate, ThreeMinuteSimulationBudget
 from worldquant_brain.manual_priority_queue import ManualPriorityQueue
 from worldquant_brain.score_tracker import ScoreTracker, parse_score_payload
 from worldquant_brain.research_memory import AlphaResearchFactoryService
@@ -94,6 +95,7 @@ class QuantAppContext:
         self.alpha_vault = AlphaVault()
         self.alpha_vault.seed_initial_verified_alphas()
         self.alpha_experiments = AlphaExperimentStore(self.alpha_vault.db_path)
+        self.sim_budget = ThreeMinuteSimulationBudget(minimum_interval_seconds=float(os.getenv('BRAIN_MINING_COOLDOWN_SEC', '0') or '0'), max_pending=int(os.getenv('BRAIN_QUEUE_TARGET_DEPTH', '3') or '3'))
         self.brain_scheduler = BrainDailyScheduler(self.alpha_vault.db_path, int(os.getenv("BRAIN_DAILY_FLUSH_HOUR", "22")))
         self.manual_brain_queue = ManualPriorityQueue(self.alpha_vault.db_path)
         self.brain_score_tracker = ScoreTracker(self.alpha_vault.db_path)
@@ -544,6 +546,8 @@ class QuantAppContext:
             margin = m.get("margin")
             checks_passed = m.get("checks_passed", True)
             failed_checks = m.get("failed_checks") or []
+            if hasattr(self, "sim_budget"):
+                self.sim_budget.release(job.job_id, getattr(job, "domain", ""))
             alpha_id = job.alpha_id
             vid = getattr(job, "vault_id", None)
             if sharpe is None or fitness is None or not alpha_id:
@@ -642,8 +646,8 @@ class QuantAppContext:
                         str(alpha_id), job.expression, float(sharpe), float(fitness), float(turnover), float(margin or 0.0)
                     )
                 self.add_log(f"💾 [BRAIN 模擬成功保留] Alpha {alpha_id} (Sharpe={sharpe}, Fitness={fitness}) 已留存於清單")
-        except Exception:
-            pass
+        except Exception as exc:
+            self.add_log(f"⚠️ [BRAIN 模擬完成處理例外] {exc}")
 
     def _background_alpha_miner_loop(self):
         """24/7 背景持續自動挖掘 Alpha 因子 Worker (全程遠端 BRAIN 模擬 + 每日 22:00 擇優結算送出)"""
@@ -657,15 +661,30 @@ class QuantAppContext:
                     last_mine_ts = getattr(self, "_last_brain_mine_ts", 0.0)
                     if self.brain_job_queue.queue_depth() < target_depth and (time.time() - last_mine_ts) >= cooldown_sec:
                         cand = self.alpha_miner.think_and_select_best_candidate(batch_size=12)
-                        sim_settings = self.alpha_miner.generate_candidate_settings()
-                        job, is_new = self.brain_job_queue.create_job(
-                            cand["expression"], settings=sim_settings, priority=20, source="AUTO_MINING", simulation_only=True
+                        dom = str(cand.get("domain") or "FUNDAMENTAL_CF_EV")
+                        budget_dec = self.sim_budget.admit(
+                            BudgetCandidate(
+                                candidate_id=cand["expression"][:40],
+                                expression=cand["expression"],
+                                blueprint_family=dom,
+                                data_domain=dom,
+                                expected_quality=min(1.0, float(cand.get("local_quality_score", 70.0)) / 100.0),
+                            )
                         )
-                        if is_new:
-                            self._last_brain_mine_ts = time.time()
-                            self._record_brain_experiment_started(job)
-                            self.alpha_miner.total_mined += 1
-                            self.add_log(f"🧠 [BRAIN 慢工精選送測] {cand['name']} (本地評分={cand.get('local_quality_score')}) -> Job {job.job_id}")
+                        if budget_dec.admitted:
+                            sim_settings = self.alpha_miner.generate_candidate_settings(domain=dom)
+                            job, is_new = self.brain_job_queue.create_job(
+                                cand["expression"], settings=sim_settings, priority=20, source="AUTO_MINING", simulation_only=True
+                            )
+                            if is_new:
+                                job.domain = dom
+                                job.mcts_branch = cand.get("mcts_branch")
+                                self._last_brain_mine_ts = time.time()
+                                self._record_brain_experiment_started(job)
+                                self.alpha_miner.total_mined += 1
+                                self.add_log(f"🧠 [BRAIN 慢工精選送測] {cand['name']} (域={dom}, 本地評分={cand.get('local_quality_score')}) -> Job {job.job_id}")
+                            else:
+                                self.sim_budget.release(cand["expression"][:40], dom)
                     if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
                         from datetime import datetime, timedelta, timezone
                         taipei_now = datetime.now(timezone(timedelta(hours=8)))
@@ -685,8 +704,8 @@ class QuantAppContext:
                             self.brain_scheduler.finish(
                                 claim.run_id, status="COMPLETED", considered=len(flushed or []), submitted=sub_cnt, now=taipei_now
                             )
-            except Exception:
-                pass
+            except Exception as exc:
+                self.add_log(f"⚠️ [Alpha Miner 迴圈例外] {exc}")
             time.sleep(5)
 
     def _background_worker_loop(self):
@@ -793,8 +812,22 @@ class QuantAppContext:
                     local_balance=rem_eq,
                     remote_balance=rem_eq,
                 )
-        except Exception:
-            pass
+            else:
+                eq = float(getattr(self.active_bot, "balance_usdt", 0.0) or 0.0)
+                pos = float(getattr(self.active_bot, "position", 0.0) or 0.0)
+                sym = getattr(self.active_bot, "symbol", "BTC/USDT")
+                loc_pos = {sym: pos} if pos else {}
+                rem_pos = [{"symbol": sym, "contracts": abs(pos), "side": "LONG" if pos >= 0 else "SHORT"}] if pos else []
+                self.reconciliation_service.reconcile(
+                    local_positions=loc_pos,
+                    remote_positions=rem_pos,
+                    local_orders=[],
+                    remote_orders=[],
+                    local_balance=eq,
+                    remote_balance=eq,
+                )
+        except Exception as exc:
+            self.add_log(f"⚠️ [對帳同步例外] {exc}")
 
     def _start_background_worker(self):
         if self.bot_thread is None or not self.bot_thread.is_alive():

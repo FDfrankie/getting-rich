@@ -180,5 +180,36 @@ class TestAlphaDiversityUpgrade(unittest.TestCase):
         self.assertFalse(out["passed"])
         self.assertAlmostEqual(out["self_correlation"], 0.79, places=4)
 
+
+    def test_domain_aware_decay_settings(self):
+        miner = ContinuousAlphaMiner()
+        s_fund = miner.generate_candidate_settings(domain="FUNDAMENTAL_CF_EV")
+        s_pv = miner.generate_candidate_settings(domain="PV_RESIDUAL_HUMP")
+        self.assertIn(s_fund["decay"], (0, 2, 4))
+        self.assertIn(s_pv["decay"], (4, 6, 8, 10))
+
+
+    def test_risk_manager_sell_00164_and_iso_utc_timestamp_passes(self):
+        from datetime import datetime, timezone
+        from crypto_trading.risk_manager import RiskManager
+        rm = RiskManager(initial_capital=5000.0)
+        res = rm.evaluate_order(
+            symbol="BTC/USDT",
+            side="SELL",
+            amount=0.0164,
+            price=64000.0,
+            order_type="MARKET",
+            context={
+                "data_source": "EXCHANGE_REST",
+                "data_timestamp": datetime.now(timezone.utc).isoformat(),
+                "data_quality_passed": True,
+                "reconciliation_fresh": True,
+                "exchange_connected": True,
+                "step_size": 0.001,
+                "tick_size": 0.01,
+            },
+        )
+        self.assertTrue(res.allowed, f"Expected approved=True, got {res}")
+
 if __name__ == "__main__":
     unittest.main()
