@@ -528,6 +528,27 @@ class TaiwanUniverseRegistry:
                 );
                 CREATE INDEX IF NOT EXISTS ix_tw_code ON taiwan_symbols(code);
                 CREATE INDEX IF NOT EXISTS ix_tw_industry ON taiwan_symbols(industry);
+                """
+            )
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(taiwan_symbols)").fetchall()}
+            for col_name, col_def in (
+                ("popularity_rank", "INTEGER NOT NULL DEFAULT 99999"),
+                ("board", "TEXT NOT NULL DEFAULT 'GENERAL'"),
+                ("security_type", "TEXT NOT NULL DEFAULT 'COMMON_STOCK'"),
+                ("yahoo_symbol", "TEXT"),
+                ("listed_date", "TEXT"),
+                ("delisted_date", "TEXT"),
+                ("active", "INTEGER NOT NULL DEFAULT 1"),
+                ("source", "TEXT NOT NULL DEFAULT 'POPULAR_WATCHLIST'"),
+                ("pe_ratio", "REAL"),
+                ("dividend_yield", "REAL"),
+                ("pb_ratio", "REAL"),
+                ("revenue_yoy", "REAL"),
+            ):
+                if col_name not in cols:
+                    conn.execute(f"ALTER TABLE taiwan_symbols ADD COLUMN {col_name} {col_def}")
+            conn.executescript(
+                """
                 CREATE INDEX IF NOT EXISTS ix_tw_stype ON taiwan_symbols(security_type, active);
                 CREATE INDEX IF NOT EXISTS ix_tw_pop ON taiwan_symbols(popularity_rank, volume DESC);
                 CREATE TABLE IF NOT EXISTS taiwan_pit_history (
@@ -578,23 +599,6 @@ class TaiwanUniverseRegistry:
                 );
                 """
             )
-            cols = {r["name"] for r in conn.execute("PRAGMA table_info(taiwan_symbols)").fetchall()}
-            for col_name, col_def in (
-                ("popularity_rank", "INTEGER NOT NULL DEFAULT 99999"),
-                ("board", "TEXT NOT NULL DEFAULT 'GENERAL'"),
-                ("security_type", "TEXT NOT NULL DEFAULT 'COMMON_STOCK'"),
-                ("yahoo_symbol", "TEXT"),
-                ("listed_date", "TEXT"),
-                ("delisted_date", "TEXT"),
-                ("active", "INTEGER NOT NULL DEFAULT 1"),
-                ("source", "TEXT NOT NULL DEFAULT 'POPULAR_WATCHLIST'"),
-                ("pe_ratio", "REAL"),
-                ("dividend_yield", "REAL"),
-                ("pb_ratio", "REAL"),
-                ("revenue_yoy", "REAL"),
-            ):
-                if col_name not in cols:
-                    conn.execute(f"ALTER TABLE taiwan_symbols ADD COLUMN {col_name} {col_def}")
 
     def seed_builtin_if_empty(self) -> int:
         now = datetime.now(timezone.utc).isoformat()
