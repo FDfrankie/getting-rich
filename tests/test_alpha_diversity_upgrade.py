@@ -153,5 +153,32 @@ class TestAlphaDiversityUpgrade(unittest.TestCase):
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0]["alpha_id"], "YEST_TOP")
 
+
+    def test_fetch_self_correlation_polls_retry_after_and_parses_records(self):
+        from unittest.mock import MagicMock
+        bc = BrainClient(email="test@example.com", password="secret")
+        bc.authenticated = True
+
+        r_wait = MagicMock(status_code=202, content=b"", headers={"Retry-After": "0.01"})
+        r_records = MagicMock(
+            status_code=200,
+            content=b"ok",
+            headers={},
+            json=lambda: {"records": [["OLD_A1", 0.42], ["OLD_A2", 0.79]]},
+        )
+        r_chk = MagicMock(
+            status_code=200,
+            content=b"ok",
+            headers={},
+            json=lambda: {"is": {"checks": [{"name": "SELF_CORRELATION", "result": "FAIL", "value": 0.79}]}},
+        )
+        r_alpha = MagicMock(status_code=200, content=b"{}", headers={}, json=lambda: {})
+
+        bc.session.get = MagicMock(side_effect=[r_wait, r_records, r_chk, r_alpha])
+        out = bc.fetch_self_correlation("NEW_ALPHA_1", max_polls=3)
+        self.assertTrue(out["checked"])
+        self.assertFalse(out["passed"])
+        self.assertAlmostEqual(out["self_correlation"], 0.79, places=4)
+
 if __name__ == "__main__":
     unittest.main()
