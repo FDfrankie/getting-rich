@@ -674,11 +674,26 @@ class BrainClient:
         }
 
     def verify_alpha_for_submission(self, alpha_id: str) -> dict[str, Any]:
-        """Verify official /alphas/{alpha_id} IS-checks (0 FAILs) and metrics before calling /submit."""
+        """Verify official /alphas/{alpha_id} and /alphas/{alpha_id}/check IS-checks (0 FAILs) before calling /submit."""
         try:
             resp = self.session.get(f"{self.BASE_URL}/alphas/{alpha_id}", timeout=self.timeout)
         except Exception as e:
             return {"passed": False, "status": "CHECK_FETCH_ERROR", "reasons": [mask_sensitive_data(str(e))]}
+
+        # Also inspect /alphas/{alpha_id}/check for authoritative SELF_CORRELATION / PROD_CORRELATION
+        check_reasons: list[str] = []
+        try:
+            r_chk = self.session.get(f"{self.BASE_URL}/alphas/{alpha_id}/check", timeout=min(self.timeout, 15.0))
+            if isinstance(getattr(r_chk, "status_code", None), int) and r_chk.status_code == 200 and getattr(r_chk, "content", None):
+                cj = r_chk.json() or {}
+                c_is = cj.get("is") if isinstance(cj.get("is"), dict) else cj
+                for chk in (c_is.get("checks") or [] if isinstance(c_is, dict) else []):
+                    if isinstance(chk, dict) and str(chk.get("result") or "").upper() in ("FAIL", "FAILED", "ERROR"):
+                        cname = str(chk.get("name") or "UNKNOWN_CHECK")
+                        cval = chk.get("value")
+                        check_reasons.append(f"{cname}={chk.get('result')} (value={cval})")
+        except Exception:
+            pass
 
         if not isinstance(getattr(resp, "status_code", None), int) or resp.status_code != 200 or not getattr(resp, "content", None):
             return {"passed": True, "status": "SKIPPED_NO_DETAIL", "reasons": []}
@@ -692,7 +707,7 @@ class BrainClient:
             return {"passed": True, "status": "SKIPPED_NON_DICT", "reasons": []}
 
         is_block = data.get("is") if isinstance(data.get("is"), dict) else data
-        reasons: list[str] = []
+        reasons: list[str] = list(check_reasons)
 
         checks = is_block.get("checks") if isinstance(is_block, dict) else None
         if isinstance(checks, list):

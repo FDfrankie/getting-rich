@@ -78,7 +78,29 @@ class ContinuousAlphaMiner:
             ("ts_delta", [1, 3, 5]),
         ]
 
-    def generate_candidate_settings(self) -> dict[str, Any]:
+    def generate_candidate_settings(self, domain: str = "") -> dict[str, Any]:
+        """Rotate proven BRAIN settings with domain-aware decay (low decay for Fundamental/Analyst, higher decay for PV/Sentiment)."""
+        dom = (domain or "").upper()
+        if "FUNDAMENTAL" in dom or "ANALYST" in dom:
+            decays = [0, 2, 4]
+        elif "PV" in dom or "SENTIMENT" in dom or "VOLATILITY" in dom:
+            decays = [4, 6, 8, 10]
+        else:
+            decays = [2, 4, 6, 8]
+        return {
+            "instrumentType": "EQUITY",
+            "region": "USA",
+            "universe": "TOP3000",
+            "delay": 1,
+            "decay": random.choice(decays),
+            "neutralization": random.choice(["SUBINDUSTRY", "INDUSTRY"]),
+            "truncation": random.choice([0.05, 0.06, 0.08]),
+            "pasteurization": "ON",
+            "unitHandling": "VERIFY",
+            "nanHandling": "OFF",
+        }
+
+    def _legacy_generate_candidate_settings(self) -> dict[str, Any]:
         """Rotate proven WorldQuant BRAIN simulation settings (Neutralization, Decay, Truncation)."""
         return {
             "instrumentType": "EQUITY",
@@ -333,13 +355,19 @@ class ContinuousAlphaMiner:
         db_p = self._dedup_db_path()
         if not db_p or db_p == ":memory:" or not os.path.exists(db_p):
             return 0
+        conn = None
         try:
             conn = sqlite3.connect(db_p, timeout=10.0)
             rows = conn.execute("SELECT expression FROM brain_tried_expressions ORDER BY rowid DESC LIMIT 300").fetchall()
-            conn.close()
             return sum(1 for (ex,) in rows if extract_expression_skeleton(ex) == skeleton)
         except Exception:
             return 0
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def generate_unique_candidate(self, max_attempts: int = 35) -> dict[str, str]:
         """Generate a structurally diverse, high-pass-rate FASTEXPR expression (eliminates nested ts_decay_linear clones)."""

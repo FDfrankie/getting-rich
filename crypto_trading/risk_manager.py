@@ -21,6 +21,9 @@ except ImportError:
     class TradingMode:
         LIVE = "LIVE"
         PAPER = "PAPER"
+        BITUNIX_LIVE = "BITUNIX_LIVE"
+        BINANCE_TESTNET = "BINANCE_TESTNET"
+        LOCAL_PAPER = "LOCAL_PAPER"
     class _FallbackSettings:
         trading_mode = "PAPER"
     def get_settings():
@@ -170,10 +173,21 @@ class RiskManager:
             reasons.append("DataSource metadata is missing")
 
         last_data_time = ctx.get("data_timestamp")
-        if last_data_time:
+        if last_data_time is not None and last_data_time != "":
             try:
-                dt = datetime.fromisoformat(last_data_time)
-                staleness = (datetime.utcnow() - dt).total_seconds()
+                from datetime import timezone
+                if isinstance(last_data_time, (int, float)):
+                    dt = datetime.fromtimestamp(float(last_data_time), tz=timezone.utc)
+                elif isinstance(last_data_time, datetime):
+                    dt = last_data_time if last_data_time.tzinfo is not None else last_data_time.replace(tzinfo=timezone.utc)
+                else:
+                    s_ts = str(last_data_time).strip()
+                    if s_ts.endswith("Z"):
+                        s_ts = s_ts[:-1] + "+00:00"
+                    dt = datetime.fromisoformat(s_ts)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                staleness = (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds()
                 max_stale = ctx.get("max_stale_seconds", 300)
                 if staleness > max_stale:
                     reasons.append(f"Stale market data: age {staleness:.1f}s > {max_stale}s")
@@ -218,9 +232,19 @@ class RiskManager:
 
         step_size = ctx.get("step_size", 0.001)
         if step_size > 0:
-            remainder = amount % step_size
-            if round(remainder, 6) != 0 and round(abs(remainder - step_size), 6) != 0:
-                reasons.append(f"Amount {amount} violates step_size {step_size}")
+            from decimal import Decimal, ROUND_DOWN
+            d_amt = Decimal(str(amount))
+            d_step = Decimal(str(step_size))
+            if ctx.get("auto_quantize_step", True):
+                q_amt = float((d_amt / d_step).to_integral_value(rounding=ROUND_DOWN) * d_step)
+                if q_amt <= 0:
+                    reasons.append(f"Amount {amount} quantizes to 0 under step_size {step_size}")
+                else:
+                    amount = q_amt
+            else:
+                rem = d_amt % d_step
+                if rem != Decimal("0"):
+                    reasons.append(f"Amount {amount} violates step_size {step_size}")
 
         tick_size = ctx.get("tick_size", 0.01)
         if tick_size > 0:
