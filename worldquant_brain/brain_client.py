@@ -459,8 +459,16 @@ class BrainClient:
         import sqlite3
         from datetime import datetime, timezone
         day = day_str or self._today_taipei()
+        import math
         norm_m = float(margin) / 10000.0 if float(margin) > 0.5 else float(margin)
-        score = float(sharpe) * 0.55 + float(fitness) * 0.35 + norm_m * 100.0 - float(turnover) * 0.15
+        m_bps = norm_m * 10000.0
+        s_score = max(0.0, min(1.0, (float(sharpe) - 1.0) / 1.5))
+        f_score = max(0.0, min(1.0, (float(fitness) - 0.7) / 1.3))
+        m_score = max(0.0, min(1.0, (m_bps - 5.0) / 20.0)) if m_bps > 0 else 0.30
+        t_val = max(0.005, min(1.0, float(turnover) / 100.0 if float(turnover) > 2.0 else float(turnover)))
+        t_bell = math.exp(-((math.log(t_val) - math.log(0.20)) ** 2) / (2.0 * (0.65 ** 2)))
+        e_bonus = 0.85 if ("opt6_" in str(expression) or "scl12_" in str(expression) or "ts_regression" in str(expression)) else 0.35
+        score = round(100.0 * (0.35 * s_score + 0.25 * f_score + 0.15 * m_score + 0.15 * t_bell + 0.10 * e_bonus) + float(sharpe) * 0.01, 4)
         now_iso = datetime.now(timezone.utc).isoformat()
         db_p = self._quota_db()
         os.makedirs(os.path.dirname(os.path.abspath(db_p)), exist_ok=True)

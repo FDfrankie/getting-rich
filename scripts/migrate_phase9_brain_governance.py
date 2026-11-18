@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sqlite3
-import sys
 from pathlib import Path
 
+import sys
+from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
-
 from observability.audit_log import AuditLog
 from worldquant_brain.alpha_experiment_store import AlphaExperimentStore, expression_hash
 from worldquant_brain.brain_scheduler import BrainDailyScheduler

@@ -60,40 +60,40 @@
   "validation_gate_version": "model-governance-v2-oos-stress",
   "rejection_reason": "global_test_rank_ic_ge_0_015,global_test_base_daily_sharpe_ge_1_0,severe_cost_positive_return,severe_cost_daily_sharpe_ge_0_5",
   "oos_validation_gate": {
-    "validated_at": "2026-11-17T23:12:56.211930+00:00",
+    "validated_at": "2026-11-18T03:03:04.219641+00:00",
     "gate_passed": false,
-    "global_test_rank_ic": -0.006176,
+    "global_test_rank_ic": -0.008288,
     "cost_scenarios": {
       "base": {
-        "avg_net_return_pct": -99.4271,
-        "avg_daily_sharpe": -85.4006,
-        "avg_max_drawdown_pct": 99.4281
+        "avg_net_return_pct": -99.3189,
+        "avg_daily_sharpe": -75.4012,
+        "avg_max_drawdown_pct": 99.3205
       },
       "stress_1_5x": {
-        "avg_net_return_pct": -99.9598,
-        "avg_daily_sharpe": -99.7863,
-        "avg_max_drawdown_pct": 99.9598
+        "avg_net_return_pct": -99.9457,
+        "avg_daily_sharpe": -90.5705,
+        "avg_max_drawdown_pct": 99.9458
       },
       "severe_2_0x_funding": {
-        "avg_net_return_pct": -99.9972,
-        "avg_daily_sharpe": -106.7152,
-        "avg_max_drawdown_pct": 99.9972
+        "avg_net_return_pct": -99.9957,
+        "avg_daily_sharpe": -98.9329,
+        "avg_max_drawdown_pct": 99.9957
       }
     },
     "leave_one_asset_out": {
       "BTC/USDT": {
-        "rank_ic": 0.039005,
-        "base_daily_sharpe": -59.0248,
+        "rank_ic": 0.039829,
+        "base_daily_sharpe": -87.5831,
         "base_net_return_pct": -100.0
       },
       "ETH/USDT": {
-        "rank_ic": 0.046782,
-        "base_daily_sharpe": -74.1313,
+        "rank_ic": 0.050371,
+        "base_daily_sharpe": -79.2756,
         "base_net_return_pct": -100.0
       },
       "SOL/USDT": {
-        "rank_ic": 0.033397,
-        "base_daily_sharpe": -90.2342,
+        "rank_ic": 0.034143,
+        "base_daily_sharpe": -90.2756,
         "base_net_return_pct": -100.0
       }
     }

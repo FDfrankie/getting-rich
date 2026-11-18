@@ -1,0 +1,21 @@
+name: Future Offline CI
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "35 19 * * 0"
+permissions:
+  contents: read
+concurrency:
+  group: future-offline-ci-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: pip}
+      - run: pip install -r requirements.txt
+      - run: python -m compileall -q crypto_trading taiwan_stock worldquant_brain web_ui
+      - run: python -m pytest tests -m "not live and not brain_live and not binance_testnet_live and not bitunix_live and not e2e" -q

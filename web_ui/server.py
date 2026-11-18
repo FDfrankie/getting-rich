@@ -47,6 +47,8 @@ except ImportError:
     CryptoTradingBot = None
 
 from crypto_trading.strategies.momentum_breakout import MomentumBreakoutStrategy
+from crypto_trading.strategies.conditional_prob_strategy import ConditionalProbTechStrategy
+from crypto_trading.strategies.brain_alpha_strategy import BrainAlphaCryptoStrategy
 
 try:
     from crypto_trading.strategies.ml_strategy import MLAlphaStrategy
@@ -57,6 +59,7 @@ try:
 except ImportError:
     RLAlphaStrategy = None
 
+from taiwan_stock.universe_registry import TaiwanUniverseRegistry, build_yuanta_style_quote_panel
 from worldquant_brain.alpha_miner import ContinuousAlphaMiner
 from worldquant_brain.alpha_vault import AlphaVault
 from worldquant_brain.brain_client import BrainClient
@@ -81,6 +84,7 @@ class QuantAppContext:
         self.stock_screener = StockScreener()
         self.report_gen = ReportGenerator()
         self.ml_ranker = TaiwanStockMLRanker(model_type="lightgbm")
+        self.tw_universe = TaiwanUniverseRegistry()
 
         self.alpha_vault = AlphaVault()
         self.alpha_vault.seed_initial_verified_alphas()
@@ -404,7 +408,11 @@ class QuantAppContext:
         lgbm_path = os.path.join(DATA_DIR, "models", "crypto_lgbm_weights.joblib")
         ppo_path = os.path.join(DATA_DIR, "models", "crypto_ppo_agent.pt")
 
-        if strat_name == "ml" and MLAlphaStrategy is not None:
+        if strat_name == "brain_alpha":
+            strat = BrainAlphaCryptoStrategy(vault_db_path=self.alpha_vault.db_path)
+        elif strat_name == "cond_prob":
+            strat = ConditionalProbTechStrategy()
+        elif strat_name == "ml" and MLAlphaStrategy is not None:
             strat = MLAlphaStrategy(model_path=lgbm_path if os.path.exists(lgbm_path) else None)
         elif strat_name == "rl" and RLAlphaStrategy is not None:
             strat = RLAlphaStrategy(agent_weights_path=ppo_path if os.path.exists(ppo_path) else None)
@@ -891,6 +899,31 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 }
             )
 
+        # API: 台股全市場上市櫃標的搜尋與產業分類清單 (支援 TWSE/TPEx 官方同步)
+        if path == "/api/taiwan/universe":
+            qs = parse_qs(parsed.query)
+            q = qs.get("q", [""])[0]
+            ind = qs.get("industry", [""])[0]
+            mkt = qs.get("market", [""])[0]
+            sync_flag = qs.get("sync", ["0"])[0] == "1"
+            sync_info = APP_STATE.tw_universe.sync_from_official_apis() if sync_flag else None
+            items = APP_STATE.tw_universe.search(query=q, industry=ind, market=mkt, limit=300)
+            return self._send_json_response({"success": True, "count": len(items), "sync_info": sync_info, "items": items})
+
+        # API: 元大投資先生風格個股五檔、分價量表與多指標共振診斷
+        if path == "/api/taiwan/quote":
+            try:
+                raw_sym = parse_qs(parsed.query).get("symbol", ["2330.TW"])[0]
+                sym = APP_STATE.tw_universe.resolve_symbol(raw_sym)
+                matches = APP_STATE.tw_universe.search(query=sym.split(".")[0], limit=1)
+                meta = matches[0] if matches else {"name": sym, "industry": "台股標的"}
+                import yfinance as yf
+                df = yf.Ticker(sym).history(period="6mo", interval="1d")
+                panel = build_yuanta_style_quote_panel(df, sym, meta=meta)
+                return self._send_json_response({"success": True, "data": panel})
+            except Exception as e:
+                return self._send_json_response({"success": False, "error": str(e)}, status=500)
+
         # API: 台股大盤診斷
         if path == "/api/taiwan/market":
             try:
@@ -1035,7 +1068,9 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 interval = parse_qs(parsed.query).get("interval", ["1m"])[0]
 
                 # 支援台股代碼與加密貨幣雙市場
-                is_taiwan = symbol.endswith(".TW") or symbol.endswith(".TWO")
+                if symbol == "^TWII" or symbol.isdigit() or (len(symbol) <= 6 and not "/" in symbol and not symbol.endswith("USDT") and not symbol.endswith("USDC")):
+                    symbol = APP_STATE.tw_universe.resolve_symbol(symbol)
+                is_taiwan = symbol == "^TWII" or symbol.endswith(".TW") or symbol.endswith(".TWO")
                 if is_taiwan:
                     import yfinance as yf
 

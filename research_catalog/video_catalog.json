@@ -1,0 +1,14 @@
+{
+  "policy": "Educational sources create testable hypotheses only. No video claim may unlock trading without causal backtest, cost stress, walk-forward validation, and shadow evidence.",
+  "collections": [
+    {"title":"投資必學（技術分析③：技術指標）","url":"https://www.youtube.com/playlist?list=PL809yG_YOYZ68h5wfiT5W1BhgLOeNJLnp","topics":["MA","MACD","RSI","Stochastic","CCI","Bollinger","ATR","OBV","MFI","VWAP"]},
+    {"title":"Best TradingView Indicators for Day Trading","url":"https://www.youtube.com/playlist?list=PLsdrxVsZDg5MZ4DzIf-yVTKO7qSXnqHfZ","topics":["Supertrend","RSI","MACD","Bollinger","VWAP","Volume Profile","failure cases"]},
+    {"title":"Best Indicator Settings for Day Trading","url":"https://www.youtube.com/playlist?list=PLsdrxVsZDg5MHYPAjPcgEzLwLKWT3aWFy","topics":["RSI settings","MACD settings","VWAP","ADX","Volume Profile"]},
+    {"title":"Technical Indicators Explained","url":"https://www.youtube.com/playlist?list=PLH6Z5F1cPvYE","topics":["ADX","Anchored VWAP","HMA","DEMA","CPR","Renko"]},
+    {"title":"技術分析交易教學","url":"https://www.youtube.com/playlist?list=PL5Bqwt7FSET37DcqKmQXcaXHPKEAp6ySC","topics":["台股","台指期","KD","MACD","RSI","均線","唐奇安","CCI"]},
+    {"title":"台股技術分析教學篇","url":"https://www.youtube.com/playlist?list=PLUOty1WB1BKpfce8Fy9GrwqiMw8mEHjhu","topics":["K線","量價","BIAS","MACD","RSI","KD","融資維持率"]},
+    {"title":"MACD, KD, RSI, 布林等指標教學","url":"https://www.youtube.com/playlist?list=PLLy2drsLe2jHA3S0fLYUy6qM4CqvJh-24","topics":["MACD","RSI","Bollinger","KD","divergence","trend traps"]},
+    {"title":"技術分析教學","url":"https://www.youtube.com/playlist?list=PLIfqeYi9GPZlclAPn73fsEybI0b9PzO2D","topics":["RSI","MACD","KD","DMI","BIAS","backtest","overfitting","timeframes"]},
+    {"title":"最完整的交易教學","url":"https://www.youtube.com/watch?v=osRapgh8TQY","topics":["candles","support resistance","patterns","volume","MA","Bollinger","MACD","RSI","risk"]}
+  ]
+}

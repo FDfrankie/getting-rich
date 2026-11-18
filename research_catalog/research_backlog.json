@@ -1,0 +1,992 @@
+[
+  {
+    "task_id": "e58cfaa6c1d8",
+    "topic": "MA",
+    "source_title": "投資必學（技術分析③：技術指標）",
+    "source_url": "https://www.youtube.com/playlist?list=PL809yG_YOYZ68h5wfiT5W1BhgLOeNJLnp",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "538d4a269f0f",
+    "topic": "MACD",
+    "source_title": "投資必學（技術分析③：技術指標）",
+    "source_url": "https://www.youtube.com/playlist?list=PL809yG_YOYZ68h5wfiT5W1BhgLOeNJLnp",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "d01e99387a2e",
+    "topic": "RSI",
+    "source_title": "投資必學（技術分析③：技術指標）",
+    "source_url": "https://www.youtube.com/playlist?list=PL809yG_YOYZ68h5wfiT5W1BhgLOeNJLnp",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "d7e7bc3d4b01",
+    "topic": "Stochastic",
+    "source_title": "投資必學（技術分析③：技術指標）",
+    "source_url": "https://www.youtube.com/playlist?list=PL809yG_YOYZ68h5wfiT5W1BhgLOeNJLnp",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "661a1752ab5b",
+    "topic": "CCI",
+    "source_title": "投資必學（技術分析③：技術指標）",
+    "source_url": "https://www.youtube.com/playlist?list=PL809yG_YOYZ68h5wfiT5W1BhgLOeNJLnp",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "d8d0964f13a6",
+    "topic": "Bollinger",
+    "source_title": "投資必學（技術分析③：技術指標）",
+    "source_url": "https://www.youtube.com/playlist?list=PL809yG_YOYZ68h5wfiT5W1BhgLOeNJLnp",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "94ab96ac3374",
+    "topic": "ATR",
+    "source_title": "投資必學（技術分析③：技術指標）",
+    "source_url": "https://www.youtube.com/playlist?list=PL809yG_YOYZ68h5wfiT5W1BhgLOeNJLnp",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "52bf2742dec7",
+    "topic": "OBV",
+    "source_title": "投資必學（技術分析③：技術指標）",
+    "source_url": "https://www.youtube.com/playlist?list=PL809yG_YOYZ68h5wfiT5W1BhgLOeNJLnp",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "47f3badfc6a9",
+    "topic": "MFI",
+    "source_title": "投資必學（技術分析③：技術指標）",
+    "source_url": "https://www.youtube.com/playlist?list=PL809yG_YOYZ68h5wfiT5W1BhgLOeNJLnp",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "df3bc2d31498",
+    "topic": "VWAP",
+    "source_title": "投資必學（技術分析③：技術指標）",
+    "source_url": "https://www.youtube.com/playlist?list=PL809yG_YOYZ68h5wfiT5W1BhgLOeNJLnp",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "40ca63fb1dce",
+    "topic": "Supertrend",
+    "source_title": "Best TradingView Indicators for Day Trading",
+    "source_url": "https://www.youtube.com/playlist?list=PLsdrxVsZDg5MZ4DzIf-yVTKO7qSXnqHfZ",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "87dceab390a4",
+    "topic": "RSI",
+    "source_title": "Best TradingView Indicators for Day Trading",
+    "source_url": "https://www.youtube.com/playlist?list=PLsdrxVsZDg5MZ4DzIf-yVTKO7qSXnqHfZ",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "2dcaa178c2c0",
+    "topic": "MACD",
+    "source_title": "Best TradingView Indicators for Day Trading",
+    "source_url": "https://www.youtube.com/playlist?list=PLsdrxVsZDg5MZ4DzIf-yVTKO7qSXnqHfZ",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "9371571182e6",
+    "topic": "Bollinger",
+    "source_title": "Best TradingView Indicators for Day Trading",
+    "source_url": "https://www.youtube.com/playlist?list=PLsdrxVsZDg5MZ4DzIf-yVTKO7qSXnqHfZ",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "582c8767b0c3",
+    "topic": "VWAP",
+    "source_title": "Best TradingView Indicators for Day Trading",
+    "source_url": "https://www.youtube.com/playlist?list=PLsdrxVsZDg5MZ4DzIf-yVTKO7qSXnqHfZ",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "0c4306eb1465",
+    "topic": "Volume Profile",
+    "source_title": "Best TradingView Indicators for Day Trading",
+    "source_url": "https://www.youtube.com/playlist?list=PLsdrxVsZDg5MZ4DzIf-yVTKO7qSXnqHfZ",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "96846b2de694",
+    "topic": "failure cases",
+    "source_title": "Best TradingView Indicators for Day Trading",
+    "source_url": "https://www.youtube.com/playlist?list=PLsdrxVsZDg5MZ4DzIf-yVTKO7qSXnqHfZ",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "beebea60a02d",
+    "topic": "RSI settings",
+    "source_title": "Best Indicator Settings for Day Trading",
+    "source_url": "https://www.youtube.com/playlist?list=PLsdrxVsZDg5MHYPAjPcgEzLwLKWT3aWFy",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "9eafa837b5a8",
+    "topic": "MACD settings",
+    "source_title": "Best Indicator Settings for Day Trading",
+    "source_url": "https://www.youtube.com/playlist?list=PLsdrxVsZDg5MHYPAjPcgEzLwLKWT3aWFy",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "dbd3edc175c5",
+    "topic": "VWAP",
+    "source_title": "Best Indicator Settings for Day Trading",
+    "source_url": "https://www.youtube.com/playlist?list=PLsdrxVsZDg5MHYPAjPcgEzLwLKWT3aWFy",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "81508c59ae63",
+    "topic": "ADX",
+    "source_title": "Best Indicator Settings for Day Trading",
+    "source_url": "https://www.youtube.com/playlist?list=PLsdrxVsZDg5MHYPAjPcgEzLwLKWT3aWFy",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "b2e1284d9037",
+    "topic": "Volume Profile",
+    "source_title": "Best Indicator Settings for Day Trading",
+    "source_url": "https://www.youtube.com/playlist?list=PLsdrxVsZDg5MHYPAjPcgEzLwLKWT3aWFy",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "ab22f40ea2ed",
+    "topic": "ADX",
+    "source_title": "Technical Indicators Explained",
+    "source_url": "https://www.youtube.com/playlist?list=PLH6Z5F1cPvYE",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "606db92d9b6a",
+    "topic": "Anchored VWAP",
+    "source_title": "Technical Indicators Explained",
+    "source_url": "https://www.youtube.com/playlist?list=PLH6Z5F1cPvYE",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "cf033de5db2b",
+    "topic": "HMA",
+    "source_title": "Technical Indicators Explained",
+    "source_url": "https://www.youtube.com/playlist?list=PLH6Z5F1cPvYE",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "4108479460da",
+    "topic": "DEMA",
+    "source_title": "Technical Indicators Explained",
+    "source_url": "https://www.youtube.com/playlist?list=PLH6Z5F1cPvYE",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "b41cea21e5bc",
+    "topic": "CPR",
+    "source_title": "Technical Indicators Explained",
+    "source_url": "https://www.youtube.com/playlist?list=PLH6Z5F1cPvYE",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "021800d7723c",
+    "topic": "Renko",
+    "source_title": "Technical Indicators Explained",
+    "source_url": "https://www.youtube.com/playlist?list=PLH6Z5F1cPvYE",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "57176a132b87",
+    "topic": "台股",
+    "source_title": "技術分析交易教學",
+    "source_url": "https://www.youtube.com/playlist?list=PL5Bqwt7FSET37DcqKmQXcaXHPKEAp6ySC",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "8dadc985bead",
+    "topic": "台指期",
+    "source_title": "技術分析交易教學",
+    "source_url": "https://www.youtube.com/playlist?list=PL5Bqwt7FSET37DcqKmQXcaXHPKEAp6ySC",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "f20457ddd54b",
+    "topic": "KD",
+    "source_title": "技術分析交易教學",
+    "source_url": "https://www.youtube.com/playlist?list=PL5Bqwt7FSET37DcqKmQXcaXHPKEAp6ySC",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "a097b99b66ba",
+    "topic": "MACD",
+    "source_title": "技術分析交易教學",
+    "source_url": "https://www.youtube.com/playlist?list=PL5Bqwt7FSET37DcqKmQXcaXHPKEAp6ySC",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "9af9923f0579",
+    "topic": "RSI",
+    "source_title": "技術分析交易教學",
+    "source_url": "https://www.youtube.com/playlist?list=PL5Bqwt7FSET37DcqKmQXcaXHPKEAp6ySC",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "9e17efe8c9c9",
+    "topic": "均線",
+    "source_title": "技術分析交易教學",
+    "source_url": "https://www.youtube.com/playlist?list=PL5Bqwt7FSET37DcqKmQXcaXHPKEAp6ySC",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "c92905a63e83",
+    "topic": "唐奇安",
+    "source_title": "技術分析交易教學",
+    "source_url": "https://www.youtube.com/playlist?list=PL5Bqwt7FSET37DcqKmQXcaXHPKEAp6ySC",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "162a3fe49687",
+    "topic": "CCI",
+    "source_title": "技術分析交易教學",
+    "source_url": "https://www.youtube.com/playlist?list=PL5Bqwt7FSET37DcqKmQXcaXHPKEAp6ySC",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "877b3c229e67",
+    "topic": "K線",
+    "source_title": "台股技術分析教學篇",
+    "source_url": "https://www.youtube.com/playlist?list=PLUOty1WB1BKpfce8Fy9GrwqiMw8mEHjhu",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "0fd628000843",
+    "topic": "量價",
+    "source_title": "台股技術分析教學篇",
+    "source_url": "https://www.youtube.com/playlist?list=PLUOty1WB1BKpfce8Fy9GrwqiMw8mEHjhu",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "c8c941999c28",
+    "topic": "BIAS",
+    "source_title": "台股技術分析教學篇",
+    "source_url": "https://www.youtube.com/playlist?list=PLUOty1WB1BKpfce8Fy9GrwqiMw8mEHjhu",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "5457fd7e451b",
+    "topic": "MACD",
+    "source_title": "台股技術分析教學篇",
+    "source_url": "https://www.youtube.com/playlist?list=PLUOty1WB1BKpfce8Fy9GrwqiMw8mEHjhu",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "a92c68e4be89",
+    "topic": "RSI",
+    "source_title": "台股技術分析教學篇",
+    "source_url": "https://www.youtube.com/playlist?list=PLUOty1WB1BKpfce8Fy9GrwqiMw8mEHjhu",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "d9b808958d58",
+    "topic": "KD",
+    "source_title": "台股技術分析教學篇",
+    "source_url": "https://www.youtube.com/playlist?list=PLUOty1WB1BKpfce8Fy9GrwqiMw8mEHjhu",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "4f58ff2bc9d3",
+    "topic": "融資維持率",
+    "source_title": "台股技術分析教學篇",
+    "source_url": "https://www.youtube.com/playlist?list=PLUOty1WB1BKpfce8Fy9GrwqiMw8mEHjhu",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "234fee86fc73",
+    "topic": "MACD",
+    "source_title": "MACD, KD, RSI, 布林等指標教學",
+    "source_url": "https://www.youtube.com/playlist?list=PLLy2drsLe2jHA3S0fLYUy6qM4CqvJh-24",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "0b03d329a068",
+    "topic": "RSI",
+    "source_title": "MACD, KD, RSI, 布林等指標教學",
+    "source_url": "https://www.youtube.com/playlist?list=PLLy2drsLe2jHA3S0fLYUy6qM4CqvJh-24",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "a808b749c973",
+    "topic": "Bollinger",
+    "source_title": "MACD, KD, RSI, 布林等指標教學",
+    "source_url": "https://www.youtube.com/playlist?list=PLLy2drsLe2jHA3S0fLYUy6qM4CqvJh-24",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "210fa4958d3b",
+    "topic": "KD",
+    "source_title": "MACD, KD, RSI, 布林等指標教學",
+    "source_url": "https://www.youtube.com/playlist?list=PLLy2drsLe2jHA3S0fLYUy6qM4CqvJh-24",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "ce79c1bfb30e",
+    "topic": "divergence",
+    "source_title": "MACD, KD, RSI, 布林等指標教學",
+    "source_url": "https://www.youtube.com/playlist?list=PLLy2drsLe2jHA3S0fLYUy6qM4CqvJh-24",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "f41b67f2f1fd",
+    "topic": "trend traps",
+    "source_title": "MACD, KD, RSI, 布林等指標教學",
+    "source_url": "https://www.youtube.com/playlist?list=PLLy2drsLe2jHA3S0fLYUy6qM4CqvJh-24",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "00d109d25cb5",
+    "topic": "RSI",
+    "source_title": "技術分析教學",
+    "source_url": "https://www.youtube.com/playlist?list=PLIfqeYi9GPZlclAPn73fsEybI0b9PzO2D",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "b3f4a0879644",
+    "topic": "MACD",
+    "source_title": "技術分析教學",
+    "source_url": "https://www.youtube.com/playlist?list=PLIfqeYi9GPZlclAPn73fsEybI0b9PzO2D",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "46f139c9aa95",
+    "topic": "KD",
+    "source_title": "技術分析教學",
+    "source_url": "https://www.youtube.com/playlist?list=PLIfqeYi9GPZlclAPn73fsEybI0b9PzO2D",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "4c5e608c5e0e",
+    "topic": "DMI",
+    "source_title": "技術分析教學",
+    "source_url": "https://www.youtube.com/playlist?list=PLIfqeYi9GPZlclAPn73fsEybI0b9PzO2D",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "9d9785020861",
+    "topic": "BIAS",
+    "source_title": "技術分析教學",
+    "source_url": "https://www.youtube.com/playlist?list=PLIfqeYi9GPZlclAPn73fsEybI0b9PzO2D",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "ff586e84aabf",
+    "topic": "backtest",
+    "source_title": "技術分析教學",
+    "source_url": "https://www.youtube.com/playlist?list=PLIfqeYi9GPZlclAPn73fsEybI0b9PzO2D",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "29bf223b2d3e",
+    "topic": "overfitting",
+    "source_title": "技術分析教學",
+    "source_url": "https://www.youtube.com/playlist?list=PLIfqeYi9GPZlclAPn73fsEybI0b9PzO2D",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "46ccf549d43d",
+    "topic": "timeframes",
+    "source_title": "技術分析教學",
+    "source_url": "https://www.youtube.com/playlist?list=PLIfqeYi9GPZlclAPn73fsEybI0b9PzO2D",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "40183d4fe214",
+    "topic": "candles",
+    "source_title": "最完整的交易教學",
+    "source_url": "https://www.youtube.com/watch?v=osRapgh8TQY",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "1cbb17a81d72",
+    "topic": "support resistance",
+    "source_title": "最完整的交易教學",
+    "source_url": "https://www.youtube.com/watch?v=osRapgh8TQY",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "b95b6de87f13",
+    "topic": "patterns",
+    "source_title": "最完整的交易教學",
+    "source_url": "https://www.youtube.com/watch?v=osRapgh8TQY",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "b5c90d923792",
+    "topic": "volume",
+    "source_title": "最完整的交易教學",
+    "source_url": "https://www.youtube.com/watch?v=osRapgh8TQY",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "2f187e9006e3",
+    "topic": "MA",
+    "source_title": "最完整的交易教學",
+    "source_url": "https://www.youtube.com/watch?v=osRapgh8TQY",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "c6451215d21c",
+    "topic": "Bollinger",
+    "source_title": "最完整的交易教學",
+    "source_url": "https://www.youtube.com/watch?v=osRapgh8TQY",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "051bb033ab45",
+    "topic": "MACD",
+    "source_title": "最完整的交易教學",
+    "source_url": "https://www.youtube.com/watch?v=osRapgh8TQY",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "5d051b234930",
+    "topic": "RSI",
+    "source_title": "最完整的交易教學",
+    "source_url": "https://www.youtube.com/watch?v=osRapgh8TQY",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  },
+  {
+    "task_id": "f74783cbe006",
+    "topic": "risk",
+    "source_title": "最完整的交易教學",
+    "source_url": "https://www.youtube.com/watch?v=osRapgh8TQY",
+    "status": "HYPOTHESIS_PENDING",
+    "required_evidence": [
+      "causal_formula",
+      "purged_walk_forward",
+      "base_cost",
+      "stress_cost",
+      "ablation",
+      "shadow"
+    ]
+  }
+]
