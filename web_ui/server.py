@@ -622,7 +622,22 @@ class QuantAppContext:
                     brain_alpha_id=str(alpha_id),
                     is_check_status="PASS" if checks_passed else "FAIL",
                 )
-                if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
+                corr_info = self.brain_client.fetch_self_correlation(str(alpha_id))
+                self_corr_val = corr_info.get("self_correlation")
+                corr_passed = corr_info.get("passed") is not False
+                try:
+                    self.alpha_miner.record_domain_feedback(
+                        getattr(job, "domain", "FUNDAMENTAL_CF_EV"),
+                        sharpe=float(sharpe),
+                        passed=bool(checks_passed and corr_passed),
+                        self_corr=self_corr_val,
+                        branch=getattr(job, "mcts_branch", None),
+                    )
+                except Exception:
+                    pass
+                if not corr_passed:
+                    self.add_log(f"⚠️ [BRAIN 自相關超標排除] Alpha {alpha_id} (Self-Corr={self_corr_val}) 不排入每日送出候選池")
+                elif os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
                     self.brain_client.stage_candidate_for_daily_selection(
                         str(alpha_id), job.expression, float(sharpe), float(fitness), float(turnover), float(margin or 0.0)
                     )
@@ -683,6 +698,15 @@ class QuantAppContext:
             try:
                 self.heartbeats["trading_bot"] = time.time()
                 self.heartbeats["taiwan_scheduler"] = time.time()
+                if not getattr(self, "_tw_full_universe_checked", False):
+                    self._tw_full_universe_checked = True
+                    try:
+                        if hasattr(self, "taiwan_screener") and hasattr(self.taiwan_screener, "registry"):
+                            reg = self.taiwan_screener.registry
+                            if hasattr(reg, "count_active_equities") and reg.count_active_equities() < 1000 and hasattr(reg, "sync_official_universe"):
+                                threading.Thread(target=reg.sync_official_universe, daemon=True).start()
+                    except Exception:
+                        pass
                 self.heartbeats["gdrive_sync"] = time.time()
 
                 if self.bot_running:

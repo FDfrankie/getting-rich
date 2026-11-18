@@ -519,10 +519,21 @@ class BrainClient:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)"
             )
-            rows = conn.execute(
-                "SELECT alpha_id FROM brain_candidate_pool WHERE candidate_date = ? AND status = 'PENDING' ORDER BY score DESC, sharpe DESC",
+            all_pending = conn.execute(
+                "SELECT alpha_id, expression, score, sharpe FROM brain_candidate_pool WHERE candidate_date <= ? AND status = 'PENDING' ORDER BY score DESC, sharpe DESC",
                 (day,),
             ).fetchall()
+            from worldquant_brain.alpha_miner import extract_expression_skeleton
+            seen_skels: set[str] = set()
+            rows = []
+            for r in all_pending:
+                sk = extract_expression_skeleton(str(r[1] or ""))
+                if sk in seen_skels:
+                    conn.execute("UPDATE brain_candidate_pool SET status = 'DEDUP_SKIPPED' WHERE alpha_id = ?", (str(r[0]),))
+                else:
+                    seen_skels.add(sk)
+                    rows.append(r)
+            conn.commit()
         finally:
             conn.close()
 

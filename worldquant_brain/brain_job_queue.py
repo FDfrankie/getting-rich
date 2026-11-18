@@ -176,6 +176,7 @@ class BrainJobQueue:
         self._worker_thread: threading.Thread | None = None
         self._worker_threads: list[threading.Thread] = []
         self._pending_queue: list[str] = []
+        self._in_flight_ids: set[str] = set()
         self._running: bool = False
         self._init_persistence()
         self._restore_jobs()
@@ -282,10 +283,28 @@ class BrainJobQueue:
                     job.status = BrainJobStatus(r["status"])
                 except ValueError:
                     job.status = BrainJobStatus.FAILED
+                if job.status in (BrainJobStatus.QUEUED, BrainJobStatus.SUBMITTED, BrainJobStatus.RUNNING):
+                    # Expire zombie jobs that were already claimed in a previous run or queued > 2 hours ago
+                    is_stale = bool(job.claimed_at)
+                    if not is_stale and job.created_at:
+                        try:
+                            dt = datetime.fromisoformat(str(job.created_at).replace("Z", "+00:00"))
+                            if (datetime.now(timezone.utc) - dt).total_seconds() > 7200:
+                                is_stale = True
+                        except Exception:
+                            pass
+                    if is_stale:
+                        job.status = BrainJobStatus.FAILED
+                        job.safe_error = "EXPIRED_ZOMBIE_JOB_ON_RESTART"
+                        try:
+                            conn.execute("UPDATE brain_jobs SET status = ?, safe_error = ? WHERE job_id = ?", (job.status.value, job.safe_error, job.job_id))
+                            conn.commit()
+                        except Exception:
+                            pass
+                    else:
+                        self._pending_queue.append(job.job_id)
                 self._jobs[job.job_id] = job
                 self._key_to_job_id[job.simulation_key] = job.job_id
-                if job.status in (BrainJobStatus.QUEUED, BrainJobStatus.SUBMITTED, BrainJobStatus.RUNNING):
-                    self._pending_queue.append(job.job_id)
         except Exception:
             pass
         finally:
@@ -354,7 +373,7 @@ class BrainJobQueue:
 
     def queue_depth(self) -> int:
         with self._lock:
-            return len(self._pending_queue)
+            return len(self._pending_queue) + len(self._in_flight_ids)
 
     def worker_alive(self) -> bool:
         return bool(self._running and any(t.is_alive() for t in self._worker_threads))
@@ -375,12 +394,17 @@ class BrainJobQueue:
                     job_id = self._pending_queue.pop(0)
                     job_to_run = self._jobs.get(job_id)
                     if job_to_run is not None:
+                        self._in_flight_ids.add(job_id)
                         job_to_run.claimed_by = threading.current_thread().name
                         job_to_run.claimed_at = datetime.now(timezone.utc).isoformat()
                         self._persist_job(job_to_run)
 
             if job_to_run:
-                self._execute_job(job_to_run)
+                try:
+                    self._execute_job(job_to_run)
+                finally:
+                    with self._lock:
+                        self._in_flight_ids.discard(job_to_run.job_id)
             else:
                 time.sleep(0.02)
 
