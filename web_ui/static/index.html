@@ -133,9 +133,11 @@
 
             <!-- 策略選擇 -->
             <select id="strategySelect" class="bg-slate-900 border border-slate-700 text-xs md:text-sm rounded-xl px-3 py-2 text-slate-200 focus:outline-none">
+              <option value="brain_alpha" selected>策略：BRAIN Alpha 因子庫連動 + 條件機率共振 (推薦)</option>
+              <option value="cond_prob">策略：過往條件機率 + 技術指標遲滯 (CondProb)</option>
               <option value="momentum">策略：布林帶突破動量 (Momentum)</option>
-              <option value="ml">策略：LightGBM ML 多因子預測 (未訓練前自動啟用複合規則排序)</option>
-              <option value="rl">策略：PyTorch PPO 強化學習</option>
+              <option value="ml">策略：LightGBM ML 多因子預測 (Shadow)</option>
+              <option value="rl">策略：PyTorch PPO 強化學習 (Quarantined)</option>
             </select>
 
             <!-- Bot 啟動開關 -->
@@ -437,9 +439,70 @@
           <span class="text-blue-400">MA20: <strong id="twLegendMA20">--</strong></span>
           <span class="text-purple-400">MA60: <strong id="twLegendMA60">--</strong></span>
         </div>
-        <div id="twChartContainer" class="w-full h-[380px] rounded-xl overflow-hidden bg-slate-950 relative border border-slate-900">
-          <div id="twChartLoading" class="hidden absolute inset-0 flex items-center justify-center bg-slate-950/80 z-10 text-rose-400 text-xs font-bold">
-            <i class="fa-solid fa-spinner animate-spin mr-2"></i> 正在加載台股 K 線行情...
+        <!-- 元大投資先生風格：產業快速切換列 + 全上市櫃搜尋 -->
+        <div class="flex flex-wrap items-center gap-1.5 pt-1">
+          <button type="button" onclick="filterTwUniverse('ALL')" class="px-2 py-0.5 rounded bg-rose-600/30 text-rose-300 border border-rose-500/30 text-[11px] font-bold">全部熱門</button>
+          <button type="button" onclick="filterTwUniverse('半導體')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">半導體</button>
+          <button type="button" onclick="filterTwUniverse('AI伺服器')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">AI伺服器</button>
+          <button type="button" onclick="filterTwUniverse('IC設計')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">IC設計</button>
+          <button type="button" onclick="filterTwUniverse('光通訊CPO')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">光通訊CPO</button>
+          <button type="button" onclick="filterTwUniverse('散熱與零組件')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">散熱/零組件</button>
+          <button type="button" onclick="filterTwUniverse('重電能源')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">重電能源</button>
+          <button type="button" onclick="filterTwUniverse('航運')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">航運</button>
+          <button type="button" onclick="filterTwUniverse('ETF')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">ETF</button>
+          <button type="button" onclick="syncOfficialTwUniverse()" class="ml-auto px-2.5 py-0.5 rounded bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/30 text-[11px] font-bold">🔄 同步證交所/櫃買全市場代碼</button>
+        </div>
+
+        <!-- 元大投資先生雙欄看盤區：左 K 線圖 + 右側五檔/分價量/技術診斷抽屜 -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+          <div id="twChartContainer" class="lg:col-span-2 w-full h-[380px] rounded-xl overflow-hidden bg-slate-950 relative border border-slate-900">
+            <div id="twChartLoading" class="hidden absolute inset-0 flex items-center justify-center bg-slate-950/80 z-10 text-rose-400 text-xs font-bold">
+              <i class="fa-solid fa-spinner animate-spin mr-2"></i> 正在加載台股 K 線行情...
+            </div>
+          </div>
+
+          <!-- 右側：元大投資先生個股五檔 / 分價量 / 技術共振面板 -->
+          <div class="bg-slate-950/90 border border-slate-800 rounded-xl p-3 flex flex-col justify-between space-y-2 text-xs">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+              <div>
+                <div class="flex items-center space-x-1.5">
+                  <span id="yuantaStockName" class="font-bold text-sm text-white">台積電 (2330.TW)</span>
+                  <span id="yuantaIndustryBadge" class="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300">半導體</span>
+                </div>
+                <div class="text-[10px] text-slate-400 mt-0.5">籌碼密集 POC: <strong id="yuantaPocPrice" class="text-amber-300">--</strong> | ATR停損: <strong id="yuantaStopLoss" class="text-emerald-400">--</strong></div>
+              </div>
+              <div class="text-right">
+                <div id="yuantaLastPrice" class="text-base font-black text-rose-400 font-mono">--</div>
+                <div id="yuantaChangePct" class="text-[11px] font-mono text-slate-400">--%</div>
+              </div>
+            </div>
+
+            <!-- 內外盤比進度條 -->
+            <div class="space-y-1">
+              <div class="flex justify-between text-[10px] text-slate-400">
+                <span>委買力道 <strong id="yuantaBidPct" class="text-rose-400">50%</strong></span>
+                <span>五檔最佳買賣明細</span>
+                <span>委賣力道 <strong id="yuantaAskPct" class="text-emerald-400">50%</strong></span>
+              </div>
+              <div class="w-full h-1.5 bg-emerald-500/30 rounded-full overflow-hidden">
+                <div id="yuantaPressureBar" class="h-full bg-rose-500" style="width: 50%"></div>
+              </div>
+            </div>
+
+            <!-- 五檔報價表格 -->
+            <div id="yuantaOrderBookRows" class="grid grid-cols-2 gap-2 font-mono text-[11px] bg-slate-900/70 p-2 rounded-lg border border-slate-800/80">
+              <div class="text-slate-500 text-center py-4 col-span-2">載入五檔報價中...</div>
+            </div>
+
+            <!-- 多指標共振訊號 (KD / MACD / RSI / Supertrend) -->
+            <div id="yuantaTechSummary" class="space-y-1 pt-1 border-t border-slate-800 text-[11px]">
+              <div class="flex items-center justify-between text-slate-400">
+                <span>KD(9): <strong id="yuantaKD" class="text-white">--</strong></span>
+                <span>RSI(14): <strong id="yuantaRSI" class="text-white">--</strong></span>
+                <span>MACD柱: <strong id="yuantaMACD" class="text-white">--</strong></span>
+              </div>
+              <div id="yuantaSignalsList" class="text-[10px] text-emerald-400 truncate">正在分析多空技術共振...</div>
+            </div>
           </div>
         </div>
       </div>
@@ -976,6 +1039,7 @@
           }
 
           // initLegendFromLatestCandle
+          fetchYuantaQuotePanel(currentTwSymbol);
           const lastC = d.candles[d.candles.length - 1];
           if (lastC) {
             const setTxt = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
@@ -1156,6 +1220,81 @@
         console.error(e);
       } finally {
         if (loading) loading.classList.add('hidden');
+      }
+    }
+
+    async function fetchYuantaQuotePanel(sym) {
+      try {
+        const res = await fetch(`/api/taiwan/quote?symbol=${encodeURIComponent(sym)}`);
+        const d = await res.json();
+        if (!d.success || !d.data || !d.data.available) return;
+        const q = d.data;
+        const isUp = q.change >= 0;
+        const colorCls = isUp ? "text-rose-400" : "text-emerald-400";
+        const setEl = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
+        setEl("yuantaStockName", `${q.name} (${q.symbol})`);
+        setEl("yuantaIndustryBadge", q.industry || "台股");
+        setEl("yuantaPocPrice", `$${q.volume_profile?.poc_price ?? "--"}`);
+        setEl("yuantaStopLoss", `$${q.indicators?.suggested_stop_loss ?? "--"}`);
+        const lp = document.getElementById("yuantaLastPrice");
+        if (lp) { lp.className = `text-base font-black font-mono ${colorCls}`; lp.textContent = `$${q.last_close}`; }
+        const cp = document.getElementById("yuantaChangePct");
+        if (cp) { cp.className = `text-[11px] font-mono ${colorCls}`; cp.textContent = `${isUp ? "+" : ""}${q.change} (${isUp ? "+" : ""}${q.change_pct}%)`; }
+
+        const ob = q.order_book || {};
+        const bidPct = ob.buy_pressure_pct ?? 50;
+        const askPct = (100 - bidPct).toFixed(1);
+        setEl("yuantaBidPct", `${bidPct}%`);
+        setEl("yuantaAskPct", `${askPct}%`);
+        const bar = document.getElementById("yuantaPressureBar");
+        if (bar) bar.style.width = `${bidPct}%`;
+
+        const bids = ob.bids || [];
+        const asks = ob.asks || [];
+        const obBox = document.getElementById("yuantaOrderBookRows");
+        if (obBox) {
+          const bidHtml = bids.map(b => `<div class="flex justify-between"><span class="text-slate-400">${b.volume}張</span><span class="text-rose-400 font-bold">${b.price.toFixed(2)}</span></div>`).join("");
+          const askHtml = asks.map(a => `<div class="flex justify-between"><span class="text-emerald-400 font-bold">${a.price.toFixed(2)}</span><span class="text-slate-400">${a.volume}張</span></div>`).join("");
+          obBox.innerHTML = `<div class="space-y-0.5 pr-1 border-r border-slate-800">${bidHtml}</div><div class="space-y-0.5 pl-1">${askHtml}</div>`;
+        }
+        const ind = q.indicators || {};
+        setEl("yuantaKD", `${ind.k9}/${ind.d9}`);
+        setEl("yuantaRSI", `${ind.rsi14}`);
+        setEl("yuantaMACD", `${ind.macd_hist}`);
+        const sigs = (q.bull_signals || []).slice(0, 2).join(" · ") || (q.bear_signals || []).slice(0, 2).join(" · ");
+        setEl("yuantaSignalsList", sigs);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function filterTwUniverse(industry) {
+      try {
+        const res = await fetch(`/api/taiwan/universe?industry=${encodeURIComponent(industry === "ALL" ? "" : industry)}`);
+        const d = await res.json();
+        if (d.success && d.items && d.items.length > 0) {
+          const sel = document.getElementById("twChartSymbolSelect");
+          if (sel) {
+            sel.innerHTML = d.items.map(it => `<option value="${it.symbol}">${it.symbol} (${it.name} - ${it.industry})</option>`).join("");
+            selectTaiwanStock(d.items[0].symbol);
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function syncOfficialTwUniverse() {
+      try {
+        const res = await fetch("/api/taiwan/universe?sync=1");
+        const d = await res.json();
+        if (d.success) {
+          const info = d.sync_info || {};
+          alert(`已同步證交所/櫃買中心代碼庫！目前共收錄 ${info.total_symbols || d.count} 檔上市櫃標的。`);
+          filterTwUniverse("ALL");
+        }
+      } catch (e) {
+        alert("同步失敗: " + e);
       }
     }
 

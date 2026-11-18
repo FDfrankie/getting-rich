@@ -48,7 +48,7 @@
   "validation_gate_version": "model-governance-v2",
   "rejection_reason": "FAILED_5SEED_OOS_GATE",
   "oos_metrics_5seed": {
-    "median_oos_return_pct": -9.9987,
-    "median_oos_sharpe": -28.1237
+    "median_oos_return_pct": -7.27,
+    "median_oos_sharpe": -22.0026
   }
 }

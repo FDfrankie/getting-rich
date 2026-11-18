@@ -1,0 +1,24 @@
+schema_version: 1
+rules:
+  - id: trend_rsi_pullback
+    source_topics: [EMA, RSI]
+    hypothesis: "Only buy RSI pullbacks when price is above EMA60 and ADX/regime confirms trend."
+    markets: [crypto, taiwan]
+    timeframes: [15m, 1h, 1d]
+    required_tests: [purged_walk_forward, base_cost, stress_cost, regime_split, shadow]
+  - id: bollinger_squeeze_breakout
+    source_topics: [Bollinger, ATR, volume]
+    hypothesis: "Low bandwidth plus expanding ATR and above-median volume predicts breakout persistence."
+    markets: [crypto, taiwan]
+    required_tests: [false_breakout_rate, cost_stress, volume_ablation, no_lookahead]
+  - id: vwap_reversion_intraday
+    source_topics: [VWAP, RSI, ATR]
+    hypothesis: "Large session VWAP deviations revert only in non-trending regimes."
+    markets: [crypto, taiwan]
+    caveat: "Session definitions differ; cumulative VWAP must reset at exchange session boundaries."
+    required_tests: [session_reset, regime_split, slippage_stress]
+  - id: obv_price_divergence
+    source_topics: [OBV, divergence]
+    hypothesis: "Price/OBV divergence improves reversal precision only with liquidity and volatility filters."
+    markets: [crypto, taiwan]
+    required_tests: [divergence_definition_freeze, liquidity_filter, multiple_testing_control]

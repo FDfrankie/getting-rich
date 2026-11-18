@@ -15,3 +15,17 @@ services:
         value: "USDC"
       - key: RENDER_LIGHTWEIGHT_INFERENCE
         value: "True"
+      - key: BRAIN_SIMULATION_ENABLED
+        value: "true"
+      - key: BRAIN_AUTO_SUBMIT_ENABLED
+        value: "true"
+      - key: BRAIN_QUEUE_WORKERS
+        value: "2"
+      - key: BRAIN_MAX_DAILY_SUBMISSIONS
+        value: "2"
+      - key: BRAIN_DAILY_FLUSH_HOUR
+        value: "22"
+      - key: BRAIN_EMAIL
+        sync: false
+      - key: BRAIN_PASSWORD
+        sync: false

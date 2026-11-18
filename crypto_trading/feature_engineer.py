@@ -89,6 +89,42 @@ class CryptoFeatureEngineer:
         tot_vol_10 = v.rolling(10, min_periods=10).sum()
         out["obv_slope_10"] = net_vol_10.div(tot_vol_10.replace(0, np.nan))
 
+        # --- Advanced Technical Indicators (ADX, Supertrend, Squeeze, Ichimoku, StochRSI, CMF) ---
+        up_move = h.diff()
+        down_move = -l.diff()
+        plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0.0), index=out.index)
+        minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0.0), index=out.index)
+        atr_14 = tr.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean().replace(0, np.nan)
+        plus_di = 100.0 * plus_dm.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean().div(atr_14)
+        minus_di = 100.0 * minus_dm.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean().div(atr_14)
+        dx = 100.0 * (plus_di - minus_di).abs().div((plus_di + minus_di).replace(0, np.nan))
+        out["adx_14_norm"] = dx.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean().div(100.0).fillna(0.0)
+        out["di_spread_14"] = (plus_di - minus_di).div(100.0).fillna(0.0)
+
+        # Supertrend (10, 3.0) normalized distance
+        hl2 = (h + l) / 2.0
+        st_lower = hl2 - 3.0 * atr_14
+        st_upper = hl2 + 3.0 * atr_14
+        out["supertrend_dist"] = np.where(c >= ma20, (c - st_lower).div(c), (c - st_upper).div(c))
+
+        # TTM Squeeze ratio (Bollinger width / Keltner width)
+        kc_width = (4.0 * atr_14).div(ma20.replace(0, np.nan))
+        out["squeeze_ratio_20"] = out["bb_width_20"].div(kc_width.replace(0, np.nan)).sub(1.0).fillna(0.0)
+
+        # Ichimoku Tenkan-Kijun spread
+        tenkan_9 = (h.rolling(9, min_periods=9).max() + l.rolling(9, min_periods=9).min()) / 2.0
+        kijun_26 = (h.rolling(26, min_periods=26).max() + l.rolling(26, min_periods=26).min()) / 2.0
+        out["ichimoku_tk_spread"] = (tenkan_9 - kijun_26).div(c.replace(0, np.nan)).fillna(0.0)
+
+        # Stochastic RSI (14) & Chaikin Money Flow (20)
+        rsi_raw = out["rsi_14_norm"] * 50.0 + 50.0
+        rsi_min = rsi_raw.rolling(14, min_periods=14).min()
+        rsi_max = rsi_raw.rolling(14, min_periods=14).max()
+        out["stoch_rsi_14"] = (rsi_raw - rsi_min).div((rsi_max - rsi_min).replace(0, np.nan)).sub(0.5).fillna(0.0)
+
+        clv = ((c - l) - (h - c)).div((h - l).replace(0, np.nan)).fillna(0.0)
+        out["cmf_20"] = (clv * v).rolling(20, min_periods=20).sum().div(v.rolling(20, min_periods=20).sum().replace(0, np.nan)).fillna(0.0)
+
         for horizon in self.forward_horizons:
             fwd_ret = c.shift(-horizon).div(c).sub(1)
             out[f"target_fwd_ret_{horizon}"] = fwd_ret
