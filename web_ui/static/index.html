@@ -134,6 +134,7 @@
             <!-- 策略選擇 -->
             <select id="strategySelect" class="bg-slate-900 border border-slate-700 text-xs md:text-sm rounded-xl px-3 py-2 text-slate-200 focus:outline-none">
               <option value="brain_alpha" selected>策略：BRAIN Alpha 因子庫連動 + 條件機率共振 (推薦)</option>
+              <option value="perp_carry">策略：合約資金費率套利 + 基差動量 (PerpCarry)</option>
               <option value="cond_prob">策略：過往條件機率 + 技術指標遲滯 (CondProb)</option>
               <option value="momentum">策略：布林帶突破動量 (Momentum)</option>
               <option value="ml">策略：LightGBM ML 多因子預測 (Shadow)</option>
@@ -399,23 +400,30 @@
       <!-- 台股專屬即時 K 線看盤區 -->
       <div class="glass-card rounded-2xl p-4 md:p-5 shadow-xl space-y-3">
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div class="flex items-center space-x-2">
+          <div class="flex flex-wrap items-center gap-2">
             <i class="fa-solid fa-chart-candlestick text-rose-400"></i>
-            <h3 class="font-bold text-sm md:text-base text-white">台股即時走勢看盤</h3>
+            <h3 class="font-bold text-sm md:text-base text-white">台股走勢與籌碼看盤</h3>
             <span id="twChartTimeframeBadge" class="text-[10px] px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-bold">1d</span>
+            <!-- 元大投資先生風格：簡易/專業模式切換 + 整股/零股切換 -->
+            <div class="flex items-center bg-slate-900 border border-slate-700 rounded-lg p-0.5 text-[11px]">
+              <button type="button" id="btnTwModeSimple" onclick="setTwUiMode('SIMPLE')" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">簡易模式</button>
+              <button type="button" id="btnTwModePro" onclick="setTwUiMode('PRO')" class="px-2 py-0.5 rounded bg-rose-600 text-white font-bold">專業模式</button>
+            </div>
+            <div class="flex items-center bg-slate-900 border border-slate-700 rounded-lg p-0.5 text-[11px]">
+              <button type="button" id="btnTwLotWhole" onclick="setTwLotMode('WHOLE')" class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold">整股(1000股)</button>
+              <button type="button" id="btnTwLotOdd" onclick="setTwLotMode('ODD')" class="px-2 py-0.5 rounded text-slate-400 hover:text-white">盤中零股(100股)</button>
+            </div>
+            <span id="twLotCostEstimate" class="text-[11px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded px-2 py-0.5">預估門檻: --</span>
           </div>
           <div class="flex flex-wrap items-center gap-2">
-            <select id="twChartSymbolSelect" onchange="selectTaiwanStock(this.value)" class="bg-slate-900 border border-slate-700 text-xs rounded-xl px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-rose-500 font-mono">
-              <option value="2330.TW" selected>2330.TW (台積電)</option>
-              <option value="2308.TW">2308.TW (台達電)</option>
-              <option value="2454.TW">2454.TW (聯發科)</option>
-              <option value="3008.TW">3008.TW (大立光)</option>
-              <option value="3443.TW">3443.TW (創意)</option>
-              <option value="6442.TW">6442.TW (光聖)</option>
-              <option value="2317.TW">2317.TW (鴻海)</option>
-              <option value="00981A.TW">00981A.TW</option>
-              <option value="00632R.TW">00632R.TW (台灣50反1)</option>
-              <option value="^TWII">^TWII (加權指數)</option>
+            <select id="twChartSymbolSelect" onchange="selectTaiwanStock(this.value)" class="max-w-[260px] bg-slate-900 border border-slate-700 text-xs rounded-xl px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-rose-500 font-mono">
+              <option value="2330.TW" selected>#1 2330.TW (台積電 - 半導體)</option>
+              <option value="00878.TW">#2 00878.TW (國泰永續高股息 - ETF-高股息)</option>
+              <option value="00919.TW">#3 00919.TW (群益台灣精選高息 - ETF-高股息)</option>
+              <option value="0056.TW">#4 0056.TW (元大高股息 - ETF-高股息)</option>
+              <option value="0050.TW">#5 0050.TW (元大台灣50 - ETF-市值型)</option>
+              <option value="2317.TW">#6 2317.TW (鴻海 - AI伺服器)</option>
+              <option value="2454.TW">#7 2454.TW (聯發科 - IC設計)</option>
             </select>
             <div class="flex items-center space-x-1">
               <input type="text" id="twCustomSymbolInput" placeholder="輸入代碼如 2330.TW" class="w-32 bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-white font-mono focus:outline-none">
@@ -439,17 +447,47 @@
           <span class="text-blue-400">MA20: <strong id="twLegendMA20">--</strong></span>
           <span class="text-purple-400">MA60: <strong id="twLegendMA60">--</strong></span>
         </div>
-        <!-- 元大投資先生風格：產業快速切換列 + 全上市櫃搜尋 -->
+        <!-- 獨立大盤與國際指數欄 (與個股/ETF清單分離) -->
+        <div class="flex flex-wrap items-center gap-2 bg-slate-950/60 border border-amber-500/20 rounded-xl px-3 py-2">
+          <span class="text-[11px] font-bold text-amber-300 flex items-center gap-1"><i class="fa-solid fa-globe"></i> 大盤與國際指數</span>
+          <select id="twIndexSelect" onchange="if(this.value) selectTaiwanStock(this.value)" class="bg-slate-900 border border-amber-500/30 text-xs rounded-lg px-2 py-1 text-amber-200 font-mono focus:outline-none">
+            <option value="^TWII">^TWII (台灣加權指數 - 台股大盤)</option>
+            <option value="^TWOII">^TWOII (櫃買指數 OTC - 上櫃大盤)</option>
+            <option value="0050.TW">0050.TW (元大台灣50 - 市值指標)</option>
+            <option value="00631L.TW">00631L.TW (元大台灣50正2 - 槓桿)</option>
+            <option value="00632R.TW">00632R.TW (元大台灣50反1 - 反向)</option>
+            <option value="^SOX">^SOX (費城半導體指數 - 國際半導體)</option>
+            <option value="^IXIC">^IXIC (那斯達克指數 - 美股科技)</option>
+            <option value="^GSPC">^GSPC (標普500指數 - 美股大盤)</option>
+            <option value="^N225">^N225 (日經225指數 - 亞股指標)</option>
+          </select>
+          <div id="twIndexPills" class="flex flex-wrap items-center gap-1">
+            <button type="button" onclick="selectTaiwanStock('^TWII')" class="px-2 py-0.5 rounded bg-amber-500/15 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 text-[11px] font-mono">加權 ^TWII</button>
+            <button type="button" onclick="selectTaiwanStock('^TWOII')" class="px-2 py-0.5 rounded bg-amber-500/15 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 text-[11px] font-mono">櫃買 ^TWOII</button>
+            <button type="button" onclick="selectTaiwanStock('^SOX')" class="px-2 py-0.5 rounded bg-amber-500/15 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 text-[11px] font-mono">費半 ^SOX</button>
+            <button type="button" onclick="selectTaiwanStock('^IXIC')" class="px-2 py-0.5 rounded bg-amber-500/15 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 text-[11px] font-mono">那指 ^IXIC</button>
+            <button type="button" onclick="selectTaiwanStock('^GSPC')" class="px-2 py-0.5 rounded bg-amber-500/15 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30 text-[11px] font-mono">標普 ^GSPC</button>
+          </div>
+          <span id="twUniverseCountBadge" class="ml-auto text-[11px] text-slate-400 font-mono">收錄 220+ 熱門標的</span>
+        </div>
+
+        <!-- 元大投資先生風格：熱門排序產業/ETF 快速切換列 + 全上市櫃搜尋 -->
         <div class="flex flex-wrap items-center gap-1.5 pt-1">
+          <select id="twIndustrySelect" onchange="filterTwUniverse(this.value || 'ALL')" class="bg-slate-900 border border-slate-700 text-[11px] rounded-lg px-2 py-1 text-slate-200 focus:outline-none">
+            <option value="ALL">全部產業與ETF (依熱門度排序)</option>
+          </select>
           <button type="button" onclick="filterTwUniverse('ALL')" class="px-2 py-0.5 rounded bg-rose-600/30 text-rose-300 border border-rose-500/30 text-[11px] font-bold">全部熱門</button>
+          <button type="button" onclick="filterTwUniverse('ETF-高股息')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-slate-800 text-[11px]">高股息ETF</button>
+          <button type="button" onclick="filterTwUniverse('ETF-市值型')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-slate-800 text-[11px]">市值ETF</button>
+          <button type="button" onclick="filterTwUniverse('ETF-債券')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-slate-800 text-[11px]">債券ETF</button>
+          <button type="button" onclick="filterTwUniverse('ETF')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-slate-800 text-[11px]">全部ETF</button>
           <button type="button" onclick="filterTwUniverse('半導體')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">半導體</button>
           <button type="button" onclick="filterTwUniverse('AI伺服器')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">AI伺服器</button>
           <button type="button" onclick="filterTwUniverse('IC設計')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">IC設計</button>
           <button type="button" onclick="filterTwUniverse('光通訊CPO')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">光通訊CPO</button>
-          <button type="button" onclick="filterTwUniverse('散熱與零組件')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">散熱/零組件</button>
+          <button type="button" onclick="filterTwUniverse('金融保險')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">金融保險</button>
           <button type="button" onclick="filterTwUniverse('重電能源')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">重電能源</button>
           <button type="button" onclick="filterTwUniverse('航運')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">航運</button>
-          <button type="button" onclick="filterTwUniverse('ETF')" class="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 text-[11px]">ETF</button>
           <button type="button" onclick="syncOfficialTwUniverse()" class="ml-auto px-2.5 py-0.5 rounded bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 border border-indigo-500/30 text-[11px] font-bold">🔄 同步證交所/櫃買全市場代碼</button>
         </div>
 
@@ -481,7 +519,7 @@
             <div class="space-y-1">
               <div class="flex justify-between text-[10px] text-slate-400">
                 <span>委買力道 <strong id="yuantaBidPct" class="text-rose-400">50%</strong></span>
-                <span>五檔最佳買賣明細</span>
+                <span>五檔價位參考 <strong id="yuantaQuoteModeBadge" class="text-amber-300">[SNAPSHOT]</strong></span>
                 <span>委賣力道 <strong id="yuantaAskPct" class="text-emerald-400">50%</strong></span>
               </div>
               <div class="w-full h-1.5 bg-emerald-500/30 rounded-full overflow-hidden">
@@ -502,6 +540,137 @@
                 <span>MACD柱: <strong id="yuantaMACD" class="text-white">--</strong></span>
               </div>
               <div id="yuantaSignalsList" class="text-[10px] text-emerald-400 truncate">正在分析多空技術共振...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 基本面估值 (本益比 / EPS / 殖利率 / ROE) 與適買度綜合診斷 -->
+        <div id="yuantaValuationCard" class="bg-slate-950/85 border border-slate-800 rounded-xl p-3.5 space-y-3">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-2">
+            <div class="flex items-center gap-2">
+              <i class="fa-solid fa-scale-balanced text-amber-400"></i>
+              <h4 class="text-xs md:text-sm font-bold text-white">基本面估值與適買度綜合診斷</h4>
+              <span id="yuantaSuitabilityBadge" class="text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-slate-800 text-slate-300">評估中...</span>
+            </div>
+            <div class="flex items-center gap-3 text-[11px] font-mono">
+              <span class="text-slate-400">綜合適買度: <strong id="yuantaOverallScore" class="text-white text-sm">--</strong>/100</span>
+              <span class="text-slate-400">基本面: <strong id="yuantaFundScore" class="text-amber-300">--</strong></span>
+              <span class="text-slate-400">技術面: <strong id="yuantaTechScore" class="text-sky-300">--</strong></span>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 text-center font-mono">
+            <div class="bg-slate-900/80 border border-slate-800 rounded-lg p-2">
+              <div class="text-[10px] text-slate-400">本益比 (PE)</div>
+              <div id="valTrailingPE" class="text-xs font-bold text-white mt-0.5">--</div>
+            </div>
+            <div class="bg-slate-900/80 border border-slate-800 rounded-lg p-2">
+              <div class="text-[10px] text-slate-400">預估 PE</div>
+              <div id="valForwardPE" class="text-xs font-bold text-sky-300 mt-0.5">--</div>
+            </div>
+            <div class="bg-slate-900/80 border border-slate-800 rounded-lg p-2">
+              <div class="text-[10px] text-slate-400">每股盈餘 EPS</div>
+              <div id="valTrailingEPS" class="text-xs font-bold text-emerald-300 mt-0.5">--</div>
+            </div>
+            <div class="bg-slate-900/80 border border-slate-800 rounded-lg p-2">
+              <div class="text-[10px] text-slate-400">預估 EPS</div>
+              <div id="valForwardEPS" class="text-xs font-bold text-emerald-300 mt-0.5">--</div>
+            </div>
+            <div class="bg-slate-900/80 border border-slate-800 rounded-lg p-2">
+              <div class="text-[10px] text-slate-400">股價淨值比 P/B</div>
+              <div id="valPB" class="text-xs font-bold text-white mt-0.5">--</div>
+            </div>
+            <div class="bg-slate-900/80 border border-slate-800 rounded-lg p-2">
+              <div class="text-[10px] text-slate-400">現金殖利率</div>
+              <div id="valYield" class="text-xs font-bold text-amber-300 mt-0.5">--</div>
+            </div>
+            <div class="bg-slate-900/80 border border-slate-800 rounded-lg p-2">
+              <div class="text-[10px] text-slate-400">ROE 報酬率</div>
+              <div id="valROE" class="text-xs font-bold text-white mt-0.5">--</div>
+            </div>
+            <div class="bg-slate-900/80 border border-slate-800 rounded-lg p-2">
+              <div class="text-[10px] text-slate-400">營收年增率</div>
+              <div id="valRevGrowth" class="text-xs font-bold text-white mt-0.5">--</div>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-[11px]">
+            <div class="bg-emerald-950/20 border border-emerald-500/20 rounded-lg p-2.5">
+              <div class="font-bold text-emerald-300 mb-1"><i class="fa-solid fa-circle-check mr-1"></i>適買優勢與支撐理由</div>
+              <ul id="yuantaBuyReasons" class="list-disc list-inside space-y-0.5 text-slate-300">
+                <li>等待報價載入中...</li>
+              </ul>
+            </div>
+            <div class="bg-rose-950/20 border border-rose-500/20 rounded-lg p-2.5">
+              <div class="font-bold text-rose-300 mb-1"><i class="fa-solid fa-triangle-exclamation mr-1"></i>風險與估值提醒</div>
+              <ul id="yuantaRiskNotes" class="list-disc list-inside space-y-0.5 text-slate-300">
+                <li>等待報價載入中...</li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- 專業模式專屬：三大法人進出、融資融券、處分注意標章與 Point-in-time 資料溯源 (Phase 15) -->
+          <div id="twProInstitutionalBox" class="grid grid-cols-2 sm:grid-cols-6 gap-2 pt-2 border-t border-slate-800/80 text-center font-mono text-[11px]">
+            <div class="bg-slate-900/70 border border-slate-800 rounded-lg p-2">
+              <div class="text-[10px] text-slate-400">外資買賣超(5日)</div>
+              <div id="twInstForeign" class="font-bold text-white mt-0.5">-- 張</div>
+            </div>
+            <div class="bg-slate-900/70 border border-slate-800 rounded-lg p-2">
+              <div class="text-[10px] text-slate-400">投信買賣超(5日)</div>
+              <div id="twInstTrust" class="font-bold text-white mt-0.5">-- 張</div>
+            </div>
+            <div class="bg-slate-900/70 border border-slate-800 rounded-lg p-2">
+              <div class="text-[10px] text-slate-400">自營商買賣超</div>
+              <div id="twInstDealer" class="font-bold text-white mt-0.5">-- 張</div>
+            </div>
+            <div class="bg-slate-900/70 border border-slate-800 rounded-lg p-2">
+              <div class="text-[10px] text-slate-400">融資餘額估算</div>
+              <div id="twMarginLots" class="font-bold text-amber-300 mt-0.5">-- 張</div>
+            </div>
+            <div class="bg-slate-900/70 border border-slate-800 rounded-lg p-2">
+              <div class="text-[10px] text-slate-400">券資比</div>
+              <div id="twShortMarginRatio" class="font-bold text-sky-300 mt-0.5">--%</div>
+            </div>
+            <div class="bg-slate-900/70 border border-slate-800 rounded-lg p-2">
+              <div class="text-[10px] text-slate-400">處分/注意狀態</div>
+              <div id="twWarningBadge" class="font-bold text-emerald-300 mt-0.5">NORMAL</div>
+            </div>
+          </div>
+
+          <div id="twProvenanceFooter" class="flex flex-wrap items-center justify-between gap-2 pt-1 text-[10px] font-mono text-slate-400">
+            <span>資料來源: <strong id="twProvSource" class="text-slate-300">TWSE/TPEx Official + Yahoo Finance (Delayed)</strong></span>
+            <span>市場日期: <strong id="twProvDate" class="text-slate-300">--</strong></span>
+            <span>狀態: <strong id="twProvMode" class="text-amber-300">DELAYED_SNAPSHOT (非即時逐筆)</strong></span>
+            <span>Point-in-Time: <strong id="twProvPit" class="text-emerald-300">TRUE (VERIFIED)</strong></span>
+          </div>
+
+          <!-- Antigravity Taiwan Market Map (UI1-UI8: 面積/顏色分離、色盤切換、覆蓋統計與 Snapshot ID) -->
+          <div id="twHeatmapCard" class="pt-3 border-t border-slate-800/80 space-y-2">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex flex-wrap items-center gap-2">
+                <i class="fa-solid fa-table-cells-large text-rose-400"></i>
+                <span class="text-xs font-bold text-white">Antigravity Taiwan Market Map</span>
+                <span id="twUniverseModePill" class="text-[10px] px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono">POPULAR_WATCHLIST</span>
+                <span id="twHeatmapCoverageBadge" class="text-[10px] font-mono text-slate-400">Rendered: -- / Official: --</span>
+              </div>
+              <div class="flex flex-wrap items-center gap-1.5 text-[10px]">
+                <select id="hmSizeBy" onchange="loadTaiwanHeatmap()" class="bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-slate-200">
+                  <option value="turnover">面積: 成交額權重</option>
+                  <option value="volume">面積: 成交量權重</option>
+                  <option value="mono">面積: 等面積 (Mono)</option>
+                </select>
+                <select id="hmColorBy" onchange="loadTaiwanHeatmap()" class="bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-slate-200">
+                  <option value="change_1d">顏色: 當日漲跌%</option>
+                  <option value="rel_vol">顏色: 相對量能</option>
+                </select>
+                <select id="hmColorPalette" onchange="setHeatmapColorPalette(this.value)" class="bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 text-amber-200 font-mono">
+                  <option value="TW_RED_UP">色系: 台股紅漲綠跌 (TW_RED_UP)</option>
+                  <option value="GLOBAL_GREEN_UP">色系: 國際綠漲紅跌 (GLOBAL_GREEN_UP)</option>
+                  <option value="COLORBLIND_SAFE">色系: 色覺友善藍橘 (COLORBLIND_SAFE)</option>
+                </select>
+                <button type="button" onclick="loadTaiwanHeatmap()" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-amber-300"><i class="fa-solid fa-rotate mr-1"></i>刷新</button>
+              </div>
+            </div>
+            <div id="twSectorHeatmapGrid" class="grid grid-cols-2 md:grid-cols-5 gap-2 text-[10px]">
+              <div class="col-span-full text-center text-slate-500 py-3">載入 Antigravity Taiwan Market Map 中...</div>
             </div>
           </div>
         </div>
@@ -553,6 +722,68 @@
 
     <!-- TAB 3: WorldQuant BRAIN 專區 -->
     <section id="tab-content-brain" class="hidden space-y-4">
+      <!-- WorldQuant BRAIN /competition/challenge 實時積分與 10,000 分 Gold 顧問門檻進度卡 -->
+      <div class="glass-card rounded-2xl p-4 md:p-5 shadow-xl border border-amber-500/30 space-y-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <div class="flex items-center space-x-2">
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">COMPETITION / CHALLENGE</span>
+              <a href="https://platform.worldquantbrain.com/competition/challenge" target="_blank" class="text-xs text-sky-400 hover:underline font-mono"><i class="fa-solid fa-arrow-up-right-from-square mr-1"></i>platform.worldquantbrain.com/competition/challenge</a>
+            </div>
+            <h3 class="text-base md:text-lg font-bold text-white mt-1">BRAIN Challenge 實時總分與 10,000 分 Gold 顧問進度追蹤</h3>
+          </div>
+          <div class="flex items-center gap-2">
+            <button type="button" onclick="syncBrainChallengeScore(true)" class="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold shadow transition">
+              <i class="fa-solid fa-rotate mr-1"></i>從 BRAIN 同步最新分數
+            </button>
+          </div>
+        </div>
+
+        <!-- 10,000 分進度條 -->
+        <div class="space-y-1">
+          <div class="flex justify-between text-xs font-mono">
+            <span class="text-slate-300">Gold 顧問邀請門檻進度: <strong id="brainChallengePct" class="text-amber-300">0.0%</strong></span>
+            <span class="text-slate-400">距離 10,000 分還差: <strong id="brainChallengeRemaining" class="text-rose-300">10,000</strong> pts</span>
+          </div>
+          <div class="w-full h-2.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
+            <div id="brainChallengeProgressBar" class="h-full bg-gradient-to-r from-amber-500 to-emerald-400 transition-all duration-500" style="width: 0%"></div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-center font-mono">
+          <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5">
+            <div class="text-[10px] text-slate-400">目前總分 (Total Score)</div>
+            <div id="brainChallengeTotal" class="text-base md:text-lg font-black text-amber-400 mt-0.5">--</div>
+          </div>
+          <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5">
+            <div class="text-[10px] text-slate-400">今日得分 / 日上限</div>
+            <div id="brainChallengeDaily" class="text-base md:text-lg font-black text-emerald-400 mt-0.5">-- / 2000</div>
+          </div>
+          <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5">
+            <div class="text-[10px] text-slate-400">全球排名 (Rank)</div>
+            <div id="brainChallengeRank" class="text-base md:text-lg font-black text-sky-300 mt-0.5">--</div>
+          </div>
+          <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5">
+            <div class="text-[10px] text-slate-400">近60日提交天數</div>
+            <div id="brainChallengeDays60" class="text-base md:text-lg font-black text-white mt-0.5">--</div>
+          </div>
+          <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5">
+            <div class="text-[10px] text-slate-400">獨特性 (Uniqueness)</div>
+            <div id="brainChallengeUniq" class="text-base md:text-lg font-black text-purple-300 mt-0.5">--</div>
+          </div>
+          <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5">
+            <div class="text-[10px] text-slate-400">預估達標天數 (≥7日觀測)</div>
+            <div id="brainChallengeEta" class="text-xs font-bold text-slate-300 mt-1">需累積 ≥7 日觀測</div>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-slate-400 pt-1 border-t border-slate-800/80">
+          <span>最後觀測: <strong id="brainChallengeObsAt" class="text-slate-300">尚未同步</strong></span>
+          <span>資料來源: <strong id="brainChallengeSource" class="text-slate-300">--</strong></span>
+          <span>下次官方刷分 (03:00 NY / DST): <strong id="brainChallengeNextRefresh" class="text-amber-300">--</strong></span>
+        </div>
+      </div>
+
       <!-- 官方審核標準與統計標題 -->
       <div class="glass-card rounded-2xl p-4 md:p-5 shadow-xl">
         <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -585,6 +816,28 @@
             <p class="text-xs text-slate-400">平均換手率 (Turnover)</p>
             <p id="brainAvgTurnover" class="text-lg md:text-2xl font-black text-slate-200 mt-1">28.3%</p>
           </div>
+        </div>
+      </div>
+
+            <!-- Alpha Blueprint 研究契約與 6 維度 Robustness Evaluator 專區 (Stage 10) -->
+      <div class="glass-card rounded-2xl p-4 md:p-5 shadow-xl border border-indigo-500/30 space-y-3">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <div class="flex items-center space-x-2">
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">HYPOTHESIS-DRIVEN FACTORY</span>
+              <span class="text-[10px] font-mono text-emerald-300">CANDIDATE → SIMULATED → SUBMIT_READY → BRAIN_GOOD → ROBUST_GOOD → PORTFOLIO_GOOD</span>
+            </div>
+            <h3 class="text-base md:text-lg font-bold text-white mt-1">Alpha Blueprint 研究契約、6 維度穩健性評估與失敗經驗記憶庫</h3>
+          </div>
+          <button type="button" onclick="loadBrainBlueprintsAndLessons()" class="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow transition">
+            <i class="fa-solid fa-flask mr-1"></i>刷新 Blueprint 與穩健性庫
+          </button>
+        </div>
+        <div id="brainBlueprintsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+          <div class="text-slate-400 p-3 bg-slate-900/70 rounded-xl border border-slate-800">載入 Alpha Blueprints 中...</div>
+        </div>
+        <div id="brainResearchLessonsBox" class="text-[11px] font-mono bg-slate-950/80 border border-slate-800 rounded-xl p-3 text-slate-300">
+          研究記憶庫 (Research Lessons): 尚無失敗阻斷紀錄，自動過濾重複無效調參。
         </div>
       </div>
 
@@ -1253,8 +1506,15 @@
         const asks = ob.asks || [];
         const obBox = document.getElementById("yuantaOrderBookRows");
         if (obBox) {
-          const bidHtml = bids.map(b => `<div class="flex justify-between"><span class="text-slate-400">${b.volume}張</span><span class="text-rose-400 font-bold">${b.price.toFixed(2)}</span></div>`).join("");
-          const askHtml = asks.map(a => `<div class="flex justify-between"><span class="text-emerald-400 font-bold">${a.price.toFixed(2)}</span><span class="text-slate-400">${a.volume}張</span></div>`).join("");
+          const maxVol = Math.max(1, ...bids.map(b => b.volume), ...asks.map(a => a.volume));
+          const bidHtml = bids.map(b => {
+            const w = Math.min(100, Math.round((b.volume / maxVol) * 100));
+            return `<div class="relative flex justify-between px-1 rounded overflow-hidden"><div class="absolute inset-y-0 right-0 bg-rose-500/20" style="width:${w}%"></div><span class="relative text-slate-300">${b.volume}張</span><span class="relative text-rose-400 font-bold">${b.price.toFixed(2)}</span></div>`;
+          }).join("");
+          const askHtml = asks.map(a => {
+            const w = Math.min(100, Math.round((a.volume / maxVol) * 100));
+            return `<div class="relative flex justify-between px-1 rounded overflow-hidden"><div class="absolute inset-y-0 left-0 bg-emerald-500/20" style="width:${w}%"></div><span class="relative text-emerald-400 font-bold">${a.price.toFixed(2)}</span><span class="relative text-slate-300">${a.volume}張</span></div>`;
+          }).join("");
           obBox.innerHTML = `<div class="space-y-0.5 pr-1 border-r border-slate-800">${bidHtml}</div><div class="space-y-0.5 pl-1">${askHtml}</div>`;
         }
         const ind = q.indicators || {};
@@ -1263,20 +1523,205 @@
         setEl("yuantaMACD", `${ind.macd_hist}`);
         const sigs = (q.bull_signals || []).slice(0, 2).join(" · ") || (q.bear_signals || []).slice(0, 2).join(" · ");
         setEl("yuantaSignalsList", sigs);
+
+        const f = q.fundamentals || {};
+        const fmtVal = (v, suffix = "") => (v === null || v === undefined) ? "--" : `${v}${suffix}`;
+        setEl("valTrailingPE", fmtVal(f.trailing_pe, "x"));
+        setEl("valForwardPE", fmtVal(f.forward_pe, "x"));
+        setEl("valTrailingEPS", fmtVal(f.trailing_eps, "元"));
+        setEl("valForwardEPS", fmtVal(f.forward_eps, "元"));
+        setEl("valPB", fmtVal(f.price_to_book, "x"));
+        setEl("valYield", fmtVal(f.dividend_yield_pct, "%"));
+        setEl("valROE", fmtVal(f.roe_pct, "%"));
+        setEl("valRevGrowth", f.revenue_growth_pct === null || f.revenue_growth_pct === undefined ? "--" : `${f.revenue_growth_pct >= 0 ? "+" : ""}${f.revenue_growth_pct}%`);
+
+        const s = q.suitability || {};
+        setEl("yuantaOverallScore", s.overall_score ?? "--");
+        setEl("yuantaFundScore", s.fundamental_score !== null && s.fundamental_score !== undefined ? `${s.fundamental_score}/100` : "無財報數據");
+        setEl("yuantaTechScore", s.technical_score !== null && s.technical_score !== undefined ? `${s.technical_score}/100` : "--");
+        const badgeEl = document.getElementById("yuantaSuitabilityBadge");
+        if (badgeEl) {
+          const cMap = {
+            emerald: "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40",
+            sky: "bg-sky-500/20 text-sky-300 border border-sky-500/40",
+            amber: "bg-amber-500/20 text-amber-300 border border-amber-500/40",
+            rose: "bg-rose-500/20 text-rose-300 border border-rose-500/40",
+          };
+          badgeEl.className = `text-[11px] px-2.5 py-0.5 rounded-full font-bold ${cMap[s.verdict_color] || "bg-slate-800 text-slate-300"}`;
+          badgeEl.textContent = s.verdict || "評估完成";
+        }
+        const reasonsEl = document.getElementById("yuantaBuyReasons");
+        if (reasonsEl) {
+          reasonsEl.innerHTML = (s.reasons || ["指標中性整理"]).map(r => `<li>${r}</li>`).join("");
+        }
+        const risksEl = document.getElementById("yuantaRiskNotes");
+        if (risksEl) {
+          risksEl.innerHTML = (s.risk_notes || ["請嚴設停損紀律"]).map(r => `<li>${r}</li>`).join("");
+        }
+
+        const im = q.institutional_and_margin || {};
+        const fmtSigned = (v) => (v === null || v === undefined) ? "-- 張" : `${v >= 0 ? "+" : ""}${v} 張`;
+        setEl("twInstForeign", fmtSigned(im.foreign_net_lots));
+        setEl("twInstTrust", fmtSigned(im.investment_trust_net_lots));
+        setEl("twInstDealer", fmtSigned(im.dealer_net_lots));
+        setEl("twMarginLots", im.margin_balance_lots !== undefined ? `${im.margin_balance_lots} 張` : "-- 張");
+        setEl("twShortMarginRatio", im.short_margin_ratio_pct !== undefined ? `${im.short_margin_ratio_pct}%` : "--%");
+        setEl("twWarningBadge", im.warning_status || "NORMAL");
+
+        const prov = q.provenance || {};
+        window._lastTwQuoteProvenance = prov;
+        setEl("twProvSource", prov.source || "TWSE_TPEX_OFFICIAL");
+        setEl("twProvDate", prov.market_date || "--");
+        setEl("twProvMode", `${prov.data_mode || "DELAYED_SNAPSHOT"} (非即時報價)`);
+        setEl("twProvPit", prov.is_point_in_time ? "TRUE (VERIFIED)" : "FALSE");
+        updateTwLotEstimate();
       } catch (e) {
         console.error(e);
       }
     }
 
-    async function filterTwUniverse(industry) {
+    let currentTwUiMode = 'PRO';
+    let currentTwLotMode = 'WHOLE';
+    function setTwUiMode(mode) {
+      currentTwUiMode = mode;
+      const proBox = document.getElementById('twProInstitutionalBox');
+      const obBox = document.getElementById('yuantaOrderBookRows');
+      const bSimple = document.getElementById('btnTwModeSimple');
+      const bPro = document.getElementById('btnTwModePro');
+      if (mode === 'SIMPLE') {
+        if (proBox) proBox.classList.add('hidden');
+        if (obBox) obBox.classList.add('hidden');
+        if (bSimple) bSimple.className = "px-2 py-0.5 rounded bg-rose-600 text-white font-bold";
+        if (bPro) bPro.className = "px-2 py-0.5 rounded text-slate-400 hover:text-white";
+      } else {
+        if (proBox) proBox.classList.remove('hidden');
+        if (obBox) obBox.classList.remove('hidden');
+        if (bPro) bPro.className = "px-2 py-0.5 rounded bg-rose-600 text-white font-bold";
+        if (bSimple) bSimple.className = "px-2 py-0.5 rounded text-slate-400 hover:text-white";
+      }
+    }
+    function setTwLotMode(lotMode) {
+      currentTwLotMode = lotMode;
+      const bWhole = document.getElementById('btnTwLotWhole');
+      const bOdd = document.getElementById('btnTwLotOdd');
+      if (lotMode === 'WHOLE') {
+        if (bWhole) bWhole.className = "px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold";
+        if (bOdd) bOdd.className = "px-2 py-0.5 rounded text-slate-400 hover:text-white";
+      } else {
+        if (bOdd) bOdd.className = "px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold";
+        if (bWhole) bWhole.className = "px-2 py-0.5 rounded text-slate-400 hover:text-white";
+      }
+      updateTwLotEstimate();
+    }
+    function updateTwLotEstimate() {
+      const prov = window._lastTwQuoteProvenance || {};
+      const el = document.getElementById('twLotCostEstimate');
+      if (!el) return;
+      if (currentTwLotMode === 'WHOLE') {
+        el.textContent = prov.whole_lot_cost_twd ? `1張成本 ≈ NT$${Number(prov.whole_lot_cost_twd).toLocaleString()}` : "預估門檻: --";
+      } else {
+        el.textContent = prov.odd_lot_100_cost_twd ? `100股零股 ≈ NT$${Number(prov.odd_lot_100_cost_twd).toLocaleString()}` : "預估門檻: --";
+      }
+    }
+
+    let currentHmPalette = (typeof localStorage !== 'undefined' && localStorage.getItem('ag_hm_palette')) || 'TW_RED_UP';
+    function setHeatmapColorPalette(pal) {
+      currentHmPalette = pal;
+      try { localStorage.setItem('ag_hm_palette', pal); } catch (e) {}
+      loadTaiwanHeatmap();
+    }
+    function _hmTileColorClass(val) {
+      if (currentHmPalette === 'GLOBAL_GREEN_UP') {
+        return val > 2 ? 'bg-emerald-600/80 border-emerald-400/50'
+          : (val > 0 ? 'bg-emerald-500/35 border-emerald-500/30'
+          : (val < -2 ? 'bg-rose-600/80 border-rose-400/50'
+          : (val < 0 ? 'bg-rose-500/35 border-rose-500/30' : 'bg-slate-800/80 border-slate-700')));
+      }
+      if (currentHmPalette === 'COLORBLIND_SAFE') {
+        return val > 2 ? 'bg-sky-600/80 border-sky-400/50'
+          : (val > 0 ? 'bg-sky-500/35 border-sky-500/30'
+          : (val < -2 ? 'bg-amber-600/80 border-amber-400/50'
+          : (val < 0 ? 'bg-amber-500/35 border-amber-500/30' : 'bg-slate-800/80 border-slate-700')));
+      }
+      return val > 2 ? 'bg-rose-600/80 border-rose-400/50'
+        : (val > 0 ? 'bg-rose-500/35 border-rose-500/30'
+        : (val < -2 ? 'bg-emerald-600/80 border-emerald-400/50'
+        : (val < 0 ? 'bg-emerald-500/35 border-emerald-500/30' : 'bg-slate-800/80 border-slate-700')));
+    }
+    async function loadTaiwanHeatmap() {
       try {
-        const res = await fetch(`/api/taiwan/universe?industry=${encodeURIComponent(industry === "ALL" ? "" : industry)}`);
+        const sz = document.getElementById('hmSizeBy')?.value || 'turnover';
+        const cb = document.getElementById('hmColorBy')?.value || 'change_1d';
+        const res = await fetch(`/api/taiwan/heatmap?size_by=${encodeURIComponent(sz)}&color_by=${encodeURIComponent(cb)}`);
         const d = await res.json();
-        if (d.success && d.items && d.items.length > 0) {
-          const sel = document.getElementById("twChartSymbolSelect");
-          if (sel) {
-            sel.innerHTML = d.items.map(it => `<option value="${it.symbol}">${it.symbol} (${it.name} - ${it.industry})</option>`).join("");
-            selectTaiwanStock(d.items[0].symbol);
+        const grid = document.getElementById('twSectorHeatmapGrid');
+        if (!grid || !d.success || !d.sectors) return;
+        const covEl = document.getElementById('twHeatmapCoverageBadge');
+        if (covEl) {
+          covEl.innerText = `已繪製:${d.rendered_count} | 有報價:${d.priced_count} | 正式母體:${d.official_count} | Snap:${(d.snapshot_id || '').slice(0, 6)}`;
+        }
+        grid.innerHTML = d.sectors.map(sec => {
+          const tiles = sec.items.map((it, idx) => {
+            const chg = Number(it.change_pct || 0);
+            const bg = _hmTileColorClass(chg);
+            const spanCls = (sz !== 'mono' && idx === 0) ? 'col-span-2 py-1.5' : 'p-1';
+            return `<button type="button" onclick="selectTaiwanStock('${it.symbol}')" class="${bg} ${spanCls} border rounded text-left hover:brightness-125 transition truncate">
+              <div class="font-bold text-white truncate">${it.name}</div>
+              <div class="font-mono text-[9px] text-slate-200">${it.code} ${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%</div>
+            </button>`;
+          }).join('');
+          const twRet = Number(sec.turnover_weighted_return || 0);
+          return `<div class="bg-slate-900/80 border border-slate-800 rounded-lg p-2 space-y-1.5">
+            <div class="flex items-center justify-between border-b border-slate-800 pb-1">
+              <span class="font-bold text-slate-200 truncate">${sec.industry}</span>
+              <span class="font-mono text-[9px] text-slate-400">量權:${twRet >= 0 ? '+' : ''}${twRet}% | 漲跌:${sec.advance_count}/${sec.decline_count}</span>
+            </div>
+            <div class="grid grid-cols-2 gap-1">${tiles}</div>
+          </div>`;
+        }).join('');
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    let twUniverseLoaded = false;
+    async function filterTwUniverse(industry, autoSelect = true) {
+      try {
+        const res = await fetch(`/api/taiwan/universe?limit=300&industry=${encodeURIComponent(industry === "ALL" ? "" : industry)}`);
+        const d = await res.json();
+        if (d.success) {
+          twUniverseLoaded = true;
+          const badge = document.getElementById("twUniverseCountBadge");
+          if (badge) badge.innerText = `目前顯示 ${d.count || (d.items ? d.items.length : 0)} 檔 (依熱門度排序)`;
+          const mPill = document.getElementById("twUniverseModePill");
+          if (mPill && d.universe_mode) mPill.innerText = `${d.universe_mode} (${d.is_full_universe ? "全市場" : "熱門觀察池"})`;
+          if (d.indices && d.indices.length > 0) {
+            const idxSel = document.getElementById("twIndexSelect");
+            if (idxSel) {
+              const curIdx = idxSel.value;
+              idxSel.innerHTML = d.indices.map(ix => `<option value="${ix.symbol}">${ix.symbol} (${ix.name} - ${ix.tag})</option>`).join("");
+              if (curIdx) idxSel.value = curIdx;
+            }
+          }
+          if (d.industries && d.industries.length > 0) {
+            const indSel = document.getElementById("twIndustrySelect");
+            if (indSel) {
+              const curInd = industry || "ALL";
+              indSel.innerHTML = `<option value="ALL">全部產業與ETF (依熱門度排序)</option>` + d.industries.map(x => `<option value="${x.industry}">${x.industry} (${x.count})</option>`).join("");
+              indSel.value = curInd;
+            }
+          }
+          if (d.items && d.items.length > 0) {
+            const sel = document.getElementById("twChartSymbolSelect");
+            if (sel) {
+              const prev = sel.value;
+              sel.innerHTML = d.items.map((it, idx) => `<option value="${it.symbol}">#${idx + 1} ${it.symbol} (${it.name} - ${it.industry})</option>`).join("");
+              if (autoSelect) {
+                selectTaiwanStock(d.items[0].symbol);
+              } else if (prev && Array.from(sel.options).some(o => o.value === prev)) {
+                sel.value = prev;
+              }
+            }
           }
         }
       } catch (e) {
@@ -1300,8 +1745,12 @@
 
     function selectTaiwanStock(sym) {
       currentTwSymbol = sym;
+      const idxSel = document.getElementById('twIndexSelect');
       const sel = document.getElementById('twChartSymbolSelect');
-      if (sel) {
+      if (sym.startsWith('^') && idxSel) {
+        const existsIdx = Array.from(idxSel.options).some(o => o.value === sym);
+        if (existsIdx) idxSel.value = sym;
+      } else if (sel) {
         const exists = Array.from(sel.options).some(o => o.value === sym);
         if (!exists) {
           const opt = document.createElement('option');
@@ -1376,7 +1825,7 @@
 
     function refreshCurrentTab() {
       if (currentTab === 'crypto') fetchCryptoData();
-      if (currentTab === 'taiwan') { fetchTaiwanMarket(); fetchTaiwanReport(); }
+      if (currentTab === 'taiwan') { if (!twUniverseLoaded) { filterTwUniverse('ALL', false); loadTaiwanHeatmap(); } fetchTaiwanMarket(); fetchTaiwanReport(); }
       if (currentTab === 'brain') fetchAlphas();
     }
 
@@ -1758,7 +2207,84 @@
       return `<button onclick="testAlpha('${a.id}', '${encodeURIComponent(a.expression)}', 'worldquant')" class="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold transition">🧪 送往 BRAIN 模擬</button>`;
     }
 
+    async function syncBrainChallengeScore(forceRefresh = false) {
+      try {
+        const url = forceRefresh ? '/api/brain/challenge_score?refresh=1' : '/api/brain/challenge_score';
+        const res = await fetch(url);
+        const d = await res.json();
+        if (!d.success) return;
+        const lat = d.latest || {};
+        const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        const tot = lat.total_score !== undefined && lat.total_score !== null ? Number(lat.total_score).toLocaleString() : '--';
+        const day = lat.daily_score !== undefined && lat.daily_score !== null ? Number(lat.daily_score).toLocaleString() : '--';
+        const cap = lat.daily_cap !== undefined && lat.daily_cap !== null ? Number(lat.daily_cap).toLocaleString() : '2,000';
+        setTxt('brainChallengeTotal', tot);
+        setTxt('brainChallengeDaily', `${day} / ${cap}`);
+        setTxt('brainChallengeRank', lat.rank_value !== undefined && lat.rank_value !== null ? `#${lat.rank_value}` : '--');
+        setTxt('brainChallengeDays60', lat.submission_days_60d !== undefined && lat.submission_days_60d !== null ? `${lat.submission_days_60d} 天` : '--');
+        setTxt('brainChallengeUniq', lat.uniqueness !== undefined && lat.uniqueness !== null ? `${(Number(lat.uniqueness) * 100).toFixed(1)}%` : '--');
+        setTxt('brainChallengePct', `${d.progress_pct_to_10000 ?? 0}%`);
+        setTxt('brainChallengeRemaining', Number(d.distance_to_10000 ?? 10000).toLocaleString());
+        const bar = document.getElementById('brainChallengeProgressBar');
+        if (bar) bar.style.width = `${Math.min(100, Number(d.progress_pct_to_10000 || 0))}%`;
+
+        const eta = d.eta_to_10000 || {};
+        if (eta.ready) {
+          setTxt('brainChallengeEta', `約 ${eta.estimated_days} 天 (${eta.optimistic_days}~${eta.conservative_days}天)`);
+        } else {
+          setTxt('brainChallengeEta', `已觀測 ${eta.observations || 0}/7 日`);
+        }
+        setTxt('brainChallengeObsAt', lat.observed_at || '尚未同步');
+        setTxt('brainChallengeSource', lat.source || 'LOCAL_DB');
+        setTxt('brainChallengeNextRefresh', d.next_official_refresh_taipei || '--');
+        if (forceRefresh && d.refresh_result && !d.refresh_result.success) {
+          alert('BRAIN 線上同步提示: ' + (d.refresh_result.error || d.refresh_result.status));
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function loadBrainBlueprintsAndLessons() {
+      try {
+        const [bpRes, lsRes] = await Promise.all([
+          fetch('/api/brain/blueprints'),
+          fetch('/api/brain/research/lessons')
+        ]);
+        const bpData = await bpRes.json();
+        const lsData = await lsRes.json();
+        const box = document.getElementById('brainBlueprintsContainer');
+        if (box && bpData.success && bpData.blueprints) {
+          box.innerHTML = bpData.blueprints.map(b => {
+            const inner = b.blueprint || {};
+            const fails = (inner.expected_failure_modes || []).join(', ') || 'NONE';
+            return `<div class="bg-slate-900/90 border border-slate-800 rounded-xl p-3 space-y-1.5">
+              <div class="flex items-center justify-between">
+                <span class="font-bold text-indigo-300">${b.blueprint_id} (${b.family})</span>
+                <span class="font-mono text-[10px] text-slate-400">SHA:${(b.blueprint_hash || '').slice(0, 8)}</span>
+              </div>
+              <div class="font-bold text-white">${b.title}</div>
+              <div class="text-[11px] text-slate-300"><strong>經濟假說:</strong> ${b.rationale}</div>
+              <div class="text-[11px] text-emerald-300"><strong>可證偽主張:</strong> ${b.falsifiable_claim}</div>
+              <div class="text-[10px] font-mono text-amber-300">預期失效模式: ${fails}</div>
+              <div class="text-[10px] font-mono bg-slate-950 p-1.5 rounded text-slate-300 truncate">${inner.expression_template || ''}</div>
+            </div>`;
+          }).join('');
+        }
+        const lBox = document.getElementById('brainResearchLessonsBox');
+        if (lBox && lsData.success) {
+          if (lsData.lessons && lsData.lessons.length > 0) {
+            lBox.innerHTML = lsData.lessons.map(l => `<div>[${l.family} / ${l.data_domain}] Gate: <strong class="text-rose-400">${l.failure_gate}</strong> | 有效修正: <strong class="text-emerald-300">${l.effective_fix || 'N/A'}</strong> | 已攔截無效微調: ${(l.ineffective_fixes || []).join(', ')}</div>`).join('');
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
     async function fetchAlphas() {
+      syncBrainChallengeScore(false);
+      loadBrainBlueprintsAndLessons();
       try {
         const res = await fetch('/api/brain/alphas/discovered');
         const d = await res.json();

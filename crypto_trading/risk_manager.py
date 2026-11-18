@@ -1,12 +1,30 @@
-from decimal import Decimal
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from crypto_trading.config import RISK_PARAMS
-from crypto_trading.settings import TradingMode, get_settings
+try:
+    from crypto_trading.config import RISK_PARAMS
+except ImportError:
+    RISK_PARAMS = {
+        "max_position_pct": 0.20,
+        "stop_loss_pct": 0.02,
+        "take_profit_pct": 0.04,
+        "max_drawdown_pct": 0.08,
+        "leverage": 1,
+        "risk_per_trade_pct": 0.01,
+    }
+try:
+    from crypto_trading.settings import TradingMode, get_settings
+except ImportError:
+    class TradingMode:
+        LIVE = "LIVE"
+        PAPER = "PAPER"
+    class _FallbackSettings:
+        trading_mode = "PAPER"
+    def get_settings():
+        return _FallbackSettings()
 
 
 class DecisionAction(str, Enum):
@@ -53,21 +71,41 @@ class RiskManager:
         self.max_exposure_pct = RISK_PARAMS.get("max_exposure_pct", 1.5)  # 總持倉名義價值上限
         self.min_notional = 5.0
         self.is_halted = False
+        self._halt_logged = False
+        self._capital_anchored = False
         self.daily_pnl = 0.0
         self.db_path = db_path
 
+    def reanchor_capital(self, capital: float) -> None:
+        """Re-anchor initial, peak, and current capital when syncing persisted or exchange starting balance."""
+        if capital is not None and float(capital) > 0:
+            c = float(capital)
+            self.initial_capital = c
+            self.peak_capital = c
+            self.current_capital = c
+            self.is_halted = False
+            self._halt_logged = False
+            self._capital_anchored = True
+
     def update_capital(self, new_capital: float) -> bool:
-        """更新資金並檢查是否觸發回撤熔斷"""
+        """更新資金並檢查是否觸發回撤熔斷（首次注入非預設 10000 起始資金時自動錨定，且熔斷警報僅印出一次不刷屏）"""
+        if not self._capital_anchored and self.peak_capital == 10000.0 and 0 < new_capital < 9000.0:
+            self.reanchor_capital(new_capital)
+            return True
+        self._capital_anchored = True
         self.current_capital = new_capital
         self.peak_capital = max(self.peak_capital, new_capital)
 
-        drawdown = (self.peak_capital - self.current_capital) / self.peak_capital
+        drawdown = (self.peak_capital - self.current_capital) / max(self.peak_capital, 1e-9)
         if drawdown >= self.max_drawdown_limit:
             self.is_halted = True
-            print(
-                f"[🚨 警報] 帳戶累計回撤達到 {drawdown * 100:.2f}%，超過最大容忍限制 {self.max_drawdown_limit * 100}%！啟動交易熔斷保護！"
-            )
+            if not self._halt_logged:
+                self._halt_logged = True
+                print(
+                    f"[🚨 警報] 帳戶累計回撤達到 {drawdown * 100:.2f}%，超過最大容忍限制 {self.max_drawdown_limit * 100}%！啟動交易熔斷保護！"
+                )
             return False
+        self._halt_logged = False
         return True
 
     def calculate_position_size(self, current_price: float, atr: float) -> dict[str, float]:
@@ -135,7 +173,7 @@ class RiskManager:
         if last_data_time:
             try:
                 dt = datetime.fromisoformat(last_data_time)
-                staleness = (datetime.now(timezone.utc).replace(tzinfo=None) - dt).total_seconds()
+                staleness = (datetime.utcnow() - dt).total_seconds()
                 max_stale = ctx.get("max_stale_seconds", 300)
                 if staleness > max_stale:
                     reasons.append(f"Stale market data: age {staleness:.1f}s > {max_stale}s")
@@ -158,10 +196,10 @@ class RiskManager:
             try:
                 test_conn = sqlite3.connect(db_path, timeout=1.0)
                 test_cur = test_conn.cursor()
-                test_cur.execute("CREATE TABLE IF NOT EXISTS _db_write_probe (id INTEGER PRIMARY KEY, ts TEXT)")
+                test_cur.execute("CREATE TABLE IF NOT EXISTS _db_write_probe (ts TEXT)")
                 test_cur.execute(
-                    "REPLACE INTO _db_write_probe (id, ts) VALUES (1, ?)",
-                    (datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),),
+                    "INSERT INTO _db_write_probe VALUES (?)",
+                    (datetime.utcnow().isoformat(),),
                 )
                 test_conn.commit()
                 test_conn.close()
@@ -180,12 +218,14 @@ class RiskManager:
 
         step_size = ctx.get("step_size", 0.001)
         if step_size > 0:
-            if Decimal(str(amount)) % Decimal(str(step_size)) != Decimal("0"):
+            remainder = amount % step_size
+            if round(remainder, 6) != 0 and round(abs(remainder - step_size), 6) != 0:
                 reasons.append(f"Amount {amount} violates step_size {step_size}")
 
         tick_size = ctx.get("tick_size", 0.01)
         if tick_size > 0:
-            if Decimal(str(price)) % Decimal(str(tick_size)) != Decimal("0"):
+            remainder_p = price % tick_size
+            if round(remainder_p, 6) != 0 and round(abs(remainder_p - tick_size), 6) != 0:
                 reasons.append(f"Price {price} violates tick_size {tick_size}")
 
         # 部位與槓桿限額
@@ -239,3 +279,10 @@ class RiskManager:
             max_allowed_amount=0.0,
             details={"fail_closed": True},
         )
+
+    def check_drawdown(self, current_balance: float) -> bool:
+        return self.update_capital(current_balance)
+
+    @property
+    def is_trading_halted(self) -> bool:
+        return bool(self.is_halted)

@@ -5,6 +5,7 @@ import pandas as pd
 import yfinance as yf
 
 from taiwan_stock.config import DEFAULT_WATCHLIST, PARAMS
+from taiwan_stock.universe_registry import TaiwanUniverseRegistry, build_yuanta_style_quote_panel
 
 
 class StockScreener:
@@ -18,8 +19,37 @@ class StockScreener:
     5. 動態提供 ATR 停損點位計算
     """
 
-    def __init__(self, watchlist: list[str] | None = None):
-        self.watchlist = watchlist or DEFAULT_WATCHLIST
+    def __init__(
+        self,
+        watchlist: list[str] | None = None,
+        top_n: int = 25,
+        universe_mode: str | None = None,
+        registry: TaiwanUniverseRegistry | None = None,
+    ):
+        self.registry = registry or TaiwanUniverseRegistry()
+        if watchlist is not None:
+            self.watchlist = list(watchlist)
+            self.universe_mode = "CUSTOM_WATCHLIST"
+            self.security_type_filter = "CUSTOM"
+            import hashlib, json
+            self.universe_sha256 = hashlib.sha256(json.dumps(self.watchlist, separators=(",", ":")).encode("utf-8")).hexdigest()
+        else:
+            official_equities = self.registry.current_equities(markets={"TWSE", "TIB", "TPEX"}, include_etf=False, limit=2500)
+            chosen_mode = universe_mode or ("OFFICIAL_FULL_UNIVERSE" if len(official_equities) >= 1700 else "POPULAR_WATCHLIST")
+            if chosen_mode == "POPULAR_WATCHLIST":
+                # Only scan top_n common stocks from popular watchlist (never claim full-market)
+                eq_items = self.registry.current_equities(markets={"TWSE", "TIB", "TPEX"}, include_etf=False, limit=top_n)
+                self.watchlist = [x["symbol"] for x in eq_items] if eq_items else list(DEFAULT_WATCHLIST)
+                self.universe_mode = "POPULAR_WATCHLIST"
+                self.security_type_filter = "COMMON_STOCK"
+                import hashlib, json
+                self.universe_sha256 = hashlib.sha256(json.dumps(self.watchlist, separators=(",", ":")).encode("utf-8")).hexdigest()
+            else:
+                lineage = self.registry.get_universe_with_lineage(mode=chosen_mode, limit=2500)
+                self.watchlist = [x["symbol"] for x in lineage["items"]][: max(top_n, 2500) if chosen_mode == "OFFICIAL_FULL_UNIVERSE" else top_n]
+                self.universe_mode = lineage["universe_mode"]
+                self.security_type_filter = lineage["security_type_filter"]
+                self.universe_sha256 = lineage["universe_sha256"]
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """計算關鍵技術指標"""
@@ -128,16 +158,36 @@ class StockScreener:
             suggested_stop_loss = round(curr["Close"] - (atr * PARAMS["atr_stop_loss_multiplier"]), 2)
             suggested_target = round(curr["Close"] + (atr * PARAMS["atr_stop_loss_multiplier"] * 2), 2)
 
+            matches = self.registry.search(query=symbol.split(".")[0], limit=1)
+            meta = matches[0] if matches else {"name": symbol, "industry": "台股標的"}
+            info = {}
+            try:
+                info = ticker.info or {}
+            except Exception:
+                info = {}
+            panel = build_yuanta_style_quote_panel(df, symbol, meta=meta, fundamentals=info)
+            suit = panel.get("suitability") or {}
+            fund = panel.get("fundamentals") or {}
+            blended_score = int(round(0.5 * score + 0.5 * float(suit.get("overall_score", score))))
+
             return {
                 "symbol": symbol,
+                "name": meta.get("name", symbol),
+                "industry": meta.get("industry", "台股標的"),
                 "close": round(curr["Close"], 2),
                 "change_pct": round((curr["Close"] - prev["Close"]) / prev["Close"] * 100, 2),
                 "volume": int(curr["Volume"]),
-                "score": score,
-                "signals": signals if signals else ["盤整觀望中"],
+                "score": blended_score,
+                "tech_breakout_score": score,
+                "suitability_verdict": suit.get("verdict", "中性觀望"),
+                "suitability_code": suit.get("verdict_code", "HOLD"),
+                "pe_ratio": fund.get("trailing_pe"),
+                "eps": fund.get("trailing_eps"),
+                "dividend_yield_pct": fund.get("dividend_yield_pct"),
+                "signals": (signals + (suit.get("reasons") or [])[:2]) if signals else (suit.get("reasons") or ["盤整觀望中"]),
                 "bearish_signals": bearish_signals,
                 "is_weak": len(bearish_signals) > 0 or (curr["MA5"] < curr["MA20"]),
-                "meets_threshold": score >= 50,
+                "meets_threshold": blended_score >= 55 and suit.get("verdict_code") != "CAUTION",
                 "stop_loss": suggested_stop_loss,
                 "target_price": suggested_target,
                 "risk_reward_ratio": "1 : 2.0",
@@ -172,12 +222,16 @@ class StockScreener:
         if "00632R.TW" not in scan_pool:
             scan_pool.append("00632R.TW")
 
+        provider_missing: list[str] = []
+        insufficient_history: list[str] = []
         for symbol in scan_pool:
             res = self.evaluate_stock(symbol)
             if res:
                 all_evals.append(res)
                 if res["symbol"] == "00632R.TW" or res["is_weak"]:
                     defense_candidates.append(res)
+            elif symbol != "00632R.TW":
+                provider_missing.append(symbol)
 
         qualified = [e for e in all_evals if e["meets_threshold"] and e["symbol"] != "00632R.TW"]
         qualified.sort(key=lambda x: x["score"], reverse=True)
@@ -209,6 +263,16 @@ class StockScreener:
                 )
 
         return {
+            "universe_mode": self.universe_mode,
+            "universe_count": len(self.watchlist),
+            "universe_sha256": self.universe_sha256,
+            "security_type_filter": self.security_type_filter,
+            "is_full_universe": self.universe_mode == "OFFICIAL_FULL_UNIVERSE" and len(self.watchlist) >= 1700,
+            "official_count": len(self.watchlist),
+            "provider_available_count": len([e for e in all_evals if e["symbol"] != "00632R.TW"]),
+            "screenable_count": len([e for e in all_evals if e["symbol"] != "00632R.TW"]),
+            "provider_missing_symbols": provider_missing,
+            "insufficient_history_symbols": insufficient_history,
             "scanned_count": len(scan_pool),
             "qualified_count": len(qualified),
             "picks": qualified,

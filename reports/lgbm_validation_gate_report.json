@@ -1,0 +1,205 @@
+{
+  "gate_passed": false,
+  "recommended_stage": "SHADOW",
+  "approved_for_order_entry": false,
+  "gate_checks": {
+    "global_test_rank_ic_ge_0_015": false,
+    "global_test_base_daily_sharpe_ge_1_0": false,
+    "loao_all_positive_ic": true,
+    "severe_cost_positive_return": false,
+    "severe_cost_daily_sharpe_ge_0_5": false
+  },
+  "global_split": {
+    "train_rows": 466443,
+    "val_rows": 155256,
+    "test_rows": 155258,
+    "purge_bars": 15,
+    "embargo_bars": 60,
+    "val_rank_ic": 0.02709,
+    "test_rank_ic": -0.008288,
+    "cost_scenarios": {
+      "base": {
+        "avg_net_return_pct": -99.3189,
+        "avg_daily_sharpe": -75.4012,
+        "avg_max_drawdown_pct": 99.3205,
+        "total_trades": 25164,
+        "per_symbol": {
+          "BTC/USDT": {
+            "scenario": "base",
+            "bars": 51752,
+            "trades": 8381,
+            "total_turnover": 16761.0,
+            "net_return_pct": -99.307,
+            "per_bar_sharpe": -0.154581,
+            "daily_sharpe": -80.2603,
+            "max_drawdown_pct": 99.3066,
+            "win_rate_pct": 41.12
+          },
+          "ETH/USDT": {
+            "scenario": "base",
+            "bars": 51753,
+            "trades": 8387,
+            "total_turnover": 16773.0,
+            "net_return_pct": -99.4395,
+            "per_bar_sharpe": -0.120368,
+            "daily_sharpe": -70.867,
+            "max_drawdown_pct": 99.4396,
+            "win_rate_pct": 43.52
+          },
+          "SOL/USDT": {
+            "scenario": "base",
+            "bars": 51753,
+            "trades": 8396,
+            "total_turnover": 16791.0,
+            "net_return_pct": -99.2102,
+            "per_bar_sharpe": -0.100169,
+            "daily_sharpe": -75.0763,
+            "max_drawdown_pct": 99.2152,
+            "win_rate_pct": 41.77
+          }
+        }
+      },
+      "stress_1_5x": {
+        "avg_net_return_pct": -99.9457,
+        "avg_daily_sharpe": -90.5705,
+        "avg_max_drawdown_pct": 99.9458,
+        "total_trades": 25164,
+        "per_symbol": {
+          "BTC/USDT": {
+            "scenario": "stress_1_5x",
+            "bars": 51752,
+            "trades": 8381,
+            "total_turnover": 16761.0,
+            "net_return_pct": -99.9446,
+            "per_bar_sharpe": -0.216714,
+            "daily_sharpe": -89.7494,
+            "max_drawdown_pct": 99.9446,
+            "win_rate_pct": 40.13
+          },
+          "ETH/USDT": {
+            "scenario": "stress_1_5x",
+            "bars": 51753,
+            "trades": 8387,
+            "total_turnover": 16773.0,
+            "net_return_pct": -99.9553,
+            "per_bar_sharpe": -0.171877,
+            "daily_sharpe": -87.3054,
+            "max_drawdown_pct": 99.9553,
+            "win_rate_pct": 42.46
+          },
+          "SOL/USDT": {
+            "scenario": "stress_1_5x",
+            "bars": 51753,
+            "trades": 8396,
+            "total_turnover": 16791.0,
+            "net_return_pct": -99.9372,
+            "per_bar_sharpe": -0.147781,
+            "daily_sharpe": -94.6568,
+            "max_drawdown_pct": 99.9375,
+            "win_rate_pct": 40.54
+          }
+        }
+      },
+      "severe_2_0x_funding": {
+        "avg_net_return_pct": -99.9957,
+        "avg_daily_sharpe": -98.9329,
+        "avg_max_drawdown_pct": 99.9957,
+        "total_trades": 25164,
+        "per_symbol": {
+          "BTC/USDT": {
+            "scenario": "severe_2_0x_funding",
+            "bars": 51752,
+            "trades": 8381,
+            "total_turnover": 16761.0,
+            "net_return_pct": -99.9956,
+            "per_bar_sharpe": -0.26549,
+            "daily_sharpe": -94.2291,
+            "max_drawdown_pct": 99.9956,
+            "win_rate_pct": 39.76
+          },
+          "ETH/USDT": {
+            "scenario": "severe_2_0x_funding",
+            "bars": 51753,
+            "trades": 8387,
+            "total_turnover": 16773.0,
+            "net_return_pct": -99.9964,
+            "per_bar_sharpe": -0.216413,
+            "daily_sharpe": -96.6855,
+            "max_drawdown_pct": 99.9964,
+            "win_rate_pct": 41.87
+          },
+          "SOL/USDT": {
+            "scenario": "severe_2_0x_funding",
+            "bars": 51753,
+            "trades": 8396,
+            "total_turnover": 16791.0,
+            "net_return_pct": -99.995,
+            "per_bar_sharpe": -0.190231,
+            "daily_sharpe": -105.884,
+            "max_drawdown_pct": 99.995,
+            "win_rate_pct": 39.86
+          }
+        }
+      }
+    }
+  },
+  "purged_walk_forward": [
+    {
+      "fold": 1,
+      "train_rows": 129564,
+      "test_rows": 129342,
+      "rank_ic": 0.035324,
+      "base_daily_sharpe": -108.8082,
+      "base_net_return_pct": -100.0
+    },
+    {
+      "fold": 2,
+      "train_rows": 259131,
+      "test_rows": 129342,
+      "rank_ic": 0.006394,
+      "base_daily_sharpe": -98.2128,
+      "base_net_return_pct": -100.0
+    },
+    {
+      "fold": 3,
+      "train_rows": 388698,
+      "test_rows": 129342,
+      "rank_ic": 0.010978,
+      "base_daily_sharpe": -98.865,
+      "base_net_return_pct": -100.0
+    },
+    {
+      "fold": 4,
+      "train_rows": 518265,
+      "test_rows": 129342,
+      "rank_ic": 0.017091,
+      "base_daily_sharpe": -101.4788,
+      "base_net_return_pct": -100.0
+    },
+    {
+      "fold": 5,
+      "train_rows": 647832,
+      "test_rows": 129342,
+      "rank_ic": -0.012017,
+      "base_daily_sharpe": -100.7472,
+      "base_net_return_pct": -100.0
+    }
+  ],
+  "leave_one_asset_out": {
+    "BTC/USDT": {
+      "rank_ic": 0.039829,
+      "base_daily_sharpe": -87.5831,
+      "base_net_return_pct": -100.0
+    },
+    "ETH/USDT": {
+      "rank_ic": 0.050371,
+      "base_daily_sharpe": -79.2756,
+      "base_net_return_pct": -100.0
+    },
+    "SOL/USDT": {
+      "rank_ic": 0.034143,
+      "base_daily_sharpe": -90.2756,
+      "base_net_return_pct": -100.0
+    }
+  }
+}

@@ -1,11 +1,11 @@
-"""Strict OOS validation & cost-stress gate for pooled crypto LightGBM models.
+"""Strict OOS validation & cost-stress gate for pooled crypto LightGBM / Rank-IC models.
 
 Implements:
 1. Global timestamp split (60% Train / 20% Val / 20% Test) with purge & embargo.
 2. Purged Walk-Forward (5 folds) over global timestamps.
 3. Leave-One-Asset-Out (LOAO) cross-asset generalization check.
 4. Realistic Turnover & 3-tier Cost Stress Test (Base / Stress 1.5x / Severe 2.0x + Funding),
-   reporting un-inflated per-bar & daily-aggregated Sharpe alongside annualized metrics.
+   supporting both raw threshold and causal Z-score hysteresis execution filters.
 """
 from __future__ import annotations
 
@@ -32,11 +32,8 @@ class CostScenario:
 
 
 DEFAULT_COST_SCENARIOS: tuple[CostScenario, ...] = (
-    # Base: 2 bps blended maker/taker fee + 1 bps spread/slippage = 3 bps/side (6 bps round-trip)
     CostScenario(name="base", fee_bps_per_side=2.0, slippage_bps_per_side=1.0, funding_bps_per_8h=1.0),
-    # Stress: 1.5x base cost
     CostScenario(name="stress_1_5x", fee_bps_per_side=3.0, slippage_bps_per_side=1.5, funding_bps_per_8h=2.0),
-    # Severe: 2.0x base cost + 95th percentile funding (3 bps / 8h)
     CostScenario(name="severe_2_0x_funding", fee_bps_per_side=4.0, slippage_bps_per_side=2.0, funding_bps_per_8h=3.0),
 )
 
@@ -48,6 +45,107 @@ def compute_rank_ic(preds: np.ndarray, targets: np.ndarray) -> float:
     return float(ic) if pd.notna(ic) else 0.0
 
 
+def compute_causal_hysteresis_positions(
+    preds: np.ndarray,
+    *,
+    entry_z: float = 1.8,
+    exit_z: float = -0.5,
+    max_holding_bars: int = 4,
+    min_warmup: int = 20,
+) -> np.ndarray:
+    """Convert raw model predictions into low-turnover positions using causal expanding Z-score hysteresis."""
+    n = len(preds)
+    if n == 0:
+        return np.zeros(0, dtype=float)
+    s = pd.Series(np.asarray(preds, dtype=float))
+    rmean = s.expanding(min_periods=min_warmup).mean()
+    rstd = s.expanding(min_periods=min_warmup).std(ddof=1).fillna(1.0) + 1e-8
+    z = ((s - rmean) / rstd).fillna(0.0).to_numpy()
+
+    pos = np.zeros(n, dtype=float)
+    cur = 0.0
+    held = 0
+    for i, val in enumerate(z):
+        if cur == 0.0:
+            if val > entry_z:
+                cur = 1.0
+                held = 1
+            elif val < -entry_z:
+                cur = -1.0
+                held = 1
+        elif cur == 1.0:
+            held += 1
+            if val < exit_z or held > max_holding_bars:
+                cur = -1.0 if val < -entry_z else 0.0
+                held = 1 if cur != 0.0 else 0
+        elif cur == -1.0:
+            held += 1
+            if val > -exit_z or held > max_holding_bars:
+                cur = 1.0 if val > entry_z else 0.0
+                held = 1 if cur != 0.0 else 0
+        pos[i] = cur
+    return pos
+
+
+class ICStabilityLinearWrapper:
+    """Wraps a base regression estimator with causal in-fold Rank-IC feature stability weighting."""
+
+    def __init__(self, base_factory: Callable[[], Any] | None = None, min_ic: float = 0.015, blend_alpha: float = 0.85):
+        self.base_factory = base_factory
+        self.min_ic = float(min_ic)
+        self.blend_alpha = float(blend_alpha)
+        self.base_model_: Any = None
+        self.mean_: np.ndarray | None = None
+        self.std_: np.ndarray | None = None
+        self.coef_: np.ndarray | None = None
+
+    def fit(self, X: np.ndarray, y: np.ndarray) -> "ICStabilityLinearWrapper":
+        X_arr = np.asarray(X, dtype=float)
+        y_arr = np.asarray(y, dtype=float)
+        n = len(X_arr)
+        split = max(10, int(n * 0.75))
+        X1, y1 = X_arr[:split], y_arr[:split]
+        X2, y2 = X_arr[split:], y_arr[split:]
+
+        self.mean_ = np.nanmean(X_arr, axis=0)
+        self.std_ = np.nanstd(X_arr, axis=0) + 1e-8
+        Xz = np.clip((np.nan_to_num(X_arr) - self.mean_) / self.std_, -3.5, 3.5)
+
+        weights = np.zeros(X_arr.shape[1], dtype=float)
+        for j in range(X_arr.shape[1]):
+            ic1 = compute_rank_ic(X1[:, j], y1)
+            ic2 = compute_rank_ic(X2[:, j], y2) if len(X2) >= 10 else ic1
+            if ic1 * ic2 > 0 and abs(ic1) >= self.min_ic and abs(ic2) >= self.min_ic * 0.5:
+                weights[j] = 0.5 * (ic1 + ic2)
+        if np.sum(np.abs(weights)) < 1e-9:
+            for j in range(X_arr.shape[1]):
+                weights[j] = compute_rank_ic(X_arr[:, j], y_arr)
+        norm = np.linalg.norm(weights) + 1e-8
+        self.coef_ = weights / norm
+
+        if self.base_factory is not None:
+            try:
+                self.base_model_ = self.base_factory()
+                self.base_model_.fit(Xz, y_arr)
+            except Exception:
+                self.base_model_ = None
+        return self
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        X_arr = np.asarray(X, dtype=float)
+        Xz = np.clip((np.nan_to_num(X_arr) - self.mean_) / self.std_, -3.5, 3.5)
+        linear_pred = Xz @ self.coef_
+        if self.base_model_ is not None and self.blend_alpha < 1.0:
+            try:
+                base_pred = np.asarray(self.base_model_.predict(Xz), dtype=float)
+                b_std = np.std(base_pred) + 1e-8
+                l_std = np.std(linear_pred) + 1e-8
+                return self.blend_alpha * (linear_pred / l_std) + (1.0 - self.blend_alpha) * (base_pred / b_std)
+            except Exception:
+                pass
+        return linear_pred
+
+
 def evaluate_positions_with_costs(
     timestamps: pd.DatetimeIndex | pd.Series,
     preds: np.ndarray,
@@ -56,6 +154,10 @@ def evaluate_positions_with_costs(
     threshold: float = 0.0,
     scenario: CostScenario = DEFAULT_COST_SCENARIOS[0],
     bars_per_8h: float = 480.0,
+    use_hysteresis: bool = False,
+    entry_z: float = 1.8,
+    exit_z: float = -0.5,
+    max_holding_bars: int = 4,
 ) -> dict[str, Any]:
     """Simulate positions on 1-bar forward returns with turnover, fees, slippage, and funding."""
     n = len(preds)
@@ -72,7 +174,13 @@ def evaluate_positions_with_costs(
             "win_rate_pct": 0.0,
         }
 
-    pos = np.where(preds > threshold, 1.0, np.where(preds < -threshold, -1.0, 0.0))
+    if use_hysteresis:
+        pos = compute_causal_hysteresis_positions(
+            preds, entry_z=entry_z, exit_z=exit_z, max_holding_bars=max_holding_bars
+        )
+    else:
+        pos = np.where(preds > threshold, 1.0, np.where(preds < -threshold, -1.0, 0.0))
+
     prev_pos = np.concatenate([[0.0], pos[:-1]])
     turnover = np.abs(pos - prev_pos)
     cost_rate = scenario.total_bps_per_side / 10000.0
@@ -89,7 +197,6 @@ def evaluate_positions_with_costs(
     per_bar_std = float(np.std(net_ret, ddof=1)) if n > 1 else 0.0
     per_bar_sharpe = float(np.mean(net_ret) / (per_bar_std + 1e-12))
 
-    # Aggregate to daily returns to eliminate 1m autocorrelation & sqrt(525600) inflation
     ts_index = pd.to_datetime(timestamps, utc=True)
     daily_series = pd.Series(net_ret, index=ts_index).resample("1D").sum()
     if len(daily_series) >= 5 and daily_series.std(ddof=1) > 1e-12:
@@ -193,6 +300,11 @@ def run_validation_gate(
     purge_bars: int = 15,
     embargo_bars: int = 60,
     scenarios: tuple[CostScenario, ...] = DEFAULT_COST_SCENARIOS,
+    use_hysteresis: bool = False,
+    entry_z: float = 1.8,
+    exit_z: float = -0.5,
+    max_holding_bars: int = 4,
+    bars_per_8h: float = 480.0,
 ) -> dict[str, Any]:
     """Execute Global Split, Purged Walk-Forward, LOAO, and Cost Stress Tests."""
     df = panel_df.sort_values([timestamp_col, symbol_col]).reset_index(drop=True)
@@ -209,18 +321,21 @@ def run_validation_gate(
     global_val_ic = compute_rank_ic(val_preds, val_df[target_col].to_numpy())
     global_test_ic = compute_rank_ic(test_preds, test_df[target_col].to_numpy())
 
-    # Evaluate global test across cost scenarios (aggregate per timestamp portfolio)
     test_eval_df = test_df[[timestamp_col, symbol_col, forward_1bar_col]].copy()
     test_eval_df["pred"] = test_preds
     cost_results: dict[str, Any] = {}
     for sc in scenarios:
-        # Average across symbols per scenario to avoid double-counting simultaneous bars
         per_sym = [
             evaluate_positions_with_costs(
                 sub[timestamp_col],
                 sub["pred"].to_numpy(),
                 sub[forward_1bar_col].to_numpy(),
                 scenario=sc,
+                use_hysteresis=use_hysteresis,
+                entry_z=entry_z,
+                exit_z=exit_z,
+                max_holding_bars=max_holding_bars,
+                bars_per_8h=bars_per_8h,
             )
             for _, sub in test_eval_df.groupby(symbol_col)
         ]
@@ -243,7 +358,15 @@ def run_validation_gate(
         p = m.predict(f_test[feature_cols].to_numpy())
         ic = compute_rank_ic(p, f_test[target_col].to_numpy())
         cost_base = evaluate_positions_with_costs(
-            f_test[timestamp_col], p, f_test[forward_1bar_col].to_numpy(), scenario=scenarios[0]
+            f_test[timestamp_col],
+            p,
+            f_test[forward_1bar_col].to_numpy(),
+            scenario=scenarios[0],
+            use_hysteresis=use_hysteresis,
+            entry_z=entry_z,
+            exit_z=exit_z,
+            max_holding_bars=max_holding_bars,
+            bars_per_8h=bars_per_8h,
         )
         wf_results.append(
             {
@@ -267,7 +390,15 @@ def run_validation_gate(
         p = m.predict(te[feature_cols].to_numpy())
         ic = compute_rank_ic(p, te[target_col].to_numpy())
         base_eval = evaluate_positions_with_costs(
-            te[timestamp_col], p, te[forward_1bar_col].to_numpy(), scenario=scenarios[0]
+            te[timestamp_col],
+            p,
+            te[forward_1bar_col].to_numpy(),
+            scenario=scenarios[0],
+            use_hysteresis=use_hysteresis,
+            entry_z=entry_z,
+            exit_z=exit_z,
+            max_holding_bars=max_holding_bars,
+            bars_per_8h=bars_per_8h,
         )
         loao_results[held_out] = {
             "rank_ic": round(ic, 6),
@@ -275,7 +406,6 @@ def run_validation_gate(
             "base_net_return_pct": base_eval["net_return_pct"],
         }
 
-    # Governance decision gate
     severe_name = scenarios[-1].name
     severe_res = cost_results[severe_name]
     loao_ics = [v["rank_ic"] for v in loao_results.values()]
@@ -287,12 +417,12 @@ def run_validation_gate(
         "severe_cost_positive_return": bool(severe_res["avg_net_return_pct"] > 0.0),
         "severe_cost_daily_sharpe_ge_0_5": bool(severe_res["avg_daily_sharpe"] >= 0.5),
     }
-    passed_all = bool(all(gate_checks.values()))
+    passed_all = all(gate_checks.values())
 
     return {
         "gate_passed": passed_all,
         "recommended_stage": "PAPER_CANDIDATE" if passed_all else "SHADOW",
-        "approved_for_order_entry": False,  # Always require explicit human sign-off for live orders
+        "approved_for_order_entry": False,
         "gate_checks": gate_checks,
         "global_split": {
             "train_rows": len(train_df),
