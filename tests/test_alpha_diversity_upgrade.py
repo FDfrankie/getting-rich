@@ -106,5 +106,52 @@ class TestAlphaDiversityUpgrade(unittest.TestCase):
         )
         self.assertGreater(pen_high, pen_low)
 
+
+    def test_zombie_jobs_expired_on_reload_and_inflight_counted(self):
+        from worldquant_brain.brain_job_queue import BrainJobQueue
+        db_file = str(pathlib.Path(tempfile.mkdtemp()) / "zombie.db")
+        conn = sqlite3.connect(db_file)
+        conn.execute(
+            "CREATE TABLE brain_jobs (job_id TEXT PRIMARY KEY, simulation_key TEXT, expression TEXT, settings_json TEXT, status TEXT, simulation_location TEXT, alpha_id TEXT, metrics_json TEXT, safe_error TEXT, created_at TEXT, priority INTEGER, source TEXT, requested_by TEXT, manual_note TEXT, simulation_only INTEGER, queued_at TEXT, claimed_by TEXT, claimed_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO brain_jobs VALUES ('j_zombie', 'k1', 'rank(close)', '{}', 'QUEUED', NULL, NULL, NULL, NULL, '2026-11-18T01:00:00+00:00', 20, 'AUTO_MINING', NULL, NULL, 1, '2026-11-18T01:00:00+00:00', 'Worker-1', '2026-11-18T02:00:00+00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+        class _OfflineClient:
+            offline_mode = True
+
+        q = BrainJobQueue(_OfflineClient(), db_path=db_file)
+        self.assertEqual(q.queue_depth(), 0)
+        self.assertEqual(q.get_job("j_zombie").status.value, "FAILED")
+        q._in_flight_ids.add("running_1")
+        self.assertEqual(q.queue_depth(), 1)
+
+    def test_cross_day_flush_deduplicates_and_submits_yesterday_pending(self):
+        from unittest.mock import patch
+        db_file = str(pathlib.Path(tempfile.mkdtemp()) / "cross_day.db")
+        bc = BrainClient(email="test@example.com", password="secret")
+        bc.quota_db_path = db_file
+        bc.authenticated = True
+        bc.stage_candidate_for_daily_selection("YEST_TOP", "group_neutralize(rank(debt / (abs(equity) + 0.001)), industry)", 1.36, 1.21, 0.022, 0.002, day_str="2026-11-18")
+        # Force insert a second clone from yesterday with lower score
+        conn = sqlite3.connect(db_file)
+        conn.execute(
+            "INSERT INTO brain_candidate_pool VALUES ('YEST_CLONE', 'ts_decay_linear(group_neutralize(rank(debt / (abs(equity) + 0.001)), industry), 5)', 1.28, 1.05, 0.025, 0.002, 1.80, '2026-11-18', 'PENDING', '2026-11-18T02:00:00Z')"
+        )
+        conn.commit()
+        conn.close()
+
+        def fake_sub(alpha_id, max_daily_submissions=2, enforce_checks=True, day_str=None):
+            bc._record_daily_submission(alpha_id, day_str=day_str)
+            return {"success": True, "status": "SUBMITTED", "alpha_id": alpha_id}
+
+        with patch.object(bc, "submit_alpha", side_effect=fake_sub):
+            res = bc.flush_daily_candidates(day_str="2026-11-19", max_daily_submissions=2)
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0]["alpha_id"], "YEST_TOP")
+
 if __name__ == "__main__":
     unittest.main()
