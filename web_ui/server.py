@@ -3,8 +3,22 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import sys
 import threading
 import time
+
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+except Exception:
+    pass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import numpy as np
@@ -889,6 +903,9 @@ class QuantAppContext:
         while True:
             try:
                 self.heartbeats["alpha_miner"] = time.time()
+                if os.getenv("BRAIN_DISABLE_WEB_UI_MINER", "false").lower() == "true":
+                    time.sleep(5.0)
+                    continue
                 if os.getenv("BRAIN_SIMULATION_ENABLED", "").lower() == "true" and not self.brain_client.offline_mode:
                     target_depth = int(os.getenv('BRAIN_QUEUE_TARGET_DEPTH', '10') or '10')
                     cooldown_sec = float(os.getenv('BRAIN_MINING_COOLDOWN_SEC', '0') or '0')
@@ -1149,8 +1166,11 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     def _send_error_json(self, code: str, message: str, status: int = 400, retryable: bool = False):
         return self._send_json_response(
