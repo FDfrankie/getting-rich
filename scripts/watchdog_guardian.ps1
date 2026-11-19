@@ -15,8 +15,17 @@ if (-not (Test-Path $DataDir)) {
 
 $PauseFlag = Join-Path $DataDir "watchdog.paused"
 $LogPath = Join-Path $DataDir "watchdog.log"
-$BatName = (-join ([char[]]@(0x555F, 0x52D5, 0x91CF, 0x5316, 0x4EA4, 0x6613, 0x5E73, 0x53F0))) + ".bat"
-$BatPath = Join-Path $RepoRoot $BatName
+$StdoutLog = Join-Path $DataDir "web_ui_stdout.log"
+$StderrLog = Join-Path $DataDir "web_ui_stderr.log"
+
+function Get-SilentPythonPath {
+    $venvDir = Join-Path (Split-Path -Parent $RepoRoot) ".quant_envs\antigravity\Scripts"
+    $pyw = Join-Path $venvDir "pythonw.exe"
+    if (Test-Path $pyw) { return $pyw }
+    $py = Join-Path $venvDir "python.exe"
+    if (Test-Path $py) { return $py }
+    return "pythonw.exe"
+}
 
 function Write-WatchdogLog {
     param([string]$Message)
@@ -35,13 +44,25 @@ function Test-PlatformRunning {
     if ($listening) {
         return $true
     }
-    $procs = Get-CimInstance Win32_Process -Filter "Name LIKE 'python%' OR Name = 'cmd.exe'" -ErrorAction SilentlyContinue
-    foreach ($p in $procs) {
-        $cmdLine = [string]$p.CommandLine
-        if (-not $cmdLine) { continue }
-        if ($cmdLine -match 'web_ui[\\/\.]app\.py' -or $cmdLine -match 'web_ui\.server' -or $cmdLine -match ([regex]::Escape($BatName))) {
+    try {
+        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$TargetPort/health" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+        if ($resp.StatusCode -eq 200) {
             return $true
         }
+    } catch {
+        # Not listening yet
+    }
+    try {
+        $procs = Get-CimInstance Win32_Process -Filter "Name LIKE 'python%'" -ErrorAction SilentlyContinue
+        foreach ($p in $procs) {
+            $cmdLine = [string]$p.CommandLine
+            if (-not $cmdLine) { continue }
+            if ($cmdLine -match 'web_ui[\\/\.]app\.py' -or $cmdLine -match 'web_ui\.server') {
+                return $true
+            }
+        }
+    } catch {
+        # Ignore CIM permission errors
     }
     return $false
 }
@@ -50,13 +71,15 @@ function Invoke-WatchdogCheck {
     if (Test-Path $PauseFlag) {
         return
     }
-    if (-not (Test-Path $BatPath)) {
-        Write-WatchdogLog "[Watchdog] Launcher batch file not found: $BatPath"
-        return
-    }
     if (-not (Test-PlatformRunning -TargetPort $Port)) {
-        Write-WatchdogLog ("[Watchdog] Detected platform stopped; auto-executing " + $BatName + " --watchdog")
-        Start-Process -FilePath $BatPath -ArgumentList "--watchdog" -WorkingDirectory $RepoRoot -WindowStyle Minimized | Out-Null
+        $pyExe = Get-SilentPythonPath
+        Write-WatchdogLog "[Watchdog] Detected platform stopped; starting silently via $pyExe (WindowStyle Hidden)"
+        Start-Process -FilePath $pyExe `
+            -ArgumentList @("-B", "-u", "web_ui\app.py") `
+            -WorkingDirectory $RepoRoot `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $StdoutLog `
+            -RedirectStandardError $StderrLog | Out-Null
     }
 }
 
