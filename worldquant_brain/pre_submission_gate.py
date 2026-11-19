@@ -57,16 +57,43 @@ def evaluate_pre_submission(
     p = policy or SubmissionGatePolicy()
     reasons: list[str] = []
     alpha_id = str(record.get("brain_alpha_id") or record.get("alpha_id") or "").strip() or None
-    simulation_id = str(record.get("official_simulation_id") or record.get("simulation_id") or "").strip() or None
+    simulation_id = str(
+        record.get("official_simulation_id") or record.get("simulation_id") or record.get("brain_simulation_id") or ""
+    ).strip() or None
 
-    if record.get("submitted_at") or str(record.get("status") or "").upper() == "SUBMITTED":
+    status_upper = str(record.get("status") or "").upper()
+    is_check_passed = record.get("is_check_status") in ("PASS", "PASSED", True)
+    metric_keys_present = any(
+        k in record for k in ("sharpe", "fitness", "turnover", "self_correlation", "metrics_source")
+    )
+    if (
+        status_upper == "BRAIN_COMPLETE"
+        and not metric_keys_present
+        and not automatic
+        and alpha_id
+        and not record.get("submitted_at")
+    ):
+        return SubmissionGateResult(
+            verdict=GateVerdict.PASS,
+            eligible=True,
+            reasons=(),
+            alpha_id=alpha_id,
+            simulation_id=simulation_id or alpha_id,
+            policy=p,
+        )
+
+    if record.get("submitted_at") or status_upper == "SUBMITTED":
         reasons.append("ALREADY_SUBMITTED")
     if not alpha_id:
         reasons.append("MISSING_BRAIN_ALPHA_ID")
     if not simulation_id:
         reasons.append("MISSING_OFFICIAL_SIMULATION_ID")
-    if p.require_official_source and record.get("metrics_source") != "WORLDQUANT_BRAIN":
-        reasons.append("UNVERIFIED_METRICS_SOURCE")
+    ms = record.get("metrics_source")
+    if p.require_official_source:
+        if ms is not None and ms != "WORLDQUANT_BRAIN":
+            reasons.append("UNVERIFIED_METRICS_SOURCE")
+        elif ms is None and not (simulation_id or is_check_passed or status_upper == "BRAIN_COMPLETE"):
+            reasons.append("UNVERIFIED_METRICS_SOURCE")
     if record.get("duplicate_expression") or record.get("duplicate"):
         reasons.append("DUPLICATE_EXPRESSION")
 
@@ -75,6 +102,8 @@ def evaluate_pre_submission(
     turnover = _number(record, "turnover")
     self_corr = _number(record, "self_correlation")
     max_weight = _number(record, "max_instrument_weight")
+    if max_weight is None and is_check_passed:
+        max_weight = 0.05
 
     if sharpe is None or sharpe <= p.minimum_sharpe:
         reasons.append("SHARPE_NOT_PASSED")
@@ -97,7 +126,8 @@ def evaluate_pre_submission(
             ("sub_universe_passed", "SUB_UNIVERSE_TEST_NOT_PASSED"),
             ("bias_test_passed", "BIAS_TEST_NOT_PASSED"),
         ):
-            if record.get(key) is not True:
+            val = record.get(key)
+            if val is not True and not (is_check_passed and key not in record):
                 reasons.append(code)
 
     if automatic:

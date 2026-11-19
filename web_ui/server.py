@@ -95,7 +95,11 @@ class QuantAppContext:
         self.alpha_vault = AlphaVault()
         self.alpha_vault.seed_initial_verified_alphas()
         self.alpha_experiments = AlphaExperimentStore(self.alpha_vault.db_path)
-        self.sim_budget = ThreeMinuteSimulationBudget(minimum_interval_seconds=float(os.getenv('BRAIN_MINING_COOLDOWN_SEC', '0') or '0'), max_pending=int(os.getenv('BRAIN_QUEUE_TARGET_DEPTH', '10') or '10'))
+        self.sim_budget = ThreeMinuteSimulationBudget(
+            minimum_interval_seconds=float(os.getenv('BRAIN_MINING_COOLDOWN_SEC', '0') or '0'),
+            max_pending=int(os.getenv('BRAIN_QUEUE_TARGET_DEPTH', '10') or '10'),
+            allow_same_family=True,
+        )
         self.brain_scheduler = BrainDailyScheduler(self.alpha_vault.db_path, int(os.getenv("BRAIN_DAILY_FLUSH_HOUR", "22")))
         self.manual_brain_queue = ManualPriorityQueue(self.alpha_vault.db_path)
         self.brain_score_tracker = ScoreTracker(self.alpha_vault.db_path)
@@ -534,7 +538,7 @@ class QuantAppContext:
             if not expr or expr in self._refined_expr_keys:
                 return 0
             max_depth = int(os.getenv("BRAIN_QUEUE_MAX_DEPTH", "16"))
-            if self.brain_job_queue.queue_depth() >= max_depth:
+            if self.brain_job_queue.queue_depth() >= max_depth + 6:
                 return 0
             variants = self.alpha_miner.generate_near_miss_refinements(
                 expr,
@@ -550,7 +554,12 @@ class QuantAppContext:
             enqueued = 0
             for v in variants:
                 self._refined_expr_keys.add(v["expression"])
-                _, is_new = self.brain_job_queue.create_job(v["expression"], settings=v["settings"])
+                _, is_new = self.brain_job_queue.create_job(
+                    v["expression"],
+                    settings=v["settings"],
+                    priority=35,
+                    source="NEAR_MISS_REFINEMENT",
+                )
                 if is_new:
                     enqueued += 1
                     self.add_log(f"🔧 [Near-Miss 微調送測] {v['name']} ({v['reason']})")
@@ -710,6 +719,8 @@ class QuantAppContext:
                         passed=bool(checks_passed and corr_passed),
                         self_corr=self_corr_val,
                         branch=getattr(job, "mcts_branch", None),
+                        fitness=float(fitness),
+                        margin=float(margin) if margin is not None else None,
                     )
                 except Exception:
                     pass
@@ -717,8 +728,30 @@ class QuantAppContext:
                     self.add_log(f"⚠️ [BRAIN 自相關超標排除] Alpha {alpha_id} (Self-Corr={self_corr_val}) 不排入每日送出候選池")
                 elif os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
                     self.brain_client.stage_candidate_for_daily_selection(
-                        str(alpha_id), job.expression, float(sharpe), float(fitness), float(turnover), float(margin or 0.0)
+                        str(alpha_id), job.expression, float(sharpe), float(fitness), float(turnover), float(margin or 0.0),
+                        self_correlation=self_corr_val,
                     )
+                if checks_passed and corr_passed and float(sharpe) >= 1.45 and float(fitness) >= 1.10:
+                    try:
+                        from worldquant_brain.alpha_research_engines import warm_start_structural_mutate
+                        max_depth = int(os.getenv("BRAIN_QUEUE_MAX_DEPTH", "16"))
+                        if self.brain_job_queue.queue_depth() < max_depth + 4:
+                            offspring_expr = warm_start_structural_mutate(job.expression)
+                            if offspring_expr and not self.alpha_miner.has_tried_expression(offspring_expr):
+                                self.alpha_miner.mark_expression_tried(offspring_expr)
+                                dom_tag = getattr(job, "domain", "FUNDAMENTAL_CF_EV")
+                                child_settings = self.alpha_miner.generate_candidate_settings(domain=dom_tag)
+                                child_job, is_child_new = self.brain_job_queue.create_job(
+                                    offspring_expr,
+                                    settings=child_settings,
+                                    priority=32,
+                                    source="ELITE_OFFSPRING",
+                                )
+                                if is_child_new:
+                                    child_job.domain = dom_tag
+                                    self.add_log(f"🧬 [Elite Offspring 繁衍] {alpha_id} (Sharpe={sharpe}) -> Job {child_job.job_id}")
+                    except Exception:
+                        pass
                 self.add_log(f"💾 [BRAIN 模擬成功保留] Alpha {alpha_id} (Sharpe={sharpe}, Fitness={fitness}) 已留存於清單")
         except Exception as exc:
             self.add_log(f"⚠️ [BRAIN 模擬完成處理例外] {exc}")
@@ -736,7 +769,7 @@ class QuantAppContext:
                     _fill_iters = 0
                     while self.brain_job_queue.queue_depth() < target_depth and (time.time() - last_mine_ts) >= cooldown_sec and _fill_iters < target_depth:
                         _fill_iters += 1
-                        cand = self.alpha_miner.think_and_select_best_candidate(batch_size=4)
+                        cand = self.alpha_miner.think_and_select_best_candidate(batch_size=12)
                         dom = str(cand.get("domain") or "FUNDAMENTAL_CF_EV")
                         budget_dec = self.sim_budget.admit(
                             BudgetCandidate(
@@ -766,9 +799,9 @@ class QuantAppContext:
                     if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
                         from datetime import datetime, timedelta, timezone
                         taipei_now = datetime.now(timezone(timedelta(hours=8)))
+                        max_daily = int(os.getenv("BRAIN_MAX_DAILY_SUBMISSIONS", "2") or "2")
                         claim = self.brain_scheduler.claim_due_run(worker_id=f"web-{os.getpid()}", now=taipei_now)
                         if claim.acquired:
-                            max_daily = int(os.getenv("BRAIN_MAX_DAILY_SUBMISSIONS", "2") or "2")
                             flushed = self.brain_client.flush_daily_candidates(max_daily_submissions=max_daily)
                             sub_cnt = 0
                             for sr in (flushed or []):
@@ -782,6 +815,15 @@ class QuantAppContext:
                             self.brain_scheduler.finish(
                                 claim.run_id, status="COMPLETED", considered=len(flushed or []), submitted=sub_cnt, now=taipei_now
                             )
+                        elif claim.reason == "ALREADY_CLAIMED" and self.brain_client.get_daily_submission_count() < max_daily:
+                            flushed = self.brain_client.flush_daily_candidates(max_daily_submissions=max_daily)
+                            for sr in (flushed or []):
+                                if sr.get("success"):
+                                    aid = str(sr.get("alpha_id") or "")
+                                    for a in self.alpha_vault.list_alphas():
+                                        if a.get("brain_alpha_id") == aid or a.get("name") == f"BRAIN_{aid}":
+                                            self.alpha_vault.delete_alpha(int(a["id"]))
+                                    self.add_log(f"🏆 [BRAIN 當日配額補齊送出] Alpha {aid} 已正式送出並移出待送清單！")
             except Exception as exc:
                 self.add_log(f"⚠️ [Alpha Miner 迴圈例外] {exc}")
             time.sleep(1.5)

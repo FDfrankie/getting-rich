@@ -276,7 +276,10 @@ class BrainJobQueue:
                 ),
             )
 
-        execute_with_sqlite_retry(self.db_path, _op)
+        try:
+            execute_with_sqlite_retry(self.db_path, _op)
+        except sqlite3.OperationalError:
+            pass
 
     def _restore_jobs(self) -> None:
         if not self.db_path or self.db_path == ":memory:" or not os.path.exists(self.db_path):

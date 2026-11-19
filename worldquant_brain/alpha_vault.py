@@ -199,7 +199,8 @@ class AlphaVault:
             conn.commit()
 
         # 同步儲存至 JSON 備份
-        self.export_to_json(self.DEFAULT_EXPORT_JSON)
+        if self.db_path == self.DEFAULT_DB_PATH:
+            self.export_to_json(self.DEFAULT_EXPORT_JSON)
 
         return {
             "success": True,
@@ -233,7 +234,7 @@ class AlphaVault:
             cursor.execute("DELETE FROM alphas WHERE id = ?", (alpha_id,))
             conn.commit()
             deleted = cursor.rowcount > 0
-        if deleted:
+        if deleted and self.db_path == self.DEFAULT_DB_PATH:
             self.export_to_json(self.DEFAULT_EXPORT_JSON)
         return deleted
 

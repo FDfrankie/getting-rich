@@ -72,7 +72,7 @@ def warm_start_structural_mutate(
     *,
     domain: str = "",
 ) -> str | None:
-    """Warm-Start GP (arXiv:2412.00896): swap equivalent fields/windows inside a proven structure
+    """Warm-Start GP (arXiv:2412.00896): swap equivalent fields/windows/hump inside a proven structure
     without increasing tree depth or nesting ts_decay_linear."""
     expr = (seed_expr or "").strip()
     if not expr or "ts_decay_linear(ts_decay_linear(" in expr.lower():
@@ -81,24 +81,40 @@ def warm_start_structural_mutate(
         "operating_cashflow": ("operating_income", "ebitda"),
         "operating_income": ("operating_cashflow", "ebitda"),
         "ebitda": ("operating_cashflow", "operating_income"),
-        "subindustry": ("industry",),
+        "assets": ("cap + debt", "assets - liabilities"),
+        "cap": ("assets", "cap + debt"),
+        "debt": ("liabilities",),
+        "liabilities": ("debt",),
+        "eps_consensus_mean": ("target_price / (close + 0.001)",),
+        "subindustry": ("industry", "sector"),
         "industry": ("subindustry",),
-        "returns": ("ts_delta(close, 1) / (close + 0.001)",),
+        "sector": ("subindustry", "industry"),
+        "returns": ("ts_delta(close, 1) / (close + 0.001)", "(close - vwap) / (vwap + 0.0001)"),
+        "vwap": ("ts_mean(close, 5)",),
     }
     mutated = expr
     swapped = False
-    for src, targets in field_swaps.items():
-        if re.search(rf"\b{re.escape(src)}\b", mutated):
-            mutated = re.sub(rf"\b{re.escape(src)}\b", random.choice(targets), mutated, count=1)
-            swapped = True
-            break
-    # Also perturb window constants safely within [10, 20, 40, 60, 120]
-    nums = re.findall(r"\b(10|20|40|60|120)\b", mutated)
+    present_keys = [k for k in field_swaps if re.search(rf"\b{re.escape(k)}\b", mutated)]
+    random.shuffle(present_keys)
+    for src in present_keys:
+        mutated = re.sub(rf"\b{re.escape(src)}\b", random.choice(field_swaps[src]), mutated, count=1)
+        swapped = True
+        break
+    # Perturb window constants safely across extended horizons
+    nums = re.findall(r"\b(3|5|8|10|15|20|30|40|60|90|120|180|240)\b", mutated)
     if nums:
-        old_w = nums[0]
-        choices = [w for w in ("10", "20", "40", "60", "120") if w != old_w]
+        old_w = random.choice(nums)
+        choices = [w for w in ("5", "8", "10", "15", "20", "30", "40", "60", "90", "120", "180") if w != old_w]
         if choices:
             mutated = re.sub(rf"\b{old_w}\b", random.choice(choices), mutated, count=1)
+            swapped = True
+    # Perturb hump parameter when present
+    hm = re.search(r"hump=(0\.005|0\.008|0\.01|0\.012|0\.015|0\.02)\b", mutated)
+    if hm:
+        old_h = hm.group(1)
+        h_choices = [h for h in ("0.005", "0.008", "0.01", "0.012", "0.015", "0.02") if h != old_h]
+        if h_choices:
+            mutated = mutated.replace(f"hump={old_h}", f"hump={random.choice(h_choices)}", 1)
             swapped = True
     return mutated if (swapped and mutated != expr) else None
 
@@ -137,15 +153,30 @@ class DomainBanditAllocator:
                 """
             )
 
-    def record_outcome(self, domain: str, *, sharpe: float | None, passed: bool, self_corr: float | None = None) -> float:
+    def record_outcome(
+        self,
+        domain: str,
+        *,
+        sharpe: float | None,
+        passed: bool,
+        self_corr: float | None = None,
+        fitness: float | None = None,
+        margin: float | None = None,
+    ) -> float:
         if domain not in self.domains:
             domain = self.domains[0]
         sr = float(sharpe) if sharpe is not None else 0.0
         reward = 0.0
         if passed:
-            reward += 0.60
+            reward += 0.55
         if sr >= 1.25:
-            reward += min(0.35, (sr - 1.0) * 0.25)
+            reward += min(0.30, (sr - 1.0) * 0.25)
+        if fitness is not None and float(fitness) >= 1.0:
+            reward += min(0.10, (float(fitness) - 0.8) * 0.12)
+        if margin is not None:
+            norm_m = float(margin) / 10000.0 if float(margin) > 0.5 else float(margin)
+            if norm_m >= 0.0012:
+                reward += 0.05
         if self_corr is not None and self_corr >= 0.70:
             reward -= 0.40
         reward = max(0.0, min(1.0, reward))

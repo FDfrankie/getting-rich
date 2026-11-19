@@ -24,6 +24,7 @@ from worldquant_brain.alpha_research_engines import (
     compute_dico_similarity_penalty,
     warm_start_structural_mutate,
 )
+from worldquant_brain.alpha_template_expander import generate_diverse_domain_candidate
 
 
 
@@ -127,23 +128,31 @@ class ContinuousAlphaMiner:
         "VOLATILITY_LIQ_DECAY",
     )
 
-    def generate_high_pass_domain_candidate(self, domain: str | None = None) -> dict[str, str]:
+    def generate_high_pass_domain_candidate(
+        self,
+        domain: str | None = None,
+        mcts_branch: tuple[str, str, str] | None = None,
+    ) -> dict[str, str]:
         """Generate high-pass-rate, cross-domain BRAIN FASTEXPR formulas with built-in winsorize, hump, and group_neutralize."""
         if not hasattr(self, "_domain_cursor"):
             self._domain_cursor = 0
         if domain is None:
             domain = self._DOMAIN_ROTATION[self._domain_cursor % len(self._DOMAIN_ROTATION)]
             self._domain_cursor += 1
-        grp = random.choice(["subindustry", "industry"])
-        w = random.choice([20, 40, 60, 120])
-        h = random.choice([0.008, 0.01, 0.015])
+        transform = mcts_branch[1] if (mcts_branch and len(mcts_branch) >= 3) else None
+        neut = mcts_branch[2] if (mcts_branch and len(mcts_branch) >= 3) else None
+        if random.random() < 0.75:
+            return generate_diverse_domain_candidate(domain=domain, neutralization=neut, transform=transform)
+        grp = neut if neut in ("subindustry", "industry", "sector") else random.choice(["subindustry", "industry"])
+        w = random.choice([15, 20, 30, 40, 60, 90, 120])
+        h = random.choice([0.005, 0.008, 0.01, 0.012, 0.015, 0.02])
         if domain == "FUNDAMENTAL_CF_EV":
             num = random.choice(["operating_cashflow", "operating_income", "ebitda"])
             expr = f"hump(group_neutralize(winsorize(rank({num} / (cap + debt + 0.001)), std=4), {grp}), hump={h})"
             return {"name": f"HP_FundCF_{num}_{grp}", "expression": expr, "domain": domain}
         if domain == "FUNDAMENTAL_ROA_DELEVERAGE":
-            expr = f"hump(group_neutralize(winsorize(rank(ebitda / (assets + 0.001)) - rank(ts_delta(debt / (assets + 0.001), 60)), std=4), {grp}), hump={h})"
-            return {"name": f"HP_FundQual_{grp}", "expression": expr, "domain": domain}
+            expr = f"hump(group_neutralize(winsorize(rank(ebitda / (assets + 0.001)) - rank(ts_delta(debt / (assets + 0.001), {w})), std=4), {grp}), hump={h})"
+            return {"name": f"HP_FundQual_{grp}_{w}", "expression": expr, "domain": domain}
         if domain == "ANALYST_EPS_DISPERSION":
             expr = f"hump(group_neutralize(winsorize(rank(ts_zscore(eps_consensus_mean, {w})) - 0.5 * rank(target_price / (close + 0.001) - 1), std=4), {grp}), hump={h})"
             return {"name": f"HP_Analyst_{grp}_{w}", "expression": expr, "domain": domain}
@@ -369,7 +378,14 @@ class ContinuousAlphaMiner:
                 except Exception:
                     pass
 
-    def generate_unique_candidate(self, max_attempts: int = 35) -> dict[str, str]:
+    def generate_unique_candidate(
+        self,
+        max_attempts: int = 35,
+        *,
+        mark_tried: bool = True,
+        domain: str | None = None,
+        mcts_branch: tuple[str, str, str] | None = None,
+    ) -> dict[str, str]:
         """Generate a structurally diverse, high-pass-rate FASTEXPR expression (eliminates nested ts_decay_linear clones)."""
         verified = [
             a for a in self.vault.list_alphas()
@@ -377,11 +393,10 @@ class ContinuousAlphaMiner:
             and "ts_decay_linear(" not in str(a.get("expression") or "").lower()
         ]
         for attempt in range(max_attempts):
-            # 60% high-pass multi-domain rotation, 25% legacy diverse templates, 15% orthogonal mutation (no ts_decay_linear nesting)
             r = random.random()
-            if r < 0.60:
-                cand = self.generate_high_pass_domain_candidate()
-            elif verified and r < 0.75:
+            if domain is not None or r < 0.70:
+                cand = self.generate_high_pass_domain_candidate(domain=domain, mcts_branch=mcts_branch)
+            elif verified and r < 0.85:
                 base = random.choice(verified)
                 w = random.choice([40, 60])
                 cand_expr = f"hump(group_neutralize(ts_regression({base['expression']}, returns, {w}, rettype=0), subindustry), hump=0.01)"
@@ -390,11 +405,13 @@ class ContinuousAlphaMiner:
                 cand = self.generate_candidate_expression()
 
             skel = extract_expression_skeleton(cand["expression"])
-            if not find_duplicate(cand["expression"], []).blocked and not self.has_tried_expression(cand["expression"]) and self._count_recent_skeleton(skel) < 2:
-                self.mark_expression_tried(cand["expression"])
+            if not find_duplicate(cand["expression"], []).blocked and not self.has_tried_expression(cand["expression"]) and self._count_recent_skeleton(skel) < 3:
+                if mark_tried:
+                    self.mark_expression_tried(cand["expression"])
                 return cand
-        cand = self.generate_high_pass_domain_candidate()
-        self.mark_expression_tried(cand["expression"])
+        cand = generate_diverse_domain_candidate(domain=domain)
+        if mark_tried:
+            self.mark_expression_tried(cand["expression"])
         return cand
 
 
@@ -409,8 +426,20 @@ class ContinuousAlphaMiner:
             self._mcts = FormulaMCTSSearch()
         return self._mcts
 
-    def record_domain_feedback(self, domain: str, *, sharpe: float | None, passed: bool, self_corr: float | None = None, branch: tuple[str, str, str] | None = None) -> float:
-        rew = self._get_bandit().record_outcome(domain, sharpe=sharpe, passed=passed, self_corr=self_corr)
+    def record_domain_feedback(
+        self,
+        domain: str,
+        *,
+        sharpe: float | None,
+        passed: bool,
+        self_corr: float | None = None,
+        branch: tuple[str, str, str] | None = None,
+        fitness: float | None = None,
+        margin: float | None = None,
+    ) -> float:
+        rew = self._get_bandit().record_outcome(
+            domain, sharpe=sharpe, passed=passed, self_corr=self_corr, fitness=fitness, margin=margin
+        )
         if branch is not None:
             self._get_mcts().backpropagate(branch, rew)
         return rew
@@ -430,6 +459,10 @@ class ContinuousAlphaMiner:
             score += 10.0
         if any(k in expr for k in ("operating_cashflow", "ebitda", "eps_consensus_mean", "opt6_", "scl12_buzz")):
             score += 12.0
+        if any(op in expr for op in ("ts_ir(", "trade_when(", "ts_zscore(")):
+            score += 6.0
+        if any(tok in expr for tok in ("+ 0.001)", "+ 0.0001)", "+ 1.0)")):
+            score += 4.0
         if "ts_decay_linear(ts_decay_linear(" in expr:
             score -= 60.0
         # Penalize excessive nesting depth
@@ -448,38 +481,61 @@ class ContinuousAlphaMiner:
         return round(score, 2)
 
     def think_and_select_best_candidate(self, batch_size: int = 12) -> dict[str, Any]:
-        """Deliberate slowly using Bandit + MCTS + Warm-Start GP + DiCo similarity penalty."""
-        existing_exprs: list[str] = []
+        """Deliberate using Bandit + MCTS + Elite Warm-Start GP + DiCo similarity penalty without burning untried candidates."""
+        vault_alphas: list[dict[str, Any]] = []
         try:
             if getattr(self, "vault", None) is not None:
-                existing_exprs = [str(a.get("expression") or "") for a in self.vault.list_alphas() if a.get("expression")]
+                vault_alphas = list(self.vault.list_alphas() or [])
         except Exception:
-            existing_exprs = []
+            vault_alphas = []
+        existing_exprs = [str(a.get("expression") or "") for a in vault_alphas if a.get("expression")]
+        elite_alphas = sorted(
+            [a for a in vault_alphas if a.get("expression")],
+            key=lambda a: float(a.get("sharpe") or 0.0) * max(0.5, float(a.get("fitness") or 1.0)),
+            reverse=True,
+        )
+        elite_exprs = [str(a.get("expression") or "") for a in elite_alphas[:5]]
 
         bandit = self._get_bandit()
         mcts = self._get_mcts()
         pool: list[tuple[float, dict[str, Any]]] = []
+        seen_in_pool: set[str] = set()
         for i in range(max(3, int(batch_size))):
             if i == 0:
-                # 1st slot: UCB Bandit-selected domain + MCTS branch
                 dom = bandit.select_domain()
                 branch = mcts.select_branch(dom)
-                cand = self.generate_high_pass_domain_candidate(domain=dom)
+                cand = self.generate_unique_candidate(mark_tried=False, domain=dom, mcts_branch=branch)
                 cand["mcts_branch"] = branch
-            elif i == 1 and existing_exprs:
-                # 2nd slot: Warm-Start GP structural swap from a proven seed
-                seed = random.choice(existing_exprs)
-                ws_expr = warm_start_structural_mutate(seed)
-                if ws_expr and not self.has_tried_expression(ws_expr):
-                    cand = {"name": "WarmStart_GP_Swap", "expression": ws_expr, "domain": "WARM_START_GP"}
-                else:
-                    cand = self.generate_unique_candidate()
+            elif i in (1, 2) and (elite_exprs or existing_exprs):
+                seeds = elite_exprs or existing_exprs
+                cand = None
+                for _ in range(5):
+                    seed = random.choice(seeds)
+                    ws_expr = warm_start_structural_mutate(seed)
+                    if ws_expr and not self.has_tried_expression(ws_expr) and not find_duplicate(ws_expr, []).blocked:
+                        cand = {"name": "WarmStart_GP_Swap", "expression": ws_expr, "domain": "WARM_START_GP"}
+                        break
+                if cand is None:
+                    cand = self.generate_unique_candidate(mark_tried=False)
             else:
-                cand = self.generate_unique_candidate()
-            sc = self.score_candidate_locally(cand.get("expression", ""), cand.get("domain", ""), existing_expressions=existing_exprs)
+                dom_i = bandit.select_domain() if (i % 2 == 0) else None
+                branch_i = mcts.select_branch(dom_i) if dom_i else None
+                cand = self.generate_unique_candidate(mark_tried=False, domain=dom_i, mcts_branch=branch_i)
+                if branch_i:
+                    cand["mcts_branch"] = branch_i
+
+            expr_str = str(cand.get("expression") or "").strip()
+            if expr_str in seen_in_pool:
+                continue
+            seen_in_pool.add(expr_str)
+            sc = self.score_candidate_locally(expr_str, cand.get("domain", ""), existing_expressions=existing_exprs)
+            if self.has_tried_expression(expr_str):
+                sc -= 50.0
             pool.append((sc, cand))
+
         pool.sort(key=lambda x: x[0], reverse=True)
         best_score, best_cand = pool[0]
+        self.mark_expression_tried(best_cand["expression"])
         best_cand["local_quality_score"] = best_score
         return best_cand
 

@@ -69,8 +69,8 @@ class BrainClient:
         poll_interval: float = 5.0,
         session: requests.Session | None = None,
     ) -> None:
-        self.email = email or os.getenv("BRAIN_EMAIL") or os.getenv("BRAIN_USERNAME")
-        self.password = password or os.getenv("BRAIN_PASSWORD")
+        self.email = (os.getenv("BRAIN_EMAIL") or os.getenv("BRAIN_USERNAME")) if email is None else email
+        self.password = os.getenv("BRAIN_PASSWORD") if password is None else password
         self.timeout = float(timeout)
         self.poll_interval = float(poll_interval)
         self.session = session or requests.Session()
@@ -455,6 +455,7 @@ class BrainClient:
         turnover: float,
         margin: float = 0.0,
         day_str: str | None = None,
+        self_correlation: float | None = None,
     ) -> None:
         import sqlite3
         from datetime import datetime, timezone
@@ -468,7 +469,8 @@ class BrainClient:
         t_val = max(0.005, min(1.0, float(turnover) / 100.0 if float(turnover) > 2.0 else float(turnover)))
         t_bell = math.exp(-((math.log(t_val) - math.log(0.20)) ** 2) / (2.0 * (0.65 ** 2)))
         e_bonus = 0.85 if ("opt6_" in str(expression) or "scl12_" in str(expression) or "ts_regression" in str(expression)) else 0.35
-        score = round(100.0 * (0.35 * s_score + 0.25 * f_score + 0.15 * m_score + 0.15 * t_bell + 0.10 * e_bonus) + float(sharpe) * 0.01, 4)
+        corr_bonus = max(0.0, min(1.0, (0.70 - abs(float(self_correlation))) / 0.70)) * 5.0 if self_correlation is not None else 0.0
+        score = round(100.0 * (0.35 * s_score + 0.25 * f_score + 0.15 * m_score + 0.15 * t_bell + 0.10 * e_bonus) + float(sharpe) * 0.01 + corr_bonus, 4)
         now_iso = datetime.now(timezone.utc).isoformat()
         db_p = self._quota_db()
         os.makedirs(os.path.dirname(os.path.abspath(db_p)), exist_ok=True)

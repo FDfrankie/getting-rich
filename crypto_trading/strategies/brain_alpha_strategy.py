@@ -140,6 +140,39 @@ def evaluate_fastexpr_on_ohlcv(expression: str, df: pd.DataFrame) -> pd.Series:
         s = x if isinstance(x, pd.Series) else pd.Series(x, index=df.index, dtype=float)
         return s.ewm(span=5, adjust=False).mean()
 
+    def ts_ir(x: Any, d: int = 20) -> pd.Series:
+        s = x if isinstance(x, pd.Series) else pd.Series(x, index=df.index, dtype=float)
+        sd = ts_std_dev(s, d).replace(0, np.nan)
+        return (ts_mean(s, d) / sd).replace([np.inf, -np.inf], 0.0).fillna(0.0)
+
+    def ts_skewness(x: Any, d: int = 20) -> pd.Series:
+        s = x if isinstance(x, pd.Series) else pd.Series(x, index=df.index, dtype=float)
+        return s.rolling(max(3, int(d)), min_periods=3).skew().replace([np.inf, -np.inf], 0.0).fillna(0.0)
+
+    def ts_argmax(x: Any, d: int = 20) -> pd.Series:
+        s = x if isinstance(x, pd.Series) else pd.Series(x, index=df.index, dtype=float)
+        w = max(2, int(d))
+        return s.rolling(w, min_periods=1).apply(lambda arr: float(np.argmax(arr)), raw=True).fillna(0.0)
+
+    def ts_argmin(x: Any, d: int = 20) -> pd.Series:
+        s = x if isinstance(x, pd.Series) else pd.Series(x, index=df.index, dtype=float)
+        w = max(2, int(d))
+        return s.rolling(w, min_periods=1).apply(lambda arr: float(np.argmin(arr)), raw=True).fillna(0.0)
+
+    def trade_when(cond: Any, alpha_val: Any, exit_val: Any = -1) -> pd.Series:
+        c = cond if isinstance(cond, pd.Series) else pd.Series(cond, index=df.index)
+        a = alpha_val if isinstance(alpha_val, pd.Series) else pd.Series(alpha_val, index=df.index, dtype=float)
+        mask = c.astype(bool)
+        if isinstance(exit_val, (int, float)) and exit_val <= 0:
+            return a.where(mask).ffill().fillna(0.0)
+        e = exit_val if isinstance(exit_val, pd.Series) else pd.Series(exit_val, index=df.index, dtype=float)
+        return a.where(mask, e)
+
+    def scale(x: Any, a: float = 1.0) -> pd.Series:
+        s = x if isinstance(x, pd.Series) else pd.Series(x, index=df.index, dtype=float)
+        denom = s.abs().rolling(48, min_periods=1).mean().replace(0, np.nan)
+        return ((s / denom) * float(a)).replace([np.inf, -np.inf], 0.0).fillna(0.0)
+
     env = {
         "__builtins__": {},
         "close": close,
@@ -171,6 +204,12 @@ def evaluate_fastexpr_on_ohlcv(expression: str, df: pd.DataFrame) -> pd.Series:
         "ts_decay_linear": ts_decay_linear,
         "ts_backfill": ts_backfill,
         "ts_regression": ts_regression,
+        "ts_ir": ts_ir,
+        "ts_skewness": ts_skewness,
+        "ts_argmax": ts_argmax,
+        "ts_argmin": ts_argmin,
+        "trade_when": trade_when,
+        "scale": scale,
         "signed_power": signed_power,
         "winsorize": winsorize,
         "hump": hump,
