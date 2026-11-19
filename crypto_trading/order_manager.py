@@ -232,11 +232,26 @@ class OrderManager:
                     amount=amount,
                     price=price,
                 )
+            elif hasattr(client, "place_order"):
+                res = client.place_order(
+                    symbol=symbol,
+                    side=side,
+                    amount=amount,
+                    order_type=order_type,
+                    price=price,
+                )
             else:
-                raise AttributeError("Client does not have create_order method")
+                raise AttributeError("Client does not have create_order or place_order method")
 
             if res.get("success"):
-                ex_oid = str(res.get("order", {}).get("id") or res.get("order_id") or "")
+                _nested = res.get("order") if isinstance(res.get("order"), dict) else {}
+                ex_oid = str(
+                    res.get("exchange_order_id")
+                    or _nested.get("orderId")
+                    or _nested.get("id")
+                    or res.get("order_id")
+                    or ""
+                )
                 new_state = (
                     OrderState.FILLED
                     if (res.get("order", {}).get("status") == "closed" or order_type.upper() == "MARKET")

@@ -1,6 +1,7 @@
 """Restart-safe Asia/Taipei scheduler state using SQLite claims."""
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -36,7 +37,7 @@ class BrainDailyScheduler:
         return conn
 
     def initialize(self) -> None:
-        with self.connect() as conn:
+        with contextlib.closing(self.connect()) as conn, conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS brain_daily_runs (
                     taipei_date TEXT PRIMARY KEY,
@@ -66,7 +67,7 @@ class BrainDailyScheduler:
         if current < scheduled:
             return DailyClaim(False, date_key, None, "NOT_DUE")
         run_id = uuid.uuid4().hex
-        with self.connect() as conn:
+        with contextlib.closing(self.connect()) as conn:
             try:
                 conn.execute("BEGIN IMMEDIATE")
                 conn.execute("""
@@ -90,18 +91,32 @@ class BrainDailyScheduler:
         error_code: str | None = None,
         error_message: str | None = None,
         now: datetime | None = None,
+        shadow_expression: str | None = None,
+        shadow_settings: dict | None = None,
+        shadow_metrics: dict | None = None,
     ) -> None:
         current = (now or datetime.now(TAIPEI)).astimezone(TAIPEI)
-        with self.connect() as conn:
+        with contextlib.closing(self.connect()) as conn, conn:
             conn.execute("""
                 UPDATE brain_daily_runs SET completed_at=?, status=?,
                     candidates_considered=?, candidates_submitted=?,
                     error_code=?, error_message=? WHERE run_id=?
             """, (current.isoformat(), status, considered, submitted, error_code, error_message, run_id))
+        if shadow_expression:
+            try:
+                from worldquant_brain.shadow_writeback import record_simulation_shadow
+                record_simulation_shadow(
+                    self.db_path,
+                    expression=shadow_expression,
+                    settings=shadow_settings,
+                    metrics=shadow_metrics,
+                )
+            except Exception:
+                pass
 
     def status(self, now: datetime | None = None) -> dict:
         current = (now or datetime.now(TAIPEI)).astimezone(TAIPEI)
-        with self.connect() as conn:
+        with contextlib.closing(self.connect()) as conn:
             row = conn.execute(
                 "SELECT * FROM brain_daily_runs ORDER BY taipei_date DESC LIMIT 1"
             ).fetchone()

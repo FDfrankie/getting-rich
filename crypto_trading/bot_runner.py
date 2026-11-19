@@ -58,8 +58,10 @@ class CryptoTradingBot:
         strategy: BaseStrategy | None = None,
         exchange_adapter: Any | None = None,
         exec_timeframe: str | None = None,
+        execution_mode: str | None = None,
     ):
         self.symbol = symbol
+        self.execution_mode = execution_mode
         self.is_paper = get_settings().trading_mode == TradingMode.LOCAL_PAPER
         self.loader = CryptoDataLoader(symbol=symbol)
         self.exec_timeframe = exec_timeframe or _resolve_default_timeframe()
@@ -80,7 +82,11 @@ class CryptoTradingBot:
         self.last_order_info = {}
 
     def log(self, msg: str):
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+        line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+        self.trade_logs.append(line)
+        if len(self.trade_logs) > 1000:
+            self.trade_logs = self.trade_logs[-500:]
+        print(line)
 
     def execute_order(
         self,
@@ -147,7 +153,16 @@ class CryptoTradingBot:
                     price=current_price,
                 )
                 if res.get("success", False):
-                    order_id = res.get("exchange_order_id") or res.get("order_id") or res.get("id") or f"MOCK_{int(time.time() * 1000)}"
+                    _nested_order = res.get("order") if isinstance(res.get("order"), dict) else {}
+                    order_id = (
+                        res.get("exchange_order_id")
+                        or res.get("order_id")
+                        or res.get("orderId")
+                        or res.get("id")
+                        or _nested_order.get("orderId")
+                        or _nested_order.get("id")
+                        or f"MOCK_{int(time.time() * 1000)}"
+                    )
                     fill_price = float(res.get("price", current_price))
                     self.last_order_info = res
                     self.log(

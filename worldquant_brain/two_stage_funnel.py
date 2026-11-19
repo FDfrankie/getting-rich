@@ -77,6 +77,7 @@ def _sim_hash(expression: str, settings: Mapping[str, Any]) -> str:
         "truncation": round(float(settings.get("truncation", 0.08) or 0.08), 4),
         "universe": str(settings.get("universe", "TOP3000")).upper(),
         "delay": int(settings.get("delay", 1) or 1),
+        "nanHandling": str(settings.get("nanHandling", "OFF")).upper(),
     }
     return hashlib.sha256(json.dumps(norm, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -174,7 +175,8 @@ def classify_verdict(
     if abs(sh) < eff_nm_sharpe:
         return "REJECTED", ";".join(reasons)
     min_nm_fit = 0.50 if abs(sh) >= eff_min_sharpe else 0.55
-    if fit < min_nm_fit:
+    eff_fit = abs(fit) if (sh < 0 and fit < 0) else fit
+    if eff_fit < min_nm_fit:
         return "REJECTED", ";".join(reasons)
     if not (0.005 < to < 0.95):
         return "REJECTED", ";".join(reasons)
@@ -437,6 +439,8 @@ class TwoStageAlphaFunnel:
             candidates.append((expr, dict(base_sett, decay=dec)))
         for trunc in STAGE2_TRUNCATIONS:
             candidates.append((expr, dict(base_sett, truncation=trunc)))
+        if str(base_sett.get("nanHandling", "OFF")).upper() != "ON":
+            candidates.append((expr, dict(base_sett, nanHandling="ON")))
 
         added = 0
         with self._connect() as conn:

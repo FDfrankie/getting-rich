@@ -433,6 +433,7 @@ class BinanceTestnetClient:
             return {
                 "success": True,
                 "mode": "BINANCE_TESTNET_PROCESSED",
+                "exchange_order_id": str(order_info.get("id") or order_info.get("orderId") or ""),
                 "order": order_info,
                 "zero_fee": fee_rate == 0.0,
                 "message": f"[幣安合約測試網] 成功送出 {target_symbol} {side} 委託 (費率: {'0% USDC特惠' if fee_rate == 0 else '0.05%'})",
@@ -453,6 +454,7 @@ class BinanceTestnetClient:
             return {
                 "success": True,
                 "mode": "OFFICIAL_BINANCE_TESTNET",
+                "exchange_order_id": str(order.get("orderId") or order.get("id") or ""),
                 "order": order,
                 "zero_fee": self.settlement == "USDC",
                 "message": f"[幣安官方合約測試網] 訂單成功送出 (ID: {order.get('orderId')}, 狀態: {order.get('status')})",
@@ -466,6 +468,23 @@ class BinanceTestnetClient:
                 "error": str(e),
                 "details": str(e),
             }
+
+    def place_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        order_type: str = "MARKET",
+        price: float | None = None,
+    ) -> dict[str, Any]:
+        """Alias for create_order with (symbol, side, amount, ...) signature."""
+        return self.create_order(
+            symbol=symbol,
+            side=side,
+            order_type=order_type,
+            amount=amount,
+            price=price,
+        )
 
     def close_all_positions(self) -> dict[str, Any]:
         """一鍵平掉所有未平倉部位 (平倉委託必須附帶 reduceOnly=True)"""
