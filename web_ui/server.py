@@ -692,23 +692,8 @@ class QuantAppContext:
                         return
                     self.add_log(f"ℹ️ [BRAIN 模擬成功但未送出] Alpha {alpha_id}: {sub_res.get('status')} ({sub_res.get('error')})")
 
-            # 模擬成功但尚未送出 -> 保留在清單中 (更新或存入 BRAIN_COMPLETE)
+            # 模擬成功但尚未送出 -> 先檢核自相關，過門檻才存入清單與每日候選池；超標則立即啟動去相關 Near-Miss 微調
             if not submitted_ok:
-                if vid is not None:
-                    self.alpha_vault.delete_alpha(int(vid))
-                self.alpha_vault.save_alpha(
-                    name=f"BRAIN_{alpha_id}",
-                    expression=job.expression,
-                    sharpe=float(sharpe),
-                    fitness=float(fitness),
-                    turnover=float(turnover),
-                    margin=float(margin) if margin is not None else None,
-                    category="BRAIN_COMPLETE",
-                    notes=f"alpha_id={alpha_id} (模擬完成)",
-                    status_override="BRAIN_COMPLETE",
-                    brain_alpha_id=str(alpha_id),
-                    is_check_status="PASS" if checks_passed else "FAIL",
-                )
                 corr_info = self.brain_client.fetch_self_correlation(str(alpha_id))
                 self_corr_val = corr_info.get("self_correlation")
                 corr_passed = corr_info.get("passed") is not False
@@ -725,8 +710,35 @@ class QuantAppContext:
                 except Exception:
                     pass
                 if not corr_passed:
-                    self.add_log(f"⚠️ [BRAIN 自相關超標排除] Alpha {alpha_id} (Self-Corr={self_corr_val}) 不排入每日送出候選池")
-                elif os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
+                    self.add_log(f"⚠️ [BRAIN 自相關超標] Alpha {alpha_id} (Self-Corr={self_corr_val}) 未過相關性門檻，自動啟動去相關 Near-Miss 微調並從清單移除")
+                    self._enqueue_near_miss_refinements(
+                        job,
+                        sharpe=float(sharpe),
+                        fitness=float(fitness),
+                        turnover=float(turnover),
+                        margin=margin,
+                        failed_checks=["SELF_CORRELATION_FAIL"],
+                    )
+                    if vid is not None:
+                        self.alpha_vault.delete_alpha(int(vid))
+                    return
+                if vid is not None:
+                    self.alpha_vault.delete_alpha(int(vid))
+                self.alpha_vault.save_alpha(
+                    name=f"BRAIN_{alpha_id}",
+                    expression=job.expression,
+                    sharpe=float(sharpe),
+                    fitness=float(fitness),
+                    turnover=float(turnover),
+                    margin=float(margin) if margin is not None else None,
+                    category="BRAIN_COMPLETE",
+                    notes=f"alpha_id={alpha_id} (模擬完成)",
+                    status_override="BRAIN_COMPLETE",
+                    brain_alpha_id=str(alpha_id),
+                    is_check_status="PASS" if checks_passed else "FAIL",
+                    self_correlation=float(self_corr_val) if self_corr_val is not None else None,
+                )
+                if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
                     self.brain_client.stage_candidate_for_daily_selection(
                         str(alpha_id), job.expression, float(sharpe), float(fitness), float(turnover), float(margin or 0.0),
                         self_correlation=self_corr_val,
@@ -756,6 +768,23 @@ class QuantAppContext:
         except Exception as exc:
             self.add_log(f"⚠️ [BRAIN 模擬完成處理例外] {exc}")
 
+    def _handle_daily_flush_results(self, flushed: list[dict[str, Any]] | None, *, label: str) -> int:
+        """Process daily flush responses: remove submitted or correlation-rejected alphas from AlphaVault."""
+        sub_cnt = 0
+        for sr in (flushed or []):
+            aid = str(sr.get("alpha_id") or "")
+            is_rejected = bool(sr.get("corr_rejected")) or sr.get("status") in ("SUBMISSION_CHECK_FAILED", "SUBMIT_REJECTED")
+            if sr.get("success") or is_rejected:
+                for a in self.alpha_vault.list_alphas():
+                    if a.get("brain_alpha_id") == aid or a.get("name") == f"BRAIN_{aid}":
+                        self.alpha_vault.delete_alpha(int(a["id"]))
+            if sr.get("success"):
+                sub_cnt += 1
+                self.add_log(f"🏆 [{label}] Alpha {aid} 已正式送出並移出待送清單！")
+            elif is_rejected:
+                self.add_log(f"⚠️ [BRAIN 提交檢核拒絕移除] Alpha {aid} ({sr.get('status')}: {sr.get('error')}) 已移出清單")
+        return sub_cnt
+
     def _background_alpha_miner_loop(self):
         """24/7 背景持續自動挖掘 Alpha 因子 Worker (全程遠端 BRAIN 模擬 + 每日 22:00 擇優結算送出)"""
         print("🧬 [Alpha Miner Worker] 24/7 遠端 BRAIN 因子挖掘引擎已啟動！")
@@ -767,10 +796,17 @@ class QuantAppContext:
                     cooldown_sec = float(os.getenv('BRAIN_MINING_COOLDOWN_SEC', '0') or '0')
                     last_mine_ts = getattr(self, "_last_brain_mine_ts", 0.0)
                     _fill_iters = 0
+                    from worldquant_brain.alpha_research_engines import estimate_local_structural_correlation
+                    existing_completed_exprs = [
+                        str(a.get("expression") or "")
+                        for a in self.alpha_vault.list_alphas()
+                        if a.get("expression") and str(a.get("status") or "").upper() in ("BRAIN_COMPLETE", "SUBMITTED", "IS_CHECK_PASSED")
+                    ]
                     while self.brain_job_queue.queue_depth() < target_depth and (time.time() - last_mine_ts) >= cooldown_sec and _fill_iters < target_depth:
                         _fill_iters += 1
                         cand = self.alpha_miner.think_and_select_best_candidate(batch_size=12)
                         dom = str(cand.get("domain") or "FUNDAMENTAL_CF_EV")
+                        local_corr, shares_raw = estimate_local_structural_correlation(cand["expression"], existing_completed_exprs)
                         budget_dec = self.sim_budget.admit(
                             BudgetCandidate(
                                 candidate_id=cand["expression"][:40],
@@ -778,6 +814,8 @@ class QuantAppContext:
                                 blueprint_family=dom,
                                 data_domain=dom,
                                 expected_quality=min(1.0, float(cand.get("local_quality_score", 70.0)) / 100.0),
+                                local_corr=local_corr,
+                                shares_raw_fields=shares_raw,
                             )
                         )
                         if budget_dec.admitted:
@@ -791,7 +829,7 @@ class QuantAppContext:
                                 self._last_brain_mine_ts = time.time()
                                 self._record_brain_experiment_started(job)
                                 self.alpha_miner.total_mined += 1
-                                self.add_log(f"🧠 [BRAIN 慢工精選送測] {cand['name']} (域={dom}, 本地評分={cand.get('local_quality_score')}) -> Job {job.job_id}")
+                                self.add_log(f"🧠 [BRAIN 慢工精選送測] {cand['name']} (域={dom}, 本地評分={cand.get('local_quality_score')}, 預估Corr={local_corr}) -> Job {job.job_id}")
                             else:
                                 self.sim_budget.release(cand["expression"][:40], dom)
                         else:
@@ -803,27 +841,13 @@ class QuantAppContext:
                         claim = self.brain_scheduler.claim_due_run(worker_id=f"web-{os.getpid()}", now=taipei_now)
                         if claim.acquired:
                             flushed = self.brain_client.flush_daily_candidates(max_daily_submissions=max_daily)
-                            sub_cnt = 0
-                            for sr in (flushed or []):
-                                if sr.get("success"):
-                                    sub_cnt += 1
-                                    aid = str(sr.get("alpha_id") or "")
-                                    for a in self.alpha_vault.list_alphas():
-                                        if a.get("brain_alpha_id") == aid or a.get("name") == f"BRAIN_{aid}":
-                                            self.alpha_vault.delete_alpha(int(a["id"]))
-                                    self.add_log(f"🏆 [BRAIN 每日最高分擇優送出] Alpha {aid} 已正式送出並移出待送清單！")
+                            sub_cnt = self._handle_daily_flush_results(flushed, label="BRAIN 每日最高分擇優送出")
                             self.brain_scheduler.finish(
                                 claim.run_id, status="COMPLETED", considered=len(flushed or []), submitted=sub_cnt, now=taipei_now
                             )
                         elif claim.reason == "ALREADY_CLAIMED" and self.brain_client.get_daily_submission_count() < max_daily:
                             flushed = self.brain_client.flush_daily_candidates(max_daily_submissions=max_daily)
-                            for sr in (flushed or []):
-                                if sr.get("success"):
-                                    aid = str(sr.get("alpha_id") or "")
-                                    for a in self.alpha_vault.list_alphas():
-                                        if a.get("brain_alpha_id") == aid or a.get("name") == f"BRAIN_{aid}":
-                                            self.alpha_vault.delete_alpha(int(a["id"]))
-                                    self.add_log(f"🏆 [BRAIN 當日配額補齊送出] Alpha {aid} 已正式送出並移出待送清單！")
+                            self._handle_daily_flush_results(flushed, label="BRAIN 當日配額補齊送出")
             except Exception as exc:
                 self.add_log(f"⚠️ [Alpha Miner 迴圈例外] {exc}")
             time.sleep(1.5)
@@ -1128,9 +1152,9 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             try:
                 obs = build_platform_observability_report(
                     brain_metrics={
-                        "queue_depth": len(getattr(APP_STATE.brain_queue, "_pending_queue", [])),
-                        "running_workers": getattr(APP_STATE.brain_queue, "num_workers", 1),
-                        "candidate_inventory": len(APP_STATE.alpha_vault.get_best_alphas(limit=500)),
+                        "queue_depth": APP_STATE.brain_job_queue.queue_depth(),
+                        "running_workers": getattr(APP_STATE.brain_job_queue, "num_workers", 1),
+                        "candidate_inventory": len(APP_STATE.alpha_vault.list_alphas()),
                     },
                     taiwan_metrics={
                         "universe_size": len(APP_STATE.tw_universe.search(limit=500)),
@@ -1782,7 +1806,7 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
         # WorldQuant BRAIN: 提交與儲存 Alpha
         # POST /api/brain/challenge_score：手動觸發從 BRAIN Challenge 同步或匯入 JSON 快照
         if path == "/api/brain/challenge_score":
-            payload_in = data.get("payload")
+            payload_in = post_data.get("payload")
             if isinstance(payload_in, dict) and payload_in:
                 snap = APP_STATE.brain_score_tracker.record(
                     parse_score_payload(payload_in, source="MANUAL_CHALLENGE_IMPORT")

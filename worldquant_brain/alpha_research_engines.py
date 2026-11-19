@@ -67,6 +67,58 @@ def compute_dico_similarity_penalty(
     return round(6.0 + excess * (max_penalty - 6.0), 2)
 
 
+_BOILERPLATE_TOKENS: frozenset[str] = frozenset({
+    "hump", "group_neutralize", "group_rank", "winsorize", "rank", "scale",
+    "ts_zscore", "ts_delta", "ts_mean", "ts_std_dev", "ts_regression",
+    "ts_decay_linear", "ts_backfill", "ts_ir", "ts_corr", "ts_correlation",
+    "ts_min", "ts_max", "ts_av_diff", "ts_skewness", "ts_delay", "ts_rank",
+    "signed_power", "trade_when", "abs", "log", "sqrt", "sign",
+    "subindustry", "industry", "sector", "market", "std", "rettype", "lag", "dense",
+})
+
+
+def estimate_local_structural_correlation(
+    candidate_expr: str,
+    existing_expressions: Sequence[str],
+) -> tuple[float, bool]:
+    """Estimate pre-simulation structural correlation and raw field sharing against existing alphas."""
+    cand_tokens = tokenize_expression(candidate_expr)
+    if not cand_tokens or not existing_expressions:
+        return 0.15, False
+    cand_fields = cand_tokens - _BOILERPLATE_TOKENS
+    best_est = 0.0
+    best_fld_sim = 0.0
+    for ex in existing_expressions:
+        ex_toks = tokenize_expression(ex)
+        if not ex_toks:
+            continue
+        inter_t = len(cand_tokens & ex_toks)
+        union_t = len(cand_tokens | ex_toks)
+        tok_sim = (inter_t / float(union_t)) if union_t > 0 else 0.0
+
+        ex_fields = ex_toks - _BOILERPLATE_TOKENS
+        if cand_fields or ex_fields:
+            union_f = len(cand_fields | ex_fields)
+            fld_sim = (len(cand_fields & ex_fields) / float(union_f)) if union_f > 0 else 0.0
+        else:
+            fld_sim = 0.0
+
+        pair_est = 0.55 * fld_sim + 0.45 * tok_sim * 0.85
+        if tok_sim >= 0.82 and fld_sim >= 0.80:
+            pair_est = max(pair_est, 0.58)
+        else:
+            pair_est = min(0.42, pair_est)
+
+        if pair_est > best_est:
+            best_est = pair_est
+        if fld_sim > best_fld_sim:
+            best_fld_sim = fld_sim
+
+    max_corr = round(max(0.15, min(0.85, best_est)), 4)
+    shares_raw = bool(best_fld_sim >= 0.75 and len(cand_fields) > 0)
+    return max_corr, shares_raw
+
+
 def warm_start_structural_mutate(
     seed_expr: str,
     *,
@@ -100,11 +152,14 @@ def warm_start_structural_mutate(
         mutated = re.sub(rf"\b{re.escape(src)}\b", random.choice(field_swaps[src]), mutated, count=1)
         swapped = True
         break
-    # Perturb window constants safely across extended horizons
-    nums = re.findall(r"\b(3|5|8|10|15|20|30|40|60|90|120|180|240)\b", mutated)
+    # Perturb window constants safely across extended & prime horizons to break crowd correlation
+    nums = re.findall(r"\b(3|5|7|8|10|11|13|15|17|19|20|23|29|30|31|37|40|43|53|60|63|73|89|90|107|120|127|157|180|240)\b", mutated)
     if nums:
         old_w = random.choice(nums)
-        choices = [w for w in ("5", "8", "10", "15", "20", "30", "40", "60", "90", "120", "180") if w != old_w]
+        choices = [
+            w for w in ("5", "7", "8", "10", "11", "13", "15", "17", "19", "20", "23", "29", "31", "37", "40", "43", "53", "60", "63", "73", "89", "107", "120", "127", "157")
+            if w != old_w
+        ]
         if choices:
             mutated = re.sub(rf"\b{old_w}\b", random.choice(choices), mutated, count=1)
             swapped = True
@@ -222,7 +277,13 @@ class DomainBanditAllocator:
 class FormulaMCTSSearch:
     """Lightweight UCT Monte Carlo Tree Search over (domain, transform, neutralization) nodes."""
 
-    TRANSFORMS: tuple[str, ...] = ("WINSORIZE_HUMP", "TS_REGRESSION_RESID", "ZSCORE_RANK")
+    TRANSFORMS: tuple[str, ...] = (
+        "WINSORIZE_HUMP",
+        "TS_REGRESSION_RESID",
+        "ZSCORE_RANK",
+        "SUB_UNIVERSE_LIQ_BOOST",
+        "NONLINEAR_SIGNED_POWER",
+    )
     NEUTRALIZATIONS: tuple[str, ...] = ("subindustry", "industry")
 
     def __init__(self, exploration_weight: float = 1.1) -> None:

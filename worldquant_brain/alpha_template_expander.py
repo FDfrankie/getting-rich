@@ -10,15 +10,15 @@ def _grp() -> str:
 
 
 def _w_short() -> int:
-    return random.choice([3, 5, 8, 10, 15, 20])
+    return random.choice([3, 5, 7, 8, 10, 11, 13, 15, 17, 19, 20])
 
 
 def _w_med() -> int:
-    return random.choice([20, 30, 40, 60, 90, 120])
+    return random.choice([20, 23, 29, 30, 37, 40, 43, 53, 60, 63, 73, 89, 90, 107, 120])
 
 
 def _w_long() -> int:
-    return random.choice([60, 90, 120, 180, 240])
+    return random.choice([60, 67, 89, 90, 113, 120, 149, 180, 199, 240])
 
 
 def _hump() -> float:
@@ -39,6 +39,10 @@ def _wrap_hygiene(
         inner = f"ts_regression(rank({inner}), returns, {_w_med()}, rettype=0)"
     elif transform == "ZSCORE_RANK" and "ts_zscore" not in inner:
         inner = f"ts_zscore({inner}, {_w_med()})"
+    elif transform == "SUB_UNIVERSE_LIQ_BOOST":
+        inner = f"(0.5 + 0.5 * rank(ts_mean(volume * close, 21))) * rank({inner})"
+    elif transform == "NONLINEAR_SIGNED_POWER" and "signed_power" not in inner:
+        inner = f"signed_power(ts_zscore({inner}, {_w_short()}), 0.75)"
     return f"hump(group_neutralize(winsorize(rank({inner}), std={std_v}), {g}), hump={hv})"
 
 

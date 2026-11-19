@@ -28,6 +28,21 @@ from worldquant_brain.alpha_template_expander import generate_diverse_domain_can
 
 
 
+def _shift_to_prime_windows(expr: str) -> str:
+    """Shift standard round lookback windows to non-consensus prime windows to reduce self-correlation."""
+    import re
+    prime_map = {
+        "3": "5", "5": "7", "10": "13", "15": "17", "20": "23",
+        "30": "31", "40": "43", "60": "67", "90": "89", "120": "127",
+        "180": "179", "240": "239",
+    }
+    return re.sub(
+        r"\b(3|5|10|15|20|30|40|60|90|120|180|240)\b",
+        lambda m: prime_map.get(m.group(1), m.group(1)),
+        expr or "",
+    )
+
+
 def extract_expression_skeleton(expression: str) -> str:
     """Normalize numbers and strip outer ts_decay_linear/rank/group_neutralize wrappers to detect structural clones."""
     import re
@@ -95,7 +110,7 @@ class ContinuousAlphaMiner:
             "delay": 1,
             "decay": random.choice(decays),
             "neutralization": random.choice(["SUBINDUSTRY", "INDUSTRY"]),
-            "truncation": random.choice([0.05, 0.06, 0.08]),
+            "truncation": random.choice([0.04, 0.05, 0.06]),
             "pasteurization": "ON",
             "unitHandling": "VERIFY",
             "nanHandling": "OFF",
@@ -566,8 +581,12 @@ class ContinuousAlphaMiner:
             abs(float(sharpe)) >= 0.85
             or (float(fitness) >= 0.65 and float(sharpe) >= 0.70)
             or (
-                abs(float(sharpe)) >= 0.80
-                and bool(failed & {"LOW_SHARPE", "LOW_FITNESS", "HIGH_TURNOVER", "LOW_SUB_UNIVERSE_SHARPE", "LOW_MARGIN"})
+                abs(float(sharpe)) >= 0.75
+                and any(
+                    k in fc
+                    for fc in failed
+                    for k in ("LOW_SHARPE", "LOW_FITNESS", "HIGH_TURNOVER", "SUB_UNIVERSE", "ROBUST_UNIVERSE", "2Y_SHARPE", "LOW_MARGIN", "CORR", "WEIGHT")
+                )
             )
         )
         if not near_miss:
@@ -614,30 +633,63 @@ class ContinuousAlphaMiner:
             "reason": f"neutralization->{alt_neut}",
         })
 
-        # 3b. Correlation failure -> orthogonalize residual against market/close or shift to fundamental/analyst domain
+        # 3b. Correlation failure -> orthogonalize residual against returns + prime-window nonlinear reshaping
         if any("CORRELATION" in fc or "CORR" in fc for fc in failed):
+            s_corr1 = dict(base_settings)
+            s_corr1["truncation"] = 0.05
+            s_corr2 = dict(base_settings)
+            s_corr2["neutralization"] = alt_neut
+            prime_expr = _shift_to_prime_windows(expr)
             candidates.insert(0, {
                 "name": "NearMiss_OrthogonalResid",
-                "expression": f"group_neutralize(ts_regression({expr}, close, 60, rettype=0), subindustry)",
-                "settings": dict(base_settings),
+                "expression": f"hump(group_neutralize(winsorize(rank(ts_regression({expr}, returns, 43, rettype=0)), std=3.5), subindustry), hump=0.01)",
+                "settings": s_corr1,
                 "reason": "SELF_CORRELATION_ORTHOGONALIZATION",
             })
             candidates.insert(1, {
+                "name": "NearMiss_PrimeNonlinearOrthog",
+                "expression": f"hump(group_neutralize(winsorize(signed_power(ts_zscore({prime_expr}, 19), 0.75), std=3.5), {alt_neut.lower()}), hump=0.008)",
+                "settings": s_corr2,
+                "reason": "PRIME_WINDOW_NONLINEAR_ORTHOGONAL",
+            })
+            candidates.insert(2, {
                 "name": "NearMiss_VolScaleOrthog",
-                "expression": f"hump(group_rank(ts_regression({expr}, returns, 40, rettype=0), industry), hump=0.01)",
+                "expression": f"hump(group_rank(ts_regression({expr}, returns, 37, rettype=0), industry), hump=0.01)",
                 "settings": dict(base_settings),
                 "reason": "SELF_CORRELATION_RESIDUAL_RANK",
             })
 
-        # 4. Sub-Universe failure -> liquidity-weighted decay (official BRAIN formula)
-        if "LOW_SUB_UNIVERSE_SHARPE" in failed or "SUB_UNIVERSE" in " ".join(failed):
+        # 4. Sub-Universe / Robust-Universe failure -> liquidity-core boost + liquidity-weighted decay
+        if any("SUB_UNIVERSE" in fc or "ROBUST_UNIVERSE" in fc for fc in failed):
             s4 = dict(base_settings)
             s4["universe"] = "TOP3000"
-            candidates.append({
+            s4["truncation"] = 0.04
+            s4["decay"] = max(4, base_decay)
+            candidates.insert(0, {
+                "name": "NearMiss_SubUniverseLiqBoost",
+                "expression": f"hump(group_neutralize(winsorize((0.5 + 0.5 * rank(ts_mean(volume * close, 21))) * rank({expr}), std=3.5), subindustry), hump=0.01)",
+                "settings": s4,
+                "reason": "sub_universe_liquidity_boost",
+            })
+            s4b = dict(s4)
+            s4b["truncation"] = 0.05
+            candidates.insert(1, {
                 "name": "NearMiss_SubUniverseLiqDecay",
                 "expression": f"ts_decay_linear({expr}, 5) * rank(volume * close) + ts_decay_linear({expr}, 10) * (1 - rank(volume * close))",
-                "settings": s4,
+                "settings": s4b,
                 "reason": "sub_universe_liquidity_decay",
+            })
+
+        # 4b. 2Y Sharpe / Weight concentration failure -> multi-horizon blend & tighter truncation
+        if any("2Y_SHARPE" in fc or "WEIGHT" in fc for fc in failed):
+            s_mh = dict(base_settings)
+            s_mh["truncation"] = 0.04
+            s_mh["decay"] = max(6, base_decay)
+            candidates.insert(0, {
+                "name": "NearMiss_MultiHorizon2Y_WeightSafe",
+                "expression": f"hump(group_neutralize(winsorize(0.6 * rank({expr}) + 0.4 * rank(ts_mean({expr}, 13)), std=3), subindustry), hump=0.01)",
+                "settings": s_mh,
+                "reason": "multi_horizon_2y_weight_control",
             })
 
         # 5. Weight concentration / hump turnover control + group neutralization fallback

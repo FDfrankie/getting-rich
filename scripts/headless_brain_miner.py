@@ -102,6 +102,32 @@ def run_headless_miner(
                 return
 
         if not submitted_ok:
+            corr_info = client.fetch_self_correlation(str(alpha_id))
+            self_corr_val = corr_info.get("self_correlation")
+            if corr_info.get("passed") is False:
+                expr = str(getattr(job, "expression", "") or "").strip()
+                print(f"[CORR_PRECHECK_FAIL] Alpha {alpha_id} (Self-Corr={self_corr_val}), enqueuing orthogonal refinements")
+                if expr and expr not in refined_keys and hasattr(miner, "generate_near_miss_refinements"):
+                    refined_keys.add(expr)
+                    variants = miner.generate_near_miss_refinements(
+                        expr,
+                        getattr(job, "settings", None),
+                        sharpe=float(sharpe),
+                        fitness=float(fitness),
+                        turnover=float(turnover),
+                        margin=margin,
+                        failed_checks=["SELF_CORRELATION_FAIL"],
+                        max_variants=3,
+                    )
+                    for v in variants:
+                        refined_keys.add(v["expression"])
+                        _, is_new = queue.create_job(
+                            v["expression"], settings=v["settings"], priority=35, source="NEAR_MISS_REFINEMENT"
+                        )
+                        if is_new:
+                            stats["refined"] += 1
+                return
+
             vault.save_alpha(
                 name=f"BRAIN_{alpha_id}",
                 expression=job.expression,
@@ -112,10 +138,13 @@ def run_headless_miner(
                 category="BRAIN_COMPLETE",
                 notes=f"alpha_id={alpha_id} (headless miner)",
                 status_override="BRAIN_COMPLETE",
+                brain_alpha_id=str(alpha_id),
+                self_correlation=float(self_corr_val) if self_corr_val is not None else None,
             )
             if auto_submit:
                 client.stage_candidate_for_daily_selection(
-                    str(alpha_id), job.expression, float(sharpe), float(fitness), float(turnover), float(margin or 0.0)
+                    str(alpha_id), job.expression, float(sharpe), float(fitness), float(turnover), float(margin or 0.0),
+                    self_correlation=self_corr_val,
                 )
             print(f"[SAVED] Alpha {alpha_id} Sharpe={sharpe} Fitness={fitness}")
 
@@ -135,8 +164,8 @@ def run_headless_miner(
     try:
         while time.monotonic() < deadline:
             while queue.queue_depth() < target_queue_depth and time.monotonic() < deadline:
-                cand = miner.generate_unique_candidate()
-                sim_settings = miner.generate_candidate_settings()
+                cand = miner.think_and_select_best_candidate(batch_size=12)
+                sim_settings = miner.generate_candidate_settings(domain=str(cand.get("domain") or ""))
                 _, is_new = queue.create_job(cand["expression"], settings=sim_settings)
                 if is_new:
                     stats["mined"] += 1

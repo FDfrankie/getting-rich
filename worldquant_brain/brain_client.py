@@ -552,9 +552,10 @@ class BrainClient:
                 submitted_count += 1
             elif status_val == "DAILY_QUOTA_REACHED":
                 break
-            elif status_val == "SUBMISSION_CHECK_FAILED":
+            elif status_val in ("SUBMISSION_CHECK_FAILED", "SUBMIT_REJECTED"):
                 err_txt = str(res.get("error") or "").upper()
-                new_status = "FAILED_CORR" if ("CORRELATION" in err_txt or "CORR" in err_txt) else "FAILED_CHECKS"
+                is_corr = bool(res.get("corr_rejected")) or ("CORRELATION" in err_txt) or ("CORR" in err_txt)
+                new_status = "FAILED_CORR" if is_corr else "FAILED_CHECKS"
                 try:
                     c2 = sqlite3.connect(db_p, timeout=10.0)
                     c2.execute("UPDATE brain_candidate_pool SET status = ? WHERE alpha_id = ?", (new_status, aid))
