@@ -220,6 +220,9 @@ class TestMultiSimAndTwoStageFunnel(unittest.TestCase):
         # Non-rescuable LOW_UNIVERSE -> REJECTED
         v4, _ = classify_verdict({"sharpe": 1.30, "fitness": 1.05, "turnover": 0.25, "checks_passed": False, "failed_checks": ["LOW_UNIVERSE"]})
         self.assertEqual(v4, "REJECTED")
+        # Negative Sharpe + negative Fitness (BRAIN convention) must be NEAR_MISS for sign-flip, NOT REJECTED
+        v5, _ = classify_verdict({"sharpe": -1.18, "fitness": -0.82, "turnover": 0.22, "checks_passed": False, "failed_checks": ["LOW_SHARPE", "LOW_FITNESS"]})
+        self.assertEqual(v5, "NEAR_MISS")
 
 
 
@@ -253,6 +256,39 @@ class TestMultiSimAndTwoStageFunnel(unittest.TestCase):
             )
             b2 = funnel.next_stage2_batch(batch_size=5)
             self.assertTrue(any("hump(" in item["expression"] for item in b2))
+
+
+
+    def test_pareto_reward_forbidden_patterns_and_nan_handling(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            funnel = TwoStageAlphaFunnel(Path(td) / "pareto.db")
+            # Record 5 straight REJECTED results on (model16, rank_bf) -> becomes forbidden pattern
+            bad_batch = [
+                {
+                    "expression": f"rank(ts_backfill(f_{i}, 20))",
+                    "dataset_id": "model16",
+                    "probe": "rank_bf",
+                    "stage": "STAGE1",
+                    "sharpe": 0.2,
+                    "fitness": 0.1,
+                    "turnover": 0.80,
+                    "checks_passed": False,
+                    "failed_checks": ["LOW_SHARPE"],
+                }
+                for i in range(5)
+            ]
+            funnel.ingest_results(bad_batch)
+            with funnel._connect() as conn:
+                ranked = funnel._ucb_rank_arms(conn, ["model16"], [("rank_bf", "rank({f})"), ("vol_bucket_neut", "rank({f})")])
+                self.assertEqual(ranked[0][1], "vol_bucket_neut")
+                self.assertEqual(ranked[-1][1], "rank_bf")
+            # Stage-2 must include nanHandling="ON" variant
+            funnel._enqueue_immediate_refinement(
+                {"expression": "rank(f_good)", "sharpe": 1.10, "fitness": 0.80, "turnover": 0.20, "dataset_id": "analyst4"},
+                "LOW_SHARPE",
+            )
+            s2_all = funnel.next_stage2_batch(batch_size=30)
+            self.assertTrue(any(item["settings"].get("nanHandling") == "ON" for item in s2_all))
 
     def test_403_single_sim_fallback_no_reauth(self) -> None:
         class _403Session:
