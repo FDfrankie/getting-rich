@@ -100,6 +100,12 @@ class QuantAppContext:
         self.manual_brain_queue = ManualPriorityQueue(self.alpha_vault.db_path)
         self.brain_score_tracker = ScoreTracker(self.alpha_vault.db_path)
         self.research_factory = AlphaResearchFactoryService(self.alpha_vault.db_path)
+        try:
+            from worldquant_brain.evidence_repository import EvidenceRepository
+            self.evidence_repo = EvidenceRepository(self.alpha_vault.db_path)
+            self.evidence_repo.migrate()
+        except Exception:
+            self.evidence_repo = None
         self.audit_log = AuditLog(self.alpha_vault.db_path)
         self.brain_client = BrainClient()
         self.brain_job_queue = BrainJobQueue(self.brain_client, on_complete_callback=self._on_brain_job_completed, on_fail_callback=self._on_brain_job_failed, db_path=self.alpha_vault.db_path)
@@ -602,6 +608,45 @@ class QuantAppContext:
                 )
             except Exception:
                 pass
+            if getattr(self, "evidence_repo", None) is not None:
+                try:
+                    import hashlib as _hl
+                    from worldquant_brain.evidence_repository import ExperimentContext, OfficialMetrics, canonical_json
+                    _dom = str(getattr(job, "domain", "DEFAULT"))
+                    _expr_h = _hl.sha256((job.expression or "").strip().encode("utf-8")).hexdigest()
+                    _set = dict(job.settings or {})
+                    _set_h = _hl.sha256(canonical_json(_set).encode("utf-8")).hexdigest()
+                    self.evidence_repo.create_experiment(ExperimentContext(
+                        experiment_id=job.job_id,
+                        candidate_id=job.simulation_key,
+                        blueprint_id=_dom,
+                        blueprint_hash=_hl.sha256(_dom.encode("utf-8")).hexdigest(),
+                        hypothesis_family=_dom,
+                        data_domain=_dom,
+                        expression=job.expression,
+                        expression_hash=_expr_h,
+                        normalized_expression_hash=_expr_h,
+                        structural_expression_hash=_expr_h,
+                        settings=_set,
+                        settings_hash=_set_h,
+                        region=str(_set.get("region", "USA")),
+                        universe=str(_set.get("universe", "TOP3000")),
+                        delay=int(_set.get("delay", 1) or 1),
+                        experiment_type=str(getattr(job, "source", "AUTO_MINING")),
+                        alpha_id=str(alpha_id),
+                    ))
+                    self.evidence_repo.record_metrics(job.job_id, OfficialMetrics(
+                        metrics_source="WORLDQUANT_BRAIN",
+                        official_simulation_id=str(alpha_id),
+                        sharpe=float(sharpe) if sharpe is not None else None,
+                        fitness=float(fitness) if fitness is not None else None,
+                        returns=None,
+                        turnover=float(turnover) if turnover is not None else None,
+                        margin=float(margin) if margin is not None else None,
+                        submit_ready=bool(checks_passed),
+                    ))
+                except Exception:
+                    pass
             self.alpha_miner.total_accepted += 1
             # Only direct manual auto_submit jobs submit immediately; background mined alphas enter the daily pool so only the highest-profitability top 2 are submitted per day.
             should_try_submit = bool(getattr(job, "auto_submit", False)) and not bool(getattr(job, "simulation_only", True))

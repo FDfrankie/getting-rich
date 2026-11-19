@@ -1,0 +1,13 @@
+PRAGMA foreign_keys = OFF;
+DROP TABLE IF EXISTS alpha_correlation_checks;
+DROP TABLE IF EXISTS research_experiment_denylist;
+DROP TABLE IF EXISTS research_policy_decisions;
+DROP TABLE IF EXISTS research_lessons;
+DROP TABLE IF EXISTS evidence_consumption_log;
+DROP TABLE IF EXISTS research_fix_evidence;
+DROP TABLE IF EXISTS alpha_experiment_fixes;
+DROP TABLE IF EXISTS alpha_experiment_failures;
+DROP TABLE IF EXISTS alpha_experiment_metrics;
+DROP TABLE IF EXISTS alpha_research_experiments;
+DROP TABLE IF EXISTS research_memory_versions;
+PRAGMA foreign_keys = ON;

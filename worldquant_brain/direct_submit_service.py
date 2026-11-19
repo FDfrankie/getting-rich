@@ -27,8 +27,7 @@ class DirectSubmitService:
         if alpha_record.get("submitted_at") or alpha_record.get("status") == "SUBMITTED":
             return {"success": False, "error": "ALREADY_SUBMITTED_IDEMPOTENT", "brain_alpha_id": brain_alpha_id}
 
-        has_eval_fields = any(k in alpha_record for k in ("sharpe", "self_correlation", "metrics_source", "official_simulation_id"))
-        if enforce_gate and has_eval_fields:
+        if enforce_gate:
             gate = evaluate_pre_submission(alpha_record)
             if gate.verdict != GateVerdict.PASS:
                 return {

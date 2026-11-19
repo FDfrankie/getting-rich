@@ -178,6 +178,9 @@ class BrainJobQueue:
         self._pending_queue: list[str] = []
         self._in_flight_ids: set[str] = set()
         self._running: bool = False
+        self._consecutive_429: int = 0
+        self._rate_limit_until: float = 0.0
+        self._effective_workers: int = self.num_workers
         self._init_persistence()
         self._restore_jobs()
         if autostart:
@@ -220,6 +223,17 @@ class BrainJobQueue:
                         conn.execute(f"ALTER TABLE brain_jobs ADD COLUMN {declaration}")
                 conn.execute("UPDATE brain_jobs SET queued_at=COALESCE(queued_at, created_at)")
                 conn.execute("CREATE INDEX IF NOT EXISTS ix_brain_jobs_priority ON brain_jobs(status, priority DESC, queued_at ASC)")
+                conn.execute(
+                    """CREATE TABLE IF NOT EXISTS brain_simulation_cache (
+                        simulation_key TEXT PRIMARY KEY,
+                        expression TEXT NOT NULL,
+                        alpha_id TEXT,
+                        simulation_location TEXT,
+                        metrics_json TEXT,
+                        status TEXT NOT NULL,
+                        cached_at TEXT NOT NULL
+                    )"""
+                )
         finally:
             conn.close()
 
@@ -262,10 +276,7 @@ class BrainJobQueue:
                 ),
             )
 
-        try:
-            execute_with_sqlite_retry(self.db_path, _op)
-        except sqlite3.OperationalError as e:
-            print(f'⚠️ [BrainJobQueue] _persist_job SQLite retry exhausted ({job.job_id}): {e}')
+        execute_with_sqlite_retry(self.db_path, _op)
 
     def _restore_jobs(self) -> None:
         if not self.db_path or self.db_path == ":memory:" or not os.path.exists(self.db_path):
@@ -352,6 +363,27 @@ class BrainJobQueue:
                 job = self._jobs[existing_id]
                 return job, False
 
+        cached = self._lookup_simulation_cache(key)
+        if cached is not None:
+            with self._lock:
+                job_id = f"cached_{key[:16]}_{int(time.time())}"
+                job = BrainSimulationJob(
+                    job_id=job_id,
+                    simulation_key=key,
+                    expression=expression,
+                    settings=dict(settings or {}),
+                )
+                job.status = BrainJobStatus.COMPLETED
+                job.alpha_id = cached.get("alpha_id")
+                job.simulation_location = cached.get("simulation_location")
+                job.metrics = cached.get("metrics") or {}
+                job.completed_at = cached.get("cached_at")
+                self._jobs[job_id] = job
+                self._key_to_job_id[key] = job_id
+                return job, False
+
+        with self._lock:
+
             job_id = f"job_{key[:16]}_{int(time.time())}"
             job = BrainSimulationJob(
                 job_id=job_id,
@@ -428,6 +460,74 @@ class BrainJobQueue:
             else:
                 time.sleep(0.02)
 
+    def _lookup_simulation_cache(self, simulation_key: str) -> dict[str, Any] | None:
+        if not self.db_path or self.db_path == ":memory:" or not os.path.exists(self.db_path):
+            return None
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+            try:
+                row = conn.execute(
+                    "SELECT alpha_id, simulation_location, metrics_json, status, cached_at FROM brain_simulation_cache WHERE simulation_key = ?",
+                    (simulation_key,),
+                ).fetchone()
+                if row is None:
+                    return None
+                return {
+                    "alpha_id": row["alpha_id"],
+                    "simulation_location": row["simulation_location"],
+                    "metrics": json.loads(row["metrics_json"] or "{}"),
+                    "status": row["status"],
+                    "cached_at": row["cached_at"],
+                }
+            finally:
+                conn.close()
+        except Exception:
+            return None
+
+    def _store_simulation_cache(self, job: BrainSimulationJob) -> None:
+        if not self.db_path or self.db_path == ":memory:":
+            return
+        try:
+            from worldquant_brain.sqlite_resilience import execute_with_sqlite_retry
+            now = datetime.now(timezone.utc).isoformat()
+            def _op(conn: sqlite3.Connection) -> None:
+                conn.execute(
+                    """INSERT OR REPLACE INTO brain_simulation_cache
+                    (simulation_key, expression, alpha_id, simulation_location, metrics_json, status, cached_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        job.simulation_key,
+                        job.expression,
+                        job.alpha_id,
+                        job.simulation_location,
+                        json.dumps(job.metrics or {}, ensure_ascii=False),
+                        job.status.value if isinstance(job.status, BrainJobStatus) else str(job.status),
+                        now,
+                    ),
+                )
+            execute_with_sqlite_retry(self.db_path, _op)
+        except Exception:
+            pass
+
+    def register_rate_limit_429(self, retry_after: float | None = None, *, sleep_now: bool = False) -> float:
+        with self._lock:
+            self._consecutive_429 += 1
+            backoff = min(240.0, 60.0 * (2 ** (self._consecutive_429 - 1)))
+            if retry_after is not None:
+                backoff = max(backoff, float(retry_after))
+            self._rate_limit_until = max(self._rate_limit_until, time.monotonic() + backoff)
+            self._effective_workers = 1
+        if sleep_now:
+            time.sleep(backoff)
+        return backoff
+
+    def clear_rate_limit_429(self) -> None:
+        with self._lock:
+            self._consecutive_429 = 0
+            self._rate_limit_until = 0.0
+            self._effective_workers = self.num_workers
+
     def _execute_job(self, job: BrainSimulationJob) -> None:
         with self._lock:
             job.status = BrainJobStatus.RUNNING
@@ -491,8 +591,10 @@ class BrainJobQueue:
                     timeout=self.brain_client.timeout,
                 )
                 if resp.status_code == 429:
-                    retry_after = float(resp.headers.get("Retry-After") or (10 * (_attempt + 1)))
-                    time.sleep(min(retry_after, 30.0))
+                    raw_ra = resp.headers.get("Retry-After")
+                    ra = float(raw_ra) if raw_ra else None
+                    backoff_s = self.register_rate_limit_429(ra, sleep_now=False)
+                    time.sleep(min(backoff_s, 240.0))
                     continue
                 break
             if resp.status_code in (401, 403):
@@ -592,6 +694,9 @@ class BrainJobQueue:
                         if real_alpha_id:
                             job.alpha_id = str(real_alpha_id)
                         job.status = BrainJobStatus.COMPLETED if has_metrics else BrainJobStatus.FAILED
+                    if has_metrics:
+                        self.clear_rate_limit_429()
+                        self._store_simulation_cache(job)
                         job.metrics = {
                             "sharpe": sharpe,
                             "fitness": fitness,

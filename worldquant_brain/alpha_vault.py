@@ -16,7 +16,11 @@ class AlphaVault:
     4. 批量匯入、匯出 (JSON / CSV) 與查詢統計
     """
 
-    DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "alpha_vault.db")
+    try:
+        from data_persistence.state_paths import resolve_sqlite_path as _resolve_sqlite_path
+        DEFAULT_DB_PATH = _resolve_sqlite_path("BRAIN_DB_PATH", "alpha_vault.db", os.path.join(os.path.dirname(__file__), "alpha_vault.db"))
+    except Exception:
+        DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "alpha_vault.db")
     DEFAULT_EXPORT_JSON = os.path.join(os.path.dirname(__file__), "verified_alphas.json")
 
     def __init__(self, db_path: str | None = None):

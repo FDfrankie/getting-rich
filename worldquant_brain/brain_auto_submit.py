@@ -1,5 +1,5 @@
 """
-WorldQuant BRAIN Auto-Submit Engine with Safety Gates, Quota, Cooldown, and Idempotency.
+WorldQuant BRAIN Auto-Submit Engine with Safety Gates, PreSubmissionGate, Quota, Cooldown, and Idempotency.
 Complies with docs/ROUND4_BRAIN_TAIWAN_GOVERNANCE_COMPACT.md (P9).
 """
 
@@ -12,6 +12,8 @@ import time
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+from worldquant_brain.pre_submission_gate import GateVerdict, evaluate_pre_submission
 
 logger = logging.getLogger("BrainAutoSubmit")
 
@@ -37,12 +39,6 @@ class AlphaStatus(str, Enum):
 
 
 def migrate_alpha_status(alpha_record: Dict[str, Any]) -> str:
-    """
-    Migrate legacy alpha statuses per P9:
-    - Missing alpha_id or Location with VERIFIED status -> LEGACY_UNVERIFIED
-    - Local BTC proxy or local backtest -> LOCAL_SCREENED
-    - Seed/sample alphas -> DEMO_SAMPLE
-    """
     current_status = alpha_record.get("status", "")
     is_seed = alpha_record.get("is_seed", False) or alpha_record.get("source") == "seed"
     if is_seed:
@@ -68,9 +64,9 @@ class BrainAutoSubmitGate:
         self,
         min_sharpe: float = 1.25,
         min_fitness: float = 1.0,
-        min_margin: float = 0.0010,  # > 10 bps
-        min_turnover: float = 0.01,  # 1%
-        max_turnover: float = 0.70,  # 70%
+        min_margin: float = 0.0010,
+        min_turnover: float = 0.01,
+        max_turnover: float = 0.70,
         max_self_correlation: float = 0.70,
         max_sub_universe_sharpe_decay: float = 0.50,
         daily_quota: int = 10,
@@ -100,7 +96,6 @@ class BrainAutoSubmitGate:
         return os.getenv(SUBMIT_ACK_ENV, "").strip() == REQUIRED_SUBMIT_ACK
 
     def evaluate_alpha(self, metrics: Dict[str, Any], correlation: float = 0.0) -> tuple[bool, str]:
-        """Strict validation against WorldQuant BRAIN standards."""
         sharpe = metrics.get("sharpe")
         fitness = metrics.get("fitness")
         turnover = metrics.get("turnover")
@@ -122,12 +117,23 @@ class BrainAutoSubmitGate:
 
         return True, "PASSED_HARD_GATE"
 
-    def can_submit(self, submission_key: str, metrics: Dict[str, Any], correlation: float = 0.0) -> tuple[bool, str]:
+    def can_submit(
+        self,
+        submission_key: str,
+        metrics: Dict[str, Any],
+        correlation: float = 0.0,
+        alpha_record: Optional[Dict[str, Any]] = None,
+    ) -> tuple[bool, str]:
         if self.is_kill_switch_active():
             return False, "KILL_SWITCH_ACTIVE"
 
         if not self.is_ack_valid():
             return False, f"MISSING_OR_INVALID_ACK (Requires {SUBMIT_ACK_ENV}={REQUIRED_SUBMIT_ACK})"
+
+        if alpha_record is not None:
+            gate = evaluate_pre_submission(alpha_record, automatic=True)
+            if gate.verdict != GateVerdict.PASS:
+                return False, f"PRE_SUBMISSION_GATE:{','.join(gate.reasons)}"
 
         passed, reason = self.evaluate_alpha(metrics, correlation)
         if not passed:

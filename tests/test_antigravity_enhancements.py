@@ -73,7 +73,7 @@ class TestAntigravityEnhancements(unittest.TestCase):
         self.assertEqual(called["count"], 1)
 
     def test_submission_service_gates_candidates(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             db_path = Path(td) / "sub.db"
             svc = SubmissionService(db_path, top_k=2)
             res = svc.execute_daily_top_k(
@@ -97,9 +97,6 @@ class TestAntigravityEnhancements(unittest.TestCase):
                 submitter=lambda _aid: {"success": True, "status": "SUBMITTED"},
             )
             self.assertEqual(res["submitted_ids"], [])
-            del svc
-            import gc
-            gc.collect()
 
     def test_walk_forward_guard_purged_folds_and_oos(self) -> None:
         folds = build_purged_walk_forward_folds(600, train_size=200, test_size=80, purge_gap=10)

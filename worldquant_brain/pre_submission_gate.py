@@ -57,7 +57,7 @@ def evaluate_pre_submission(
     p = policy or SubmissionGatePolicy()
     reasons: list[str] = []
     alpha_id = str(record.get("brain_alpha_id") or record.get("alpha_id") or "").strip() or None
-    simulation_id = str(record.get("official_simulation_id") or record.get("brain_simulation_id") or record.get("simulation_id") or "").strip() or None
+    simulation_id = str(record.get("official_simulation_id") or record.get("simulation_id") or "").strip() or None
 
     if record.get("submitted_at") or str(record.get("status") or "").upper() == "SUBMITTED":
         reasons.append("ALREADY_SUBMITTED")
@@ -65,12 +65,11 @@ def evaluate_pre_submission(
         reasons.append("MISSING_BRAIN_ALPHA_ID")
     if not simulation_id:
         reasons.append("MISSING_OFFICIAL_SIMULATION_ID")
-    if p.require_official_source and record.get("metrics_source") and record.get("metrics_source") != "WORLDQUANT_BRAIN":
+    if p.require_official_source and record.get("metrics_source") != "WORLDQUANT_BRAIN":
         reasons.append("UNVERIFIED_METRICS_SOURCE")
     if record.get("duplicate_expression") or record.get("duplicate"):
         reasons.append("DUPLICATE_EXPRESSION")
 
-    is_pass = str(record.get("is_check_status") or "").upper() == "PASS"
     sharpe = _number(record, "sharpe")
     fitness = _number(record, "fitness")
     turnover = _number(record, "turnover")
@@ -87,19 +86,18 @@ def evaluate_pre_submission(
         reasons.append("SELF_CORRELATION_NOT_VERIFIED")
     elif self_corr >= p.maximum_self_correlation:
         reasons.append("SELF_CORRELATION_NOT_PASSED")
-    if max_weight is None and not is_pass:
+    if max_weight is None:
         reasons.append("MAX_WEIGHT_NOT_VERIFIED")
-    elif max_weight is not None and max_weight >= p.maximum_instrument_weight:
+    elif max_weight >= p.maximum_instrument_weight:
         reasons.append("MAX_WEIGHT_NOT_PASSED")
 
     if p.require_official_checks:
-        is_pass = str(record.get("is_check_status") or "").upper() == "PASS"
         for key, code in (
             ("weight_test_passed", "WEIGHT_TEST_NOT_PASSED"),
             ("sub_universe_passed", "SUB_UNIVERSE_TEST_NOT_PASSED"),
             ("bias_test_passed", "BIAS_TEST_NOT_PASSED"),
         ):
-            if not is_pass and record.get(key) is not True:
+            if record.get(key) is not True:
                 reasons.append(code)
 
     if automatic:

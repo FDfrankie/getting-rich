@@ -9,7 +9,11 @@ from typing import Any
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data_persistence")
 BACKUP_DIR = os.path.join(DATA_DIR, "backups")
-STATE_DB_PATH = os.path.join(DATA_DIR, "system_state.db")
+try:
+    from data_persistence.state_paths import resolve_sqlite_path as _resolve_sqlite_path
+    STATE_DB_PATH = _resolve_sqlite_path("STATE_DB_PATH", "system_state.db", os.path.join(DATA_DIR, "system_state.db"))
+except Exception:
+    STATE_DB_PATH = os.path.join(DATA_DIR, "system_state.db")
 SNAPSHOT_JSON_PATH = os.path.join(DATA_DIR, "cloud_state_snapshot.json")
 
 _DB_LOCK = threading.RLock()
