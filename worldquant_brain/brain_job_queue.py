@@ -226,43 +226,46 @@ class BrainJobQueue:
     def _persist_job(self, job: BrainSimulationJob) -> None:
         if not self.db_path or self.db_path == ":memory:":
             return
-        last_err = None
-        for attempt in range(5):
-            conn = None
-            try:
-                conn = sqlite3.connect(self.db_path, timeout=20.0)
-                conn.execute("PRAGMA busy_timeout=15000")
-                with conn:
-                    conn.execute(
-                        """INSERT OR REPLACE INTO brain_jobs
-                        (job_id, simulation_key, expression, settings_json, status, simulation_location, alpha_id, metrics_json, safe_error, created_at, priority, source, requested_by, manual_note, simulation_only, queued_at, claimed_by, claimed_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (
-                            job.job_id,
-                            job.simulation_key,
-                            job.expression,
-                            json.dumps(job.settings, ensure_ascii=False),
-                            job.status.value if isinstance(job.status, BrainJobStatus) else str(job.status),
-                            job.simulation_location,
-                            job.alpha_id,
-                            json.dumps(job.metrics, ensure_ascii=False),
-                            job.safe_error, job.created_at, job.priority, job.source,
-                            job.requested_by, job.manual_note, int(job.simulation_only),
-                            job.queued_at, job.claimed_by, job.claimed_at,
-                        ),
-                    )
-                return
-            except sqlite3.OperationalError as e:
-                last_err = e
-                time.sleep(0.15 * (attempt + 1))
-            finally:
-                if conn is not None:
+        try:
+            from worldquant_brain.sqlite_resilience import execute_with_sqlite_retry
+        except ImportError:
+            def execute_with_sqlite_retry(db_path, fn, max_retries=5, base_delay=0.08, timeout=15.0):
+                for _i in range(max_retries):
+                    _c = sqlite3.connect(db_path, timeout=timeout)
                     try:
-                        conn.close()
-                    except Exception:
-                        pass
-        if last_err is not None:
-            print(f"⚠️ [BrainJobQueue] _persist_job SQLite retry exhausted ({job.job_id}): {last_err}")
+                        with _c:
+                            return fn(_c)
+                    except sqlite3.OperationalError:
+                        if _i >= max_retries - 1:
+                            raise
+                        time.sleep(base_delay * (2 ** _i))
+                    finally:
+                        _c.close()
+
+        def _op(conn: sqlite3.Connection) -> None:
+            conn.execute(
+                """INSERT OR REPLACE INTO brain_jobs
+                (job_id, simulation_key, expression, settings_json, status, simulation_location, alpha_id, metrics_json, safe_error, created_at, priority, source, requested_by, manual_note, simulation_only, queued_at, claimed_by, claimed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    job.job_id,
+                    job.simulation_key,
+                    job.expression,
+                    json.dumps(job.settings, ensure_ascii=False),
+                    job.status.value if isinstance(job.status, BrainJobStatus) else str(job.status),
+                    job.simulation_location,
+                    job.alpha_id,
+                    json.dumps(job.metrics, ensure_ascii=False),
+                    job.safe_error, job.created_at, job.priority, job.source,
+                    job.requested_by, job.manual_note, int(job.simulation_only),
+                    job.queued_at, job.claimed_by, job.claimed_at,
+                ),
+            )
+
+        try:
+            execute_with_sqlite_retry(self.db_path, _op)
+        except sqlite3.OperationalError as e:
+            print(f'⚠️ [BrainJobQueue] _persist_job SQLite retry exhausted ({job.job_id}): {e}')
 
     def _restore_jobs(self) -> None:
         if not self.db_path or self.db_path == ":memory:" or not os.path.exists(self.db_path):
@@ -398,7 +401,6 @@ class BrainJobQueue:
 
     def _worker_loop(self) -> None:
         while self._running:
-          try:
             job_to_run = None
             with self._lock:
                 if self._pending_queue:
@@ -412,7 +414,10 @@ class BrainJobQueue:
                         self._in_flight_ids.add(job_id)
                         job_to_run.claimed_by = threading.current_thread().name
                         job_to_run.claimed_at = datetime.now(timezone.utc).isoformat()
-                        self._persist_job(job_to_run)
+                        try:
+                            self._persist_job(job_to_run)
+                        except sqlite3.OperationalError:
+                            pass
 
             if job_to_run:
                 try:
@@ -422,9 +427,6 @@ class BrainJobQueue:
                         self._in_flight_ids.discard(job_to_run.job_id)
             else:
                 time.sleep(0.02)
-          except Exception as exc:
-            print(f"⚠️ [BrainJobQueue] _worker_loop caught transient error (continuing): {exc}")
-            time.sleep(0.5)
 
     def _execute_job(self, job: BrainSimulationJob) -> None:
         with self._lock:

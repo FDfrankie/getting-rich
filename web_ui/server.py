@@ -110,7 +110,17 @@ class QuantAppContext:
         self.reconciliation_service = ReconciliationService()
         self.bitunix_client = BitunixClient()
         if CryptoTradingBot is not None:
-            self.active_bot = CryptoTradingBot(symbol=DEFAULT_SYMBOL, exchange_adapter=self.testnet_client)
+            try:
+                from crypto_trading.multi_symbol_runner import MultiSymbolBotManager, attach_bot_safety_context
+                self.bot_manager = MultiSymbolBotManager(
+                    exchange_adapter=self.testnet_client,
+                    reconciliation_service=self.reconciliation_service,
+                )
+                self.active_bot = attach_bot_safety_context(self.bot_manager.primary_bot, self.reconciliation_service)
+            except ImportError:
+                self.bot_manager = None
+                self.active_bot = CryptoTradingBot(symbol=DEFAULT_SYMBOL, exchange_adapter=self.testnet_client)
+                self.active_bot.reconciliation_service = self.reconciliation_service
         else:
             # Fallback placeholder when heavy ML/RL bot is unavailable
             class _DummyBot:
@@ -442,6 +452,7 @@ class QuantAppContext:
             prev_bal = float(getattr(self.active_bot, "balance_usdt", INITIAL_BALANCE_USDT) or INITIAL_BALANCE_USDT)
             prev_pos = float(getattr(self.active_bot, "position", 0.0) or 0.0)
             self.active_bot = CryptoTradingBot(symbol=self.active_bot.symbol, strategy=strat, exchange_adapter=adapter)
+            self.active_bot.reconciliation_service = self.reconciliation_service
             self.active_bot.balance_usdt = prev_bal
             self.active_bot.position = prev_pos
             rm = getattr(self.active_bot, "risk_manager", None)
@@ -737,8 +748,17 @@ class QuantAppContext:
                     else:
                         self.active_bot.exchange_adapter = None
 
-                    # 執行一次策略掃描與真實下單判定
+                    # 執行一次策略掃描與真實下單判定 (含多幣種副節點)
                     self.active_bot.step()
+                    mgr = getattr(self, "bot_manager", None)
+                    if mgr is not None:
+                        for _msym, _mbot in mgr.bots.items():
+                            if _msym != self.active_bot.symbol:
+                                _mbot.exchange_adapter = self.active_bot.exchange_adapter
+                                try:
+                                    _mbot.step()
+                                except Exception:
+                                    pass
 
                     # 取得目前報價
                     if self.execution_mode == "BITUNIX_LIVE":
@@ -932,9 +952,13 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
         # API: 系統總覽與健康度 (含 Watchdog 四大核心心跳)
         if path == "/api/trading/instrument":
             from datetime import datetime, timezone
-            from crypto_trading.instruments import BTC_USDT_BINANCE_TESTNET
-            spec = BTC_USDT_BINANCE_TESTNET
-            sym = getattr(APP_STATE.active_bot, "symbol", spec.display_symbol)
+            sym = getattr(APP_STATE.active_bot, "symbol", "BTC/USDT")
+            try:
+                from crypto_trading.instruments import get_instrument_spec
+                spec = get_instrument_spec(sym)
+            except ImportError:
+                from crypto_trading.instruments import BTC_USDT_BINANCE_TESTNET
+                spec = BTC_USDT_BINANCE_TESTNET
             return self._send_json_response({
                 "canonical_identity": spec.canonical_id,
                 "ui_symbol": sym,

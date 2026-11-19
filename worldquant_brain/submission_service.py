@@ -1,4 +1,4 @@
-"""Daily Top-K Utility submission service with audit logging and non-destructive state transitions."""
+"""Daily Top-K Utility submission service with pre-submission gate, audit logging, and non-destructive state transitions."""
 from __future__ import annotations
 
 import hashlib
@@ -8,9 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
-from worldquant_brain.alpha_lifecycle import AlphaState
 from worldquant_brain.alpha_repository import AlphaRepository
 from worldquant_brain.daily_candidate_selector import SelectionBatch, select_daily_candidates
+from worldquant_brain.pre_submission_gate import GateVerdict, evaluate_pre_submission
 
 
 class SubmissionService:
@@ -24,15 +24,29 @@ class SubmissionService:
         submitter: Callable[[str], Mapping[str, Any]],
         *,
         formal_submission_count: int = 0,
+        enforce_gate: bool = True,
     ) -> dict[str, Any]:
+        cand_list = list(candidates)
+        cand_by_id = {
+            str(c.get("alpha_id") or c.get("brain_alpha_id") or c.get("id") or ""): dict(c)
+            for c in cand_list
+        }
         batch: SelectionBatch = select_daily_candidates(
-            candidates, top_k=self.top_k, formal_submission_count=formal_submission_count
+            cand_list, top_k=self.top_k, formal_submission_count=formal_submission_count
         )
         submitted_ids: list[str] = []
         failed_ids: list[str] = []
+        gate_blocked_ids: list[str] = []
 
         for sel in batch.selected:
             alpha_id = sel.alpha_id
+            record = cand_by_id.get(alpha_id, {})
+            if enforce_gate and record:
+                gate = evaluate_pre_submission(record)
+                if gate.verdict != GateVerdict.PASS:
+                    gate_blocked_ids.append(alpha_id)
+                    continue
+
             resp = dict(submitter(alpha_id))
             ok = bool(resp.get("success")) or resp.get("status") in {"SUBMITTED", "SUCCESS"}
             now = datetime.now(timezone.utc).isoformat()
@@ -68,6 +82,7 @@ class SubmissionService:
             "selected_count": len(batch.selected),
             "submitted_ids": submitted_ids,
             "failed_ids": failed_ids,
+            "gate_blocked_ids": gate_blocked_ids,
             "retained_pending_ids": list(batch.retained_pending_ids),
             "rejected_ids": list(batch.rejected_ids),
         }

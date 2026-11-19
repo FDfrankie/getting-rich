@@ -97,6 +97,18 @@ class CryptoTradingBot:
 
         order_side = side.upper()
         # 集中式 RiskManager 檢驗
+        try:
+            from crypto_trading.instruments import get_instrument_spec
+            _spec = getattr(self, "instrument_spec", None) or get_instrument_spec(self.symbol)
+        except ImportError:
+            from crypto_trading.instruments import BTC_USDT_BINANCE_TESTNET
+            _spec = getattr(self, "instrument_spec", None) or BTC_USDT_BINANCE_TESTNET
+        try:
+            amount = float(_spec.normalize_quantity(amount))
+            current_price = float(_spec.normalize_price(current_price))
+        except Exception:
+            pass
+        _ex_connected = True if self.exchange_adapter is None else bool(getattr(self.exchange_adapter, "is_connected", True))
         risk_decision = self.risk_manager.evaluate_order(
             symbol=self.symbol,
             side=order_side,
@@ -110,7 +122,11 @@ class CryptoTradingBot:
                 "data_quality_passed": True,
                 "reconciliation_fresh": (getattr(self, "reconciliation_service", None).is_ready_for_trading() if getattr(self, "reconciliation_service", None) else not bool(self.exchange_adapter)),
                 "has_unknown_orders": False,
-                "exchange_connected": bool(self.exchange_adapter),
+                "exchange_connected": _ex_connected,
+                "step_size": float(_spec.quantity_step),
+                "tick_size": float(_spec.price_tick),
+                "min_notional": float(_spec.min_notional),
+                "auto_quantize_step": True,
             },
         )
         if not risk_decision.allowed:
