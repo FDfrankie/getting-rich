@@ -401,7 +401,14 @@ class BrainClient:
         return self.submit_and_poll_simulation(payload, **kwargs)
 
     def _quota_db(self) -> str:
-        return getattr(self, "quota_db_path", None) or os.path.join(os.path.dirname(__file__), "alpha_vault.db")
+        custom = getattr(self, "quota_db_path", None)
+        if custom:
+            return str(custom)
+        try:
+            from worldquant_brain.alpha_vault import AlphaVault
+            return str(AlphaVault.DEFAULT_DB_PATH)
+        except Exception:
+            return os.path.join(os.path.dirname(__file__), "alpha_vault.db")
 
     def _today_taipei(self) -> str:
         from datetime import datetime, timedelta, timezone
@@ -685,34 +692,58 @@ class BrainClient:
 
         # Also inspect /alphas/{alpha_id}/check for authoritative SELF_CORRELATION / PROD_CORRELATION
         check_reasons: list[str] = []
+        has_side_effect = getattr(getattr(self.session, "get", None), "side_effect", None) is not None
         try:
-            r_chk = self.session.get(f"{self.BASE_URL}/alphas/{alpha_id}/check", timeout=min(self.timeout, 15.0))
-            if isinstance(getattr(r_chk, "status_code", None), int) and r_chk.status_code == 200 and getattr(r_chk, "content", None):
-                cj = r_chk.json() or {}
-                c_is = cj.get("is") if isinstance(cj.get("is"), dict) else cj
-                for chk in (c_is.get("checks") or [] if isinstance(c_is, dict) else []):
-                    if isinstance(chk, dict) and str(chk.get("result") or "").upper() in ("FAIL", "FAILED", "ERROR"):
-                        cname = str(chk.get("name") or "UNKNOWN_CHECK")
-                        cval = chk.get("value")
-                        check_reasons.append(f"{cname}={chk.get('result')} (value={cval})")
+            for _poll_chk in range(8):
+                r_chk = self.session.get(f"{self.BASE_URL}/alphas/{alpha_id}/check", timeout=min(self.timeout, 15.0))
+                retry_hdr = r_chk.headers.get("Retry-After") if hasattr(r_chk, "headers") and r_chk.headers else None
+                if isinstance(getattr(r_chk, "status_code", None), int) and r_chk.status_code == 200 and getattr(r_chk, "content", None):
+                    cj = r_chk.json() or {}
+                    c_is = cj.get("is") if isinstance(cj.get("is"), dict) else cj
+                    c_list = c_is.get("checks") if isinstance(c_is, dict) else None
+                    if isinstance(c_list, list):
+                        for chk in c_list:
+                            if isinstance(chk, dict) and str(chk.get("result") or "").upper() in ("FAIL", "FAILED", "ERROR"):
+                                cname = str(chk.get("name") or "UNKNOWN_CHECK")
+                                cval = chk.get("value")
+                                check_reasons.append(f"{cname}={chk.get('result')} (value={cval})")
+                        break
+                    if not retry_hdr:
+                        break
+                if retry_hdr:
+                    try:
+                        time.sleep(min(float(retry_hdr), 3.0))
+                    except Exception:
+                        time.sleep(1.0)
+                elif isinstance(getattr(r_chk, "status_code", None), int) and r_chk.status_code == 200 and not getattr(r_chk, "content", None) and not has_side_effect:
+                    time.sleep(1.0)
+                else:
+                    break
         except Exception:
             pass
 
         if not isinstance(getattr(resp, "status_code", None), int) or resp.status_code != 200 or not getattr(resp, "content", None):
+            if check_reasons:
+                return {"passed": False, "status": "SUBMISSION_CHECK_FAILED", "reasons": check_reasons}
             return {"passed": True, "status": "SKIPPED_NO_DETAIL", "reasons": []}
 
         try:
             data = resp.json()
         except Exception:
+            if check_reasons:
+                return {"passed": False, "status": "SUBMISSION_CHECK_FAILED", "reasons": check_reasons}
             return {"passed": True, "status": "SKIPPED_NON_JSON", "reasons": []}
 
         if not isinstance(data, dict):
+            if check_reasons:
+                return {"passed": False, "status": "SUBMISSION_CHECK_FAILED", "reasons": check_reasons}
             return {"passed": True, "status": "SKIPPED_NON_DICT", "reasons": []}
 
         is_block = data.get("is") if isinstance(data.get("is"), dict) else data
         reasons: list[str] = list(check_reasons)
 
         checks = is_block.get("checks") if isinstance(is_block, dict) else None
+        has_pending_self_corr = False
         if isinstance(checks, list):
             failed_checks = []
             for chk in checks:
@@ -722,8 +753,16 @@ class BrainClient:
                     if res_str in ("FAIL", "FAILED", "ERROR"):
                         val_info = f" (value={chk.get('value')}, limit={chk.get('limit')})" if "value" in chk else ""
                         failed_checks.append(f"{name_str}={res_str}{val_info}")
+                    elif name_str == "SELF_CORRELATION" and res_str == "PENDING":
+                        has_pending_self_corr = True
             if failed_checks:
                 reasons.append("Official IS-Check failed: " + ", ".join(failed_checks))
+        if has_pending_self_corr and not check_reasons and not has_side_effect:
+            corr_res = self.fetch_self_correlation(alpha_id, max_polls=6)
+            if corr_res.get("checked") and corr_res.get("passed") is False:
+                for cr in corr_res.get("reasons", []):
+                    if cr not in reasons:
+                        reasons.append(cr)
 
         sharpe = self._number(is_block, "sharpe")
         fitness = self._number(is_block, "fitness")
@@ -844,9 +883,27 @@ class BrainClient:
                 if poll.status_code == 429:
                     time.sleep(float(poll.headers.get("Retry-After") or self.poll_interval))
                     continue
-                if poll.status_code in (200, 201):
-                    data = poll.json() if poll.content else {}
-                    st = str(data.get("status") or data.get("state") or "SUBMITTED").upper()
+                if poll.status_code in (200, 201, 202):
+                    retry_hdr = poll.headers.get("Retry-After") if hasattr(poll, "headers") and poll.headers else None
+                    if retry_hdr and not getattr(poll, "content", None):
+                        try:
+                            time.sleep(min(float(retry_hdr), 5.0))
+                        except Exception:
+                            time.sleep(min(self.poll_interval, 5.0))
+                        continue
+                    data = poll.json() if getattr(poll, "content", None) else {}
+                    if isinstance(data, dict) and data.get("detail") and not data.get("status") and not data.get("state"):
+                        detail_msg = str(data.get("detail") or "")
+                        return {
+                            "success": False,
+                            "status": "SUBMIT_REJECTED",
+                            "alpha_id": alpha_id,
+                            "failed_checks": [],
+                            "corr_rejected": ("CORR" in detail_msg.upper()),
+                            "error": f"BRAIN 提交被拒: {detail_msg}",
+                            "raw": data,
+                        }
+                    st = str((data.get("status") or data.get("state") or ("PENDING" if poll.status_code == 202 else "SUBMITTED")) if isinstance(data, dict) else "").upper()
                     failed_checks = _extract_failed_checks(data)
                     if failed_checks or st in ("FAIL", "FAILED", "ERROR"):
                         corr_rej = any("CORR" in c.upper() for c in failed_checks) or ("CORR" in str(data).upper() and bool(failed_checks))
@@ -876,8 +933,29 @@ class BrainClient:
                         self._record_daily_submission(alpha_id, day_str=day_str)
                         return {"success": True, "status": "SUBMITTED", "alpha_id": alpha_id, "raw": data}
                 elif poll.status_code >= 400:
-                    return {"success": False, "status": "SUBMIT_ERROR", "alpha_id": alpha_id, "http_status": poll.status_code}
+                    try:
+                        err_data = poll.json() if getattr(poll, "content", None) else {}
+                    except Exception:
+                        err_data = {}
+                    failed_checks = _extract_failed_checks(err_data)
+                    corr_rej = any("CORR" in c.upper() for c in failed_checks) or ("CORR" in str(err_data).upper())
+                    is_rejected = bool(failed_checks) or poll.status_code in (400, 403)
+                    return {
+                        "success": False,
+                        "status": "SUBMIT_REJECTED" if is_rejected else "SUBMIT_ERROR",
+                        "alpha_id": alpha_id,
+                        "http_status": poll.status_code,
+                        "failed_checks": failed_checks,
+                        "corr_rejected": corr_rej,
+                        "error": "BRAIN 提交被拒: " + (", ".join(failed_checks) if failed_checks else f"HTTP {poll.status_code}"),
+                    }
                 time.sleep(min(self.poll_interval, 5.0))
+            return {
+                "success": False,
+                "status": "SUBMIT_TIMEOUT",
+                "alpha_id": alpha_id,
+                "error": "BRAIN 提交輪詢逾時，未正式送出",
+            }
         if resp.status_code in (200, 201):
             data = resp.json() if resp.content else {}
             failed_checks = _extract_failed_checks(data)

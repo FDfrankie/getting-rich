@@ -82,8 +82,8 @@ class ContinuousAlphaMiner:
         # 基礎算子與數據欄位基因池
         self.fields = ["close", "open", "high", "low", "volume", "vwap", "returns"]
         # Strictly verified BRAIN FASTEXPR operators & fields
-        self.fundamental_fields = ["operating_cashflow", "operating_income", "sales", "assets", "liabilities", "debt", "equity", "cap", "ebitda"]
-        self.sentiment_fields = ["target_price", "eps_consensus_mean"]
+        self.fundamental_fields = ["cashflow_op", "operating_income", "sales", "assets", "liabilities", "debt", "equity", "cap", "ebitda", "invested_capital", "return_assets", "return_equity"]
+        self.sentiment_fields = ["est_eps", "anl4_qf_az_eps", "scl12_buzz", "scl12_sentiment", "snt_value"]
         self.group_ops = ["subindustry", "industry", "sector"]
         self.ts_ops = [
             ("ts_decay_linear", [3, 5, 10]),
@@ -118,6 +118,8 @@ class ContinuousAlphaMiner:
             "pasteurization": "ON",
             "unitHandling": "VERIFY",
             "nanHandling": "OFF",
+            "language": "FASTEXPR",
+            "visualization": False,
         }
 
     def _legacy_generate_candidate_settings(self) -> dict[str, Any]:
@@ -166,20 +168,20 @@ class ContinuousAlphaMiner:
         w = random.choice([15, 20, 30, 40, 60, 90, 120])
         h = random.choice([0.005, 0.008, 0.01, 0.012, 0.015, 0.02])
         if domain == "FUNDAMENTAL_CF_EV":
-            num = random.choice(["operating_cashflow", "operating_income", "ebitda"])
+            num = random.choice(["cashflow_op", "operating_income", "ebitda"])
             expr = f"hump(group_neutralize(winsorize(rank({num} / (cap + debt + 0.001)), std=4), {grp}), hump={h})"
             return {"name": f"HP_FundCF_{num}_{grp}", "expression": expr, "domain": domain}
         if domain == "FUNDAMENTAL_ROA_DELEVERAGE":
             expr = f"hump(group_neutralize(winsorize(rank(ebitda / (assets + 0.001)) - rank(ts_delta(debt / (assets + 0.001), {w})), std=4), {grp}), hump={h})"
             return {"name": f"HP_FundQual_{grp}_{w}", "expression": expr, "domain": domain}
         if domain == "ANALYST_EPS_DISPERSION":
-            expr = f"hump(group_neutralize(winsorize(rank(ts_zscore(eps_consensus_mean, {w})) - 0.5 * rank(target_price / (close + 0.001) - 1), std=4), {grp}), hump={h})"
+            expr = f"hump(group_neutralize(winsorize(rank(ts_zscore(est_eps, {w})) - 0.5 * rank(anl4_fs_detail_estimate_1qf_v4_nd_epsr_high / (close + 0.001) - 1), std=4), {grp}), hump={h})"
             return {"name": f"HP_Analyst_{grp}_{w}", "expression": expr, "domain": domain}
         if domain == "SENTIMENT_BUZZ_MOMENTUM":
             expr = f"hump(group_neutralize(winsorize(rank(ts_zscore(scl12_buzz, {w})) * rank(ts_delta(close, 5) / (close + 0.001)), std=4), {grp}), hump={h})"
             return {"name": f"HP_Sentiment_{grp}_{w}", "expression": expr, "domain": domain}
         if domain == "OPTIONS_IV_SLOPE":
-            expr = f"hump(group_neutralize(winsorize(rank(ts_zscore(opt6_slopeavg1m, {w})) * rank(opt6_fcstr2imp), std=4), {grp}), hump={h})"
+            expr = f"hump(group_neutralize(winsorize(rank(ts_zscore(implied_volatility_call_60 - implied_volatility_put_60, {w})) * rank(implied_volatility_mean_60), std=4), {grp}), hump={h})"
             return {"name": f"HP_Options_{grp}_{w}", "expression": expr, "domain": domain}
         if domain == "PV_RESIDUAL_HUMP":
             expr = f"hump(group_neutralize(winsorize(rank(-1 * ts_regression(returns, ts_mean(returns, 5), {w}, rettype=0)), std=4), {grp}), hump={h})"
@@ -220,10 +222,10 @@ class ContinuousAlphaMiner:
             name = f"Auto_Fundamental_Quality_{f1}_{grp}"
         elif pattern == 6:
             s_field = random.choice(self.sentiment_fields)
-            if s_field == "target_price":
-                expr = f"group_neutralize(rank((target_price - close) / (close + 1e-4)), {grp})"
+            if s_field in ("est_eps", "anl4_qf_az_eps"):
+                expr = f"group_neutralize(rank({s_field} / (close + 1e-4)), {grp})"
             else:
-                expr = f"ts_decay_linear(group_rank(eps_consensus_mean - ts_delay(eps_consensus_mean, 20), {grp}), 5)"
+                expr = f"ts_decay_linear(group_rank(ts_backfill({s_field}, 5) - ts_delay(ts_backfill({s_field}, 5), 20), {grp}), 5)"
             name = f"Auto_Analyst_Sentiment_{s_field}_{grp}"
         elif pattern == 7:
             expr = f"group_rank(ts_delta(close, {window}) / (ts_std_dev(close, 20) + 1e-4), {grp}) + group_rank({f1} / (cap + 0.001), {grp})"
@@ -253,8 +255,8 @@ class ContinuousAlphaMiner:
             expr = f"group_neutralize(-1 * ts_std_dev(ts_backfill(scl12_buzz, 5), 10), {grp})"
             name = f"BRAIN_SentimentBuzz_Stab_{grp}"
         elif pattern == 14:
-            # Official BRAIN: Option6 IV surface slope gated by forecast R^2 confidence
-            expr = f"trade_when(ts_mean(opt6_fcstr2imp, 60) > 0.5, -1 * ts_zscore(opt6_slopeavg1m, 60), -1)"
+            # Official BRAIN: Option IV surface slope gated by volatility regime
+            expr = f"trade_when(ts_mean(parkinson_volatility_60, 60) > 0.1, -1 * ts_zscore(implied_volatility_call_60 - implied_volatility_put_60, 60), -1)"
             name = f"BRAIN_Opt6_Slope_Regime_{window}"
         elif pattern == 15:
             # Official BRAIN: Sub-Universe safe liquidity-weighted decay on ts_av_diff
@@ -263,15 +265,15 @@ class ContinuousAlphaMiner:
             name = f"BRAIN_LiqDecay_AvDiff_{window}"
         elif pattern == 16:
             # High-Margin Cashflow-to-Enterprise-Value Yield with Hump Turnover Control
-            expr = f"hump(group_neutralize(winsorize(rank(operating_cashflow / (cap + debt + 0.001)), std=4), {grp}), hump=0.01)"
+            expr = f"hump(group_neutralize(winsorize(rank(cashflow_op / (cap + debt + 0.001)), std=4), {grp}), hump=0.01)"
             name = f"BRAIN_CashflowEV_Hump_{grp}"
         elif pattern == 17:
-            # Multi-Horizon Information Ratio (ts_ir) Momentum with Volume Confirmation
-            expr = f"group_neutralize(ts_decay_linear(rank(ts_ir(returns, 20)) * rank(volume / (ts_mean(volume, 20) + 0.001)), 5), {grp})"
+            # Multi-Horizon Signal-to-Noise Momentum with Volume Confirmation
+            expr = f"group_neutralize(ts_decay_linear(rank(ts_mean(returns, 20) / (ts_std_dev(returns, 20) + 0.001)) * rank(volume / (ts_mean(volume, 20) + 0.001)), 5), {grp})"
             name = f"BRAIN_InfoRatio_VolConfirm_{grp}_{window}"
         elif pattern == 18:
             # Analyst EPS Revision Velocity orthogonalized to 20d Return via ts_regression
-            expr = f"group_neutralize(ts_decay_linear(ts_regression(rank(eps_consensus_mean - ts_delay(eps_consensus_mean, 20)), rank(ts_delta(close, 20)), 20, lag=0, rettype=0), 5), {grp})"
+            expr = f"group_neutralize(ts_decay_linear(ts_regression(rank(est_eps - ts_delay(est_eps, 20)), rank(ts_delta(close, 20)), 20, lag=0, rettype=0), 5), {grp})"
             name = f"BRAIN_Orthogonal_EPS_Rev_{grp}"
         elif pattern == 19:
             # Gross Profitability & De-leveraging Quality Factor (Novy-Marx style)
@@ -484,9 +486,17 @@ class ContinuousAlphaMiner:
             score += 12.0
         if "ts_regression(" in expr:
             score += 10.0
-        if any(k in expr for k in ("operating_cashflow", "ebitda", "eps_consensus_mean", "opt6_", "scl12_buzz")):
+        if any(
+            k in expr
+            for k in (
+                "cashflow_op", "operating_cashflow", "operating_income", "ebitda",
+                "est_eps", "anl4_", "eps_consensus_mean",
+                "implied_volatility_", "parkinson_volatility_", "historical_volatility_", "opt6_",
+                "scl12_buzz", "scl12_sentiment", "snt_value", "return_assets", "return_equity",
+            )
+        ):
             score += 12.0
-        if any(op in expr for op in ("ts_ir(", "trade_when(", "ts_zscore(")):
+        if any(op in expr for op in ("ts_ir(", "trade_when(", "ts_zscore(", "ts_quantile(", "ts_scale(")):
             score += 6.0
         if any(tok in expr for tok in ("+ 0.001)", "+ 0.0001)", "+ 1.0)")):
             score += 4.0

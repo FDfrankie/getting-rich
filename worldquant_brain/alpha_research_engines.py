@@ -130,14 +130,16 @@ def warm_start_structural_mutate(
     if not expr or "ts_decay_linear(ts_decay_linear(" in expr.lower():
         return None
     field_swaps = {
-        "operating_cashflow": ("operating_income", "ebitda"),
-        "operating_income": ("operating_cashflow", "ebitda"),
-        "ebitda": ("operating_cashflow", "operating_income"),
+        "operating_cashflow": ("cashflow_op", "operating_income", "ebitda"),
+        "cashflow_op": ("operating_income", "ebitda"),
+        "operating_income": ("cashflow_op", "ebitda"),
+        "ebitda": ("cashflow_op", "operating_income"),
         "assets": ("cap + debt", "assets - liabilities"),
         "cap": ("assets", "cap + debt"),
         "debt": ("liabilities",),
         "liabilities": ("debt",),
-        "eps_consensus_mean": ("target_price / (close + 0.001)",),
+        "eps_consensus_mean": ("est_eps", "anl4_qf_az_eps"),
+        "est_eps": ("anl4_qf_az_eps", "anl4_fs_detail_estimate_1qf_v4_nd_epsr_mean"),
         "subindustry": ("industry", "sector"),
         "industry": ("subindustry",),
         "sector": ("subindustry", "industry"),

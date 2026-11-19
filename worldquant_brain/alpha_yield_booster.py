@@ -9,30 +9,30 @@ from typing import Any
 _HIGH_YIELD_ATOMS: dict[str, list[str]] = {
     "FUND_QUALITY": [
         "ebitda / (assets + 0.001)",
-        "operating_cashflow / (cap + debt + 0.001)",
-        "(operating_cashflow - operating_income) / (assets + 0.001)",
+        "cashflow_op / (cap + debt + 0.001)",
+        "(cashflow_op - operating_income) / (assets + 0.001)",
         "operating_income / (sales + 0.001)",
         "-1 * ts_delta(debt / (assets + 0.001), 60)",
         "sales / (assets + 0.001)",
     ],
     "ANALYST_REV": [
-        "ts_zscore(eps_consensus_mean, 40)",
-        "ts_delta(eps_consensus_mean, 20) / (abs(eps_consensus_mean) + 0.01)",
-        "(target_price - close) / (close + 0.001)",
-        "ts_regression(rank(ts_delta(eps_consensus_mean, 10)), rank(ts_delta(close, 10)), 40, rettype=0)",
+        "ts_zscore(est_eps, 40)",
+        "ts_delta(est_eps, 20) / (abs(est_eps) + 0.01)",
+        "est_eps / (close + 0.001)",
+        "ts_regression(rank(ts_delta(anl4_qf_az_eps, 10)), rank(ts_delta(close, 10)), 40, rettype=0)",
     ],
     "SENTIMENT_OPT": [
         "ts_zscore(scl12_buzz, 40)",
         "-1 * ts_std_dev(ts_backfill(scl12_buzz, 5), 20)",
-        "-1 * ts_zscore(opt6_slopeavg1m, 40)",
-        "ts_zscore(opt6_fcstr2imp, 40)",
+        "-1 * ts_zscore(implied_volatility_call_60 - implied_volatility_put_60, 40)",
+        "ts_zscore(implied_volatility_mean_60, 40)",
     ],
     "PV_LOW_CORR": [
         "-1 * ts_regression(returns, ts_mean(returns, 5), 40, rettype=0)",
         "-1 * ts_std_dev(returns, 20) / (ts_mean(abs(returns), 120) + 0.0001)",
         "-1 * ts_mean(abs(returns) / (volume * close + 1.0), 20)",
         "-1 * ts_corr(open, volume, 10) * rank((close - vwap) / (vwap + 0.0001))",
-        "-1 * ts_skewness(returns, 40)",
+        "-1 * ts_quantile(returns, 40)",
     ],
 }
 
@@ -55,7 +55,7 @@ def generate_smart_settings(domain: str = "") -> dict[str, Any]:
         neuts = ["SUBINDUSTRY", "INDUSTRY", "SECTOR"]
     elif "SENTIMENT" in dom or "OPT" in dom:
         decays = [4, 6, 8]
-        universes = ["TOP1000", "TOP3000", "TOPSP500"]
+        universes = ["TOP1000", "TOP3000", "TOP500"]
         neuts = ["INDUSTRY", "SUBINDUSTRY", "SECTOR"]
     else:
         decays = [4, 6, 8, 10]
@@ -74,6 +74,8 @@ def generate_smart_settings(domain: str = "") -> dict[str, Any]:
         "pasteurization": "ON",
         "unitHandling": "VERIFY",
         "nanHandling": "OFF",
+        "language": "FASTEXPR",
+        "visualization": False,
     }
     if os.getenv("IQC_USE_TEST_PERIOD", "false").lower() == "true":
         _cfg["testPeriod"] = os.getenv("IQC_TEST_PERIOD", "P1Y")

@@ -799,6 +799,20 @@ class QuantAppContext:
                         self.alpha_vault.delete_alpha(int(vid))
                     return
 
+                if not checks_passed:
+                    self.add_log(f"⚠️ [BRAIN 未過官方 IS-Checks 移除] Alpha {alpha_id} 未通過 IS-Checks ({failed_checks})，已觸發 Near-Miss 微調並從清單移除")
+                    self._enqueue_near_miss_refinements(
+                        job,
+                        sharpe=float(sharpe),
+                        fitness=float(fitness),
+                        turnover=float(turnover),
+                        margin=margin,
+                        failed_checks=list(failed_checks) or ["LOW_SHARPE"],
+                    )
+                    if vid is not None:
+                        self.alpha_vault.delete_alpha(int(vid))
+                    return
+
                 if vid is not None:
                     self.alpha_vault.delete_alpha(int(vid))
                 self.alpha_vault.save_alpha(
@@ -812,12 +826,10 @@ class QuantAppContext:
                     notes=f"alpha_id={alpha_id} (模擬完成)",
                     status_override="BRAIN_COMPLETE",
                     brain_alpha_id=str(alpha_id),
-                    is_check_status="PASS" if checks_passed else "FAIL",
+                    is_check_status="PASS",
                     self_correlation=float(self_corr_val) if self_corr_val is not None else None,
                 )
-                if not checks_passed:
-                    self.add_log(f"ℹ️ [BRAIN 未排入送出池] Alpha {alpha_id} 未通過 IS-Checks，僅留存觀察")
-                elif os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
+                if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
                     self.brain_client.stage_candidate_for_daily_selection(
                         str(alpha_id), job.expression, float(sharpe), float(fitness), float(turnover), float(margin or 0.0),
                         self_correlation=self_corr_val,
@@ -2227,21 +2239,27 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             if brain_alpha_id:
                 brain_submit_res = APP_STATE.brain_client.submit_alpha(brain_alpha_id, enforce_checks=True)
                 res["brain_submit"] = brain_submit_res
-                if brain_submit_res.get("success"):
+                _sub_status = str(brain_submit_res.get("status") or "")
+                _is_rejected = (
+                    _sub_status in ("SUBMISSION_CHECK_FAILED", "SUBMIT_REJECTED")
+                    or bool(brain_submit_res.get("corr_rejected"))
+                    or ("CORR" in str(brain_submit_res.get("error") or "").upper())
+                )
+                if brain_submit_res.get("success") or _is_rejected:
                     vault_id_to_del = post_data.get("vault_id") or res.get("alpha_id")
-                    if vault_id_to_del is not None:
+                    if vault_id_to_del is not None and str(vault_id_to_del).isdigit():
                         APP_STATE.alpha_vault.delete_alpha(int(vault_id_to_del))
+                    for _va in APP_STATE.alpha_vault.list_alphas():
+                        if str(_va.get("brain_alpha_id") or "") == brain_alpha_id or str(_va.get("name") or "") == f"BRAIN_{brain_alpha_id}":
+                            APP_STATE.alpha_vault.delete_alpha(int(_va["id"]))
                     res["deleted_from_vault"] = True
-                    res["message"] = f"Alpha 已通過官方 IS-Check 正式提交至 WorldQuant BRAIN (ID: {brain_alpha_id})，並已從清單移除！"
-                elif bool(brain_submit_res.get("corr_rejected")) or ("CORR" in str(brain_submit_res.get("error") or "").upper()):
-                    vault_id_to_del = post_data.get("vault_id") or res.get("alpha_id")
-                    if vault_id_to_del is not None:
-                        APP_STATE.alpha_vault.delete_alpha(int(vault_id_to_del))
-                    res["deleted_from_vault"] = True
-                    res["message"] = f"Alpha 因自相關過高被官網拒絕 ({brain_submit_res.get('error')})，已自動從清單移除！"
+                    if brain_submit_res.get("success"):
+                        res["message"] = f"Alpha 已通過官方 IS-Check 正式提交至 WorldQuant BRAIN (ID: {brain_alpha_id})，並已從清單移除！"
+                    else:
+                        res["message"] = f"Alpha 未通過官方驗證或相關性門檻 ({brain_submit_res.get('error')})，已自動從清單移除！"
                 else:
                     res["deleted_from_vault"] = False
-                    res["message"] = f"Alpha 模擬資料已保留，但官方提交未完成 [{brain_submit_res.get('status')}]: {brain_submit_res.get('error')}"
+                    res["message"] = f"Alpha 模擬資料已保留，但官方提交未完成 [{_sub_status}]: {brain_submit_res.get('error')}"
             return self._send_json_response(res)
 
         # POST /api/brain/submit_direct：對已有官方 brain_alpha_id 的因子直接執行 IS-Check + 正式 Submit（不再重跑 Simulate），送出成功即從清單移除
@@ -2258,15 +2276,28 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 if sub_res.get("success"):
                     if vault_id is not None and str(vault_id).isdigit():
                         APP_STATE.alpha_vault.delete_alpha(int(vault_id))
+                    for _va in APP_STATE.alpha_vault.list_alphas():
+                        if str(_va.get("brain_alpha_id") or "") == brain_alpha_id or str(_va.get("name") or "") == f"BRAIN_{brain_alpha_id}":
+                            APP_STATE.alpha_vault.delete_alpha(int(_va["id"]))
                     APP_STATE.add_log(f"🏆 [BRAIN 直接正式送出成功] Alpha {brain_alpha_id} 已通過官方驗證並正式送出，已移出清單！")
                     return self._send_json_response({"success": True, "alpha_id": brain_alpha_id, "message": f"Alpha {brain_alpha_id} 已正式送出至 WorldQuant BRAIN 並從清單移除！", "result": sub_res})
-                _corr_rej = bool(sub_res.get("corr_rejected")) or ("CORR" in str(sub_res.get("error") or "").upper())
+                _sub_st = str(sub_res.get("status") or "")
+                _should_delete = (
+                    _sub_st in ("SUBMISSION_CHECK_FAILED", "SUBMIT_REJECTED")
+                    or bool(sub_res.get("corr_rejected"))
+                    or ("CORR" in str(sub_res.get("error") or "").upper())
+                )
                 deleted = False
-                if _corr_rej and vault_id is not None and str(vault_id).isdigit():
-                    APP_STATE.alpha_vault.delete_alpha(int(vault_id))
-                    deleted = True
-                    APP_STATE.add_log(f"⚠️ [BRAIN 自相關過高已刪除] Alpha {brain_alpha_id} 因 Corr 太高被拒絕，已從清單移除")
-                return self._send_json_response({"success": False, "alpha_id": brain_alpha_id, "deleted_from_vault": deleted, "message": f"未通過官方提交檢查或已達每日上限 [{sub_res.get('status')}]: {sub_res.get('error')}", "result": sub_res})
+                if _should_delete:
+                    if vault_id is not None and str(vault_id).isdigit():
+                        if APP_STATE.alpha_vault.delete_alpha(int(vault_id)):
+                            deleted = True
+                    for _va in APP_STATE.alpha_vault.list_alphas():
+                        if str(_va.get("brain_alpha_id") or "") == brain_alpha_id or str(_va.get("name") or "") == f"BRAIN_{brain_alpha_id}":
+                            if APP_STATE.alpha_vault.delete_alpha(int(_va["id"])):
+                                deleted = True
+                    APP_STATE.add_log(f"⚠️ [BRAIN 驗證失敗已刪除] Alpha {brain_alpha_id} ({_sub_st}: {sub_res.get('error')}) 已從清單移除")
+                return self._send_json_response({"success": False, "alpha_id": brain_alpha_id, "deleted_from_vault": deleted, "message": f"未通過官方提交檢查或已達每日上限 [{_sub_st}]: {sub_res.get('error')}", "result": sub_res})
             except Exception as exc:
                 return self._send_error_json("SUBMIT_DIRECT_FAILED", str(exc), status=500)
 

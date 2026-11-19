@@ -158,6 +158,26 @@ class AlphaVault:
             cursor = conn.cursor()
             expr_clean = expression.strip()
             expr_hash = hashlib.sha256(expr_clean.encode("utf-8")).hexdigest()
+            try:
+                from worldquant_brain.alpha_miner import extract_expression_skeleton
+                new_skel = extract_expression_skeleton(expr_clean)
+                existing_rows = cursor.execute(
+                    "SELECT id, expression, expression_hash, sharpe FROM alphas"
+                ).fetchall()
+                for er in existing_rows:
+                    if str(er["expression_hash"] or "") == expr_hash:
+                        continue
+                    if extract_expression_skeleton(str(er["expression"] or "")) == new_skel:
+                        if float(er["sharpe"] or 0.0) >= float(sharpe):
+                            return {
+                                "success": False,
+                                "qualified": False,
+                                "alpha_id": er["id"],
+                                "message": "同結構骨架 Alpha 已存在且 Sharpe 更高，已略過重複入庫",
+                            }
+                        cursor.execute("DELETE FROM alphas WHERE id = ?", (er["id"],))
+            except Exception:
+                pass
             norm_margin = round(float(margin), 6) if margin is not None else None
             cursor.execute(
                 """
@@ -337,6 +357,8 @@ class AlphaVault:
         """預先注入經過驗證的高品質標準模版 Alphas，開箱即具備策略儲備"""
         if self.list_alphas():
             return  # 已有資料不重複注入
+        if self.db_path == self.DEFAULT_DB_PATH and os.getenv("BRAIN_SIMULATION_ENABLED", "").lower() == "true":
+            return
 
         presets = [
             {

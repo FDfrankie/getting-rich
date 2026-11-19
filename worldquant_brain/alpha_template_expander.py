@@ -50,11 +50,11 @@ _TEMPLATE_FAMILIES: dict[str, list[Callable[..., tuple[str, str]]]] = {
     "FUNDAMENTAL_CF_EV": [
         lambda grp=None, transform=None: (
             "Fund_CF_EV",
-            _wrap_hygiene(f"{random.choice(['operating_cashflow', 'operating_income', 'ebitda'])} / (cap + debt + 0.001)", grp=grp, transform=transform),
+            _wrap_hygiene(f"{random.choice(['cashflow_op', 'operating_income', 'ebitda'])} / (cap + debt + 0.001)", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Fund_FCF_Delta",
-            _wrap_hygiene(f"ts_delta(operating_cashflow / (assets + 0.001), {_w_med()})", grp=grp, transform=transform),
+            _wrap_hygiene(f"ts_delta(cashflow_op / (assets + 0.001), {_w_med()})", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Fund_Sales_Margin",
@@ -62,15 +62,15 @@ _TEMPLATE_FAMILIES: dict[str, list[Callable[..., tuple[str, str]]]] = {
         ),
         lambda grp=None, transform=None: (
             "Fund_Accrual_Quality",
-            _wrap_hygiene("(operating_cashflow - operating_income) / (assets + 0.001)", grp=grp, transform=transform),
+            _wrap_hygiene("(cashflow_op - operating_income) / (assets + 0.001)", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Fund_EBITDA_EV_Ir",
-            _wrap_hygiene(f"ts_ir(ebitda / (cap + debt + 0.001), {_w_med()})", grp=grp, transform=transform),
+            _wrap_hygiene(f"ts_mean(ebitda / (cap + debt + 0.001), {_w_med()}) / (ts_std_dev(ebitda / (cap + debt + 0.001), {_w_med()}) + 0.001)", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Fund_CF_DebtService",
-            _wrap_hygiene(f"(operating_cashflow - ts_delta(debt, {_w_med()})) / (cap + 0.001)", grp=grp, transform=transform),
+            _wrap_hygiene(f"(cashflow_op - ts_delta(debt, {_w_med()})) / (cap + 0.001)", grp=grp, transform=transform),
         ),
     ],
     "FUNDAMENTAL_ROA_DELEVERAGE": [
@@ -88,7 +88,7 @@ _TEMPLATE_FAMILIES: dict[str, list[Callable[..., tuple[str, str]]]] = {
         ),
         lambda grp=None, transform=None: (
             "Fund_ROIC_Trend",
-            _wrap_hygiene(f"ts_ir(operating_income / (assets - liabilities + 0.001), {_w_med()})", grp=grp, transform=transform),
+            _wrap_hygiene(f"ts_mean(operating_income / (assets - liabilities + 0.001), {_w_med()}) / (ts_std_dev(operating_income / (assets - liabilities + 0.001), {_w_med()}) + 0.001)", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Fund_GrossProf_Assets",
@@ -96,33 +96,33 @@ _TEMPLATE_FAMILIES: dict[str, list[Callable[..., tuple[str, str]]]] = {
         ),
         lambda grp=None, transform=None: (
             "Fund_CapEff_Cash",
-            _wrap_hygiene("rank(operating_cashflow / (equity + abs(debt) + 0.001)) * rank(sales / (assets + 0.001))", grp=grp, transform=transform),
+            _wrap_hygiene("rank(cashflow_op / (equity + abs(debt) + 0.001)) * rank(sales / (assets + 0.001))", grp=grp, transform=transform),
         ),
     ],
     "ANALYST_EPS_DISPERSION": [
         lambda grp=None, transform=None: (
             "Analyst_EPS_Target",
-            _wrap_hygiene(f"rank(ts_zscore(eps_consensus_mean, {_w_med()})) - 0.5 * rank(target_price / (close + 0.001) - 1)", grp=grp, transform=transform),
+            _wrap_hygiene(f"rank(ts_zscore(est_eps, {_w_med()})) - 0.5 * rank(anl4_fs_detail_estimate_1qf_v4_nd_epsr_high / (close + 0.001))", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Analyst_EPS_Orthog",
-            _wrap_hygiene(f"ts_regression(rank(ts_delta(eps_consensus_mean, {_w_short()})), rank(ts_delta(close, {_w_short()})), {_w_med()}, rettype=0)", grp=grp, transform=transform),
+            _wrap_hygiene(f"ts_regression(rank(ts_delta(est_eps, {_w_short()})), rank(ts_delta(close, {_w_short()})), {_w_med()}, rettype=0)", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Analyst_Target_Gap",
-            _wrap_hygiene(f"ts_zscore((target_price - close) / (close + 0.001), {_w_med()})", grp=grp, transform=transform),
+            _wrap_hygiene(f"ts_zscore((anl4_fs_detail_estimate_1qf_v4_nd_epsr_high - anl4_fs_detail_estimate_1qf_v4_nd_epsr_mean) / (close + 0.001), {_w_med()})", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Analyst_EPS_Accel",
-            _wrap_hygiene(f"ts_delta(eps_consensus_mean, {_w_short()}) - ts_delay(ts_delta(eps_consensus_mean, {_w_short()}), {_w_short()})", grp=grp, transform=transform),
+            _wrap_hygiene(f"ts_delta(anl4_qf_az_eps, {_w_short()}) - ts_delay(ts_delta(anl4_qf_az_eps, {_w_short()}), {_w_short()})", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Analyst_EPS_Ir",
-            _wrap_hygiene(f"ts_ir(eps_consensus_mean, {_w_med()})", grp=grp, transform=transform),
+            _wrap_hygiene(f"ts_mean(est_eps, {_w_med()}) / (ts_std_dev(est_eps, {_w_med()}) + 0.001)", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Analyst_Rev_Yield",
-            _wrap_hygiene(f"rank(eps_consensus_mean / (close + 0.001)) + rank(ts_delta(target_price, {_w_short()}) / (close + 0.001))", grp=grp, transform=transform),
+            _wrap_hygiene(f"rank(est_eps / (close + 0.001)) + rank(ts_delta(anl4_qf_az_eps, {_w_short()}) / (close + 0.001))", grp=grp, transform=transform),
         ),
     ],
     "SENTIMENT_BUZZ_MOMENTUM": [
@@ -140,7 +140,7 @@ _TEMPLATE_FAMILIES: dict[str, list[Callable[..., tuple[str, str]]]] = {
         ),
         lambda grp=None, transform=None: (
             "Sent_Buzz_Ir",
-            _wrap_hygiene(f"ts_ir(ts_backfill(scl12_buzz, 5), {_w_short()}) * rank(volume / (ts_mean(volume, {_w_med()}) + 0.001))", grp=grp, transform=transform),
+            _wrap_hygiene(f"(ts_mean(ts_backfill(scl12_buzz, 5), {_w_short()}) / (ts_std_dev(ts_backfill(scl12_buzz, 5), {_w_short()}) + 0.001)) * rank(volume / (ts_mean(volume, {_w_med()}) + 0.001))", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Sent_Buzz_PriceConfirm",
@@ -154,27 +154,27 @@ _TEMPLATE_FAMILIES: dict[str, list[Callable[..., tuple[str, str]]]] = {
     "OPTIONS_IV_SLOPE": [
         lambda grp=None, transform=None: (
             "Opt_IV_Slope",
-            _wrap_hygiene(f"rank(ts_zscore(opt6_slopeavg1m, {_w_med()})) * rank(opt6_fcstr2imp)", grp=grp, transform=transform),
+            _wrap_hygiene(f"rank(ts_zscore(implied_volatility_call_60 - implied_volatility_put_60, {_w_med()})) * rank(implied_volatility_mean_60)", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Opt_IV_MeanRev",
-            _wrap_hygiene(f"-1 * ts_zscore(opt6_slopeavg1m, {_w_short()})", grp=grp, transform=transform),
+            _wrap_hygiene(f"-1 * ts_zscore(implied_volatility_mean_skew_180, {_w_short()})", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Opt_IV_Gated",
-            f"trade_when(ts_mean(opt6_fcstr2imp, {_w_med()}) > 0.5, {_wrap_hygiene(f'-1 * ts_zscore(opt6_slopeavg1m, {_w_med()})', grp=grp, transform=transform)}, -1)",
+            f"trade_when(ts_mean(parkinson_volatility_60, {_w_med()}) > 0.1, {_wrap_hygiene(f'-1 * ts_zscore(implied_volatility_mean_skew_180, {_w_med()})', grp=grp, transform=transform)}, -1)",
         ),
         lambda grp=None, transform=None: (
             "Opt_IV_Ir",
-            _wrap_hygiene(f"ts_ir(opt6_slopeavg1m, {_w_med()}) * rank(opt6_fcstr2imp)", grp=grp, transform=transform),
+            _wrap_hygiene(f"(ts_mean(implied_volatility_mean_skew_180, {_w_med()}) / (ts_std_dev(implied_volatility_mean_skew_180, {_w_med()}) + 0.001)) * rank(implied_volatility_mean_60)", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Opt_IV_Resid_Ret",
-            _wrap_hygiene(f"ts_regression(opt6_slopeavg1m, returns, {_w_med()}, rettype=0)", grp=grp, transform=transform),
+            _wrap_hygiene(f"ts_regression(implied_volatility_call_60 - implied_volatility_put_60, returns, {_w_med()}, rettype=0)", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "Opt_IV_Delta_Conf",
-            _wrap_hygiene(f"-1 * ts_delta(opt6_slopeavg1m, {_w_short()}) * rank(ts_mean(opt6_fcstr2imp, {_w_short()}))", grp=grp, transform=transform),
+            _wrap_hygiene(f"-1 * ts_delta(implied_volatility_mean_skew_180, {_w_short()}) * rank(ts_mean(historical_volatility_60, {_w_short()}))", grp=grp, transform=transform),
         ),
     ],
     "PV_RESIDUAL_HUMP": [
@@ -196,11 +196,11 @@ _TEMPLATE_FAMILIES: dict[str, list[Callable[..., tuple[str, str]]]] = {
         ),
         lambda grp=None, transform=None: (
             "PV_Range_Break",
-            _wrap_hygiene(f"(close - ts_min(low, {_w_med()})) / (ts_max(high, {_w_med()}) - ts_min(low, {_w_med()}) + 0.001)", grp=grp, transform=transform),
+            _wrap_hygiene(f"ts_scale(close, {_w_med()})", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "PV_Ir_VolConfirm",
-            _wrap_hygiene(f"rank(ts_ir(returns, {_w_short()})) * rank(volume / (ts_mean(volume, {_w_med()}) + 0.001))", grp=grp, transform=transform),
+            _wrap_hygiene(f"rank(ts_mean(returns, {_w_short()}) / (ts_std_dev(returns, {_w_short()}) + 0.001)) * rank(volume / (ts_mean(volume, {_w_med()}) + 0.001))", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "PV_CloseVwap_Reg",
@@ -222,7 +222,7 @@ _TEMPLATE_FAMILIES: dict[str, list[Callable[..., tuple[str, str]]]] = {
         ),
         lambda grp=None, transform=None: (
             "VolLiq_Skew_Rev",
-            _wrap_hygiene(f"-1 * ts_skewness(returns, {_w_med()})", grp=grp, transform=transform),
+            _wrap_hygiene(f"-1 * ts_quantile(returns, {_w_med()})", grp=grp, transform=transform),
         ),
         lambda grp=None, transform=None: (
             "VolLiq_Turn_Stability",
