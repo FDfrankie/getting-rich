@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """Standalone High-Throughput Multi-Simulation WorldQuant BRAIN Alpha Miner.
 
-Decoupled from web_ui/server.py and crypto_trading so Web UI or trading bot restarts
-never interrupt in-flight BRAIN simulations. Uses:
-  1. WorldQuant BRAIN Multi-Simulation API (batch_size 5-10 per slot x workers concurrent slots)
-  2. Two-Stage Discovery Funnel (Non-PV Dataset Field Screening -> Seed Parameter Grid Refinement)
-  3. Automatic AlphaVault persistence, daily Top-K candidate staging, and 22:00 Taipei flush
+Closed-loop workflow:
+  1. Generate & batch-simulate via Multi-Simulation API using experience-guided
+     TwoStageAlphaFunnel (learns from past PASSED / REJECTED / SUBMIT_FAILED).
+  2. Three-way verdict per simulated alpha (no pre-filtering on self-correlation):
+       - PASSED -> Saved to AlphaVault (app list) and staged in daily Pending pool
+         waiting for end-of-day (22:00 Taipei) submission.
+       - NEAR_MISS -> Promoted for Stage 2 fine-tuning (sign-flip, neut/decay/trunc, smoothing).
+       - REJECTED -> Recorded in funnel_reference_db with explicit reason.
+  3. End-of-day flush (`flush_daily_candidates`):
+       - Submits highest-scoring pending alphas.
+       - If submission fails (including self-correlation), records SUBMIT_FAILED + reason
+         in funnel_reference_db and removes the alpha from AlphaVault (app list).
 """
 from __future__ import annotations
 
@@ -38,7 +45,7 @@ except ImportError:
 from worldquant_brain.alpha_vault import AlphaVault
 from worldquant_brain.brain_client import BrainClient
 from worldquant_brain.multi_sim_client import fetch_dataset_fields, simulate_multi_alpha
-from worldquant_brain.two_stage_funnel import TwoStageAlphaFunnel
+from worldquant_brain.two_stage_funnel import TwoStageAlphaFunnel, classify_verdict
 
 DEFAULT_DATASETS: tuple[str, ...] = (
     "analyst4",
@@ -50,28 +57,17 @@ DEFAULT_DATASETS: tuple[str, ...] = (
 )
 
 
-def _is_auth_block_message(text: str) -> bool:
+def _is_rate_or_auth_cooldown(text: str) -> bool:
     low = (text or "").lower()
-    return "captcha" in low or "429" in low or "authentication" in low
-
-
-def _batch_hit_auth_block(results: list[dict[str, Any]]) -> bool:
-    if not results:
-        return False
-    statuses = [str(r.get("status") or "").upper() for r in results]
-    if any(s == "AUTH_FAILED" for s in statuses):
-        return True
-    if all(s in ("AUTH_FAILED", "SUBMIT_ERROR") for s in statuses):
-        return any(_is_auth_block_message(str(r.get("error") or "")) for r in results)
-    return False
+    return "429" in low or "rate" in low or "captcha" in low or "authentication" in low
 
 
 def run_headless_miner(
     *,
     duration_minutes: float = 38.0,
     target_queue_depth: int = 6,
-    num_workers: int = 3,
-    batch_size: int = 8,
+    num_workers: int = 2,
+    batch_size: int = 5,
     datasets: Sequence[str] | None = None,
     seed_sharpe_threshold: float = 0.90,
     brain_client: BrainClient | None = None,
@@ -89,7 +85,9 @@ def run_headless_miner(
         "completed": 0,
         "seeds_promoted": 0,
         "accepted": 0,
+        "rejected": 0,
         "submitted": 0,
+        "submit_failed_deleted": 0,
         "refined": 0,
         "failed": 0,
     }
@@ -99,22 +97,13 @@ def run_headless_miner(
         return stats
 
     if not getattr(client, "is_authenticated", False):
-        try:
-            auth_ok = bool(client.authenticate())
-        except Exception as exc:
-            if _is_auth_block_message(str(exc)):
-                print(f"[AUTH_COOLDOWN] Authentication rate-limited or CAPTCHA required by WorldQuant BRAIN; stopping headless miner to protect account. ({exc})")
-            else:
-                print(f"[ERROR] WorldQuant BRAIN authentication error: {exc}")
-            return stats
-        if not auth_ok:
+        if not client.authenticate():
             print("[ERROR] WorldQuant BRAIN authentication returned False.")
             return stats
 
     ds_list = list(datasets) if datasets else list(DEFAULT_DATASETS)
     funnel = TwoStageAlphaFunnel(vault.db_path, seed_sharpe_threshold=seed_sharpe_threshold)
 
-    # Load high-coverage fields for each target dataset once at startup
     datasets_fields: dict[str, list[str]] = {}
     for ds_id in ds_list:
         fields = fetch_dataset_fields(client, ds_id, limit=80)
@@ -131,19 +120,27 @@ def run_headless_miner(
     infinite = float(duration_minutes) <= 0.0
     deadline = float("inf") if infinite else (time.monotonic() + max(0.05, float(duration_minutes)) * 60.0)
     auto_submit = os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "true").lower() == "true"
-    high_bar = float(os.getenv("BRAIN_HIGH_BAR_SHARPE", "1.80"))
     flush_hour = int(os.getenv("BRAIN_DAILY_FLUSH_HOUR", "22") or "22")
     max_daily = int(os.getenv("BRAIN_MAX_DAILY_SUBMISSIONS", "2") or "2")
 
-    def _handle_batch_results(results: list[dict[str, Any]]) -> None:
+    def _remove_from_app_list(alpha_id: str) -> None:
+        for a in vault.list_alphas():
+            if a.get("brain_alpha_id") == alpha_id or a.get("name") == f"BRAIN_{alpha_id}":
+                vault.delete_alpha(int(a["id"]))
+
+    def _handle_batch_results(results: list[dict[str, Any]]) -> bool:
+        hit_cooldown = False
         ing = funnel.ingest_results(results)
         stats["seeds_promoted"] += ing["promoted"]
+        stats["rejected"] += ing["rejected"]
         if ing["promoted"] > 0:
-            print(f"[STAGE2_PROMOTE] Promoted {ing['promoted']} seed(s) for grid refinement")
+            print(f"[NEAR_MISS_PROMOTE] Promoted {ing['promoted']} near-miss seed(s) for fine-tuning")
 
         for r in results:
             if not r.get("success"):
                 stats["failed"] += 1
+                if _is_rate_or_auth_cooldown(str(r.get("error") or "")):
+                    hit_cooldown = True
                 continue
             stats["completed"] += 1
             if r.get("stage") == "STAGE2":
@@ -154,80 +151,103 @@ def run_headless_miner(
             fitness = r.get("fitness")
             turnover = r.get("turnover") if r.get("turnover") is not None else 0.25
             margin = r.get("margin")
-            checks_passed = bool(r.get("checks_passed", False))
             if not alpha_id or sharpe is None or fitness is None:
                 continue
 
+            verdict, _reason = classify_verdict(r, near_miss_sharpe=seed_sharpe_threshold)
             norm_margin = (
                 float(margin) / 10000.0
                 if (margin is not None and float(margin) > 0.5)
                 else (float(margin) if margin is not None else None)
             )
             qualified = (
-                checks_passed
+                verdict == "PASSED"
                 and (norm_margin is None or norm_margin >= 0.0010)
                 and vault.passes_qualification(float(sharpe), float(fitness), float(turnover))
             )
             if not qualified:
                 continue
 
+            # Ignore self-correlation upfront: keep in AlphaVault (app list) and stage into daily Pending pool
             stats["accepted"] += 1
-            submitted_ok = False
-            corr_rejected = False
-            if auto_submit and float(sharpe) >= high_bar:
-                sub = client.submit_alpha(str(alpha_id), max_daily_submissions=max_daily, enforce_checks=True)
-                if sub.get("success"):
-                    submitted_ok = True
-                    stats["submitted"] += 1
-                    print(f"[SUBMITTED] Alpha {alpha_id} Sharpe={sharpe:.2f} Fitness={fitness:.2f}")
-                elif sub.get("corr_rejected") or "CORR" in str(sub.get("error") or "").upper():
-                    corr_rejected = True
-                    print(f"[CORR_REJECTED_DELETED] Alpha {alpha_id}: {sub.get('error')}")
-
-            if not submitted_ok and not corr_rejected:
-                vault.save_alpha(
-                    name=f"BRAIN_{alpha_id}",
-                    expression=str(r.get("expression") or ""),
-                    sharpe=float(sharpe),
-                    fitness=float(fitness),
-                    turnover=float(turnover),
-                    margin=float(margin or 0.0),
-                    category="BRAIN_COMPLETE",
-                    notes=f"alpha_id={alpha_id} ({r.get('stage')}/{r.get('dataset_id')})",
-                    status_override="BRAIN_COMPLETE",
-                    brain_alpha_id=str(alpha_id),
-                    is_check_status="PASS",
+            vault.save_alpha(
+                name=f"BRAIN_{alpha_id}",
+                expression=str(r.get("expression") or ""),
+                sharpe=float(sharpe),
+                fitness=float(fitness),
+                turnover=float(turnover),
+                margin=float(margin or 0.0),
+                category="BRAIN_COMPLETE",
+                notes=f"alpha_id={alpha_id} ({r.get('stage')}/{r.get('dataset_id')})",
+                status_override="BRAIN_COMPLETE",
+                brain_alpha_id=str(alpha_id),
+                is_check_status="PASS",
+            )
+            if auto_submit:
+                client.stage_candidate_for_daily_selection(
+                    str(alpha_id),
+                    str(r.get("expression") or ""),
+                    float(sharpe),
+                    float(fitness),
+                    float(turnover),
+                    float(margin or 0.0),
                 )
-                if auto_submit:
-                    client.stage_candidate_for_daily_selection(
-                        str(alpha_id),
-                        str(r.get("expression") or ""),
-                        float(sharpe),
-                        float(fitness),
-                        float(turnover),
-                        float(margin or 0.0),
-                    )
-                print(f"[SAVED] Alpha {alpha_id} ({r.get('stage')}) Sharpe={sharpe:.2f} Fitness={fitness:.2f}")
+            print(f"[PENDING_STAGED] Alpha {alpha_id} ({r.get('stage')}) Sharpe={sharpe:.2f} Fitness={fitness:.2f}")
+
+        return hit_cooldown
+
+    def _flush_pending_if_due() -> None:
+        if not auto_submit:
+            return
+        taipei_now = datetime.now(timezone(timedelta(hours=8)))
+        if taipei_now.hour < flush_hour or client.get_daily_submission_count() >= max_daily:
+            return
+        flushed = client.flush_daily_candidates(max_daily_submissions=max_daily)
+        for sr in (flushed or []):
+            aid = str(sr.get("alpha_id") or "")
+            if sr.get("success"):
+                stats["submitted"] += 1
+                funnel.mark_submitted(alpha_id=aid)
+                _remove_from_app_list(aid)
+                print(f"[FLUSH_SUBMITTED] Alpha {aid} submitted & removed from pending list")
+            else:
+                st = str(sr.get("status") or "SUBMIT_FAILED")
+                if st in ("DAILY_QUOTA_REACHED", "OFFLINE"):
+                    continue
+                reason = str(sr.get("error") or ", ".join(sr.get("failed_checks") or []) or st)
+                funnel.mark_submit_failed(alpha_id=aid, reason=f"{st}:{reason}")
+                _remove_from_app_list(aid)
+                stats["submit_failed_deleted"] += 1
+                print(f"[FLUSH_FAILED_REMOVED] Alpha {aid} removed from app list ({reason})")
 
     in_flight: list[Future[list[dict[str, Any]]]] = []
+    cooldown_until = 0.0
     auth_blocked = False
     with ThreadPoolExecutor(max_workers=eff_workers, thread_name_prefix="brain-multisim") as pool:
         try:
             while time.monotonic() < deadline and not auth_blocked:
-                # Reap completed futures
                 still_running: list[Future[list[dict[str, Any]]]] = []
                 for fut in in_flight:
                     if fut.done():
                         try:
-                            batch_results = fut.result()
-                            _handle_batch_results(batch_results)
-                            if _batch_hit_auth_block(batch_results):
+                            batch_res = fut.result()
+                            if any(
+                                str(r.get("status") or "").upper() == "AUTH_FAILED"
+                                or "captcha" in str(r.get("error") or "").lower()
+                                for r in (batch_res or [])
+                            ):
+                                _handle_batch_results(batch_res)
                                 auth_blocked = True
+                            elif _handle_batch_results(batch_res):
+                                cooldown_until = max(cooldown_until, time.monotonic() + 60.0)
+                                print("[COOLDOWN] Hit BRAIN 429/auth throttle; pausing new dispatches for 60s")
                         except Exception as exc:
                             stats["failed"] += 1
                             print(f"[BATCH_ERROR] {exc}")
-                            if _is_auth_block_message(str(exc)):
+                            if "captcha" in str(exc).lower():
                                 auth_blocked = True
+                            elif _is_rate_or_auth_cooldown(str(exc)):
+                                cooldown_until = max(cooldown_until, time.monotonic() + 60.0)
                     else:
                         still_running.append(fut)
                 in_flight = still_running
@@ -236,38 +256,21 @@ def run_headless_miner(
                     print("[AUTH_COOLDOWN] Authentication rate-limited or CAPTCHA required by WorldQuant BRAIN; stopping headless miner to protect account.")
                     break
 
-                # Fill up to eff_workers concurrent Multi-Sim batches
                 exhausted = False
-                while len(in_flight) < eff_workers and time.monotonic() < deadline:
-                    batch = funnel.next_batch(datasets_fields, batch_size=eff_batch)
-                    if not batch:
-                        exhausted = True
-                        break
-                    stats["mined"] += len(batch)
-                    stats["batches"] += 1
-                    stage_tag = batch[0].get("stage", "STAGE1")
-                    ds_tag = batch[0].get("dataset_id", "")
-                    print(f"[MULTI_SIM] Dispatching {stage_tag} batch #{stats['batches']} ({len(batch)} alphas, ds={ds_tag})")
-                    in_flight.append(pool.submit(simulate_multi_alpha, client, batch))
+                if time.monotonic() >= cooldown_until:
+                    while len(in_flight) < eff_workers and time.monotonic() < deadline:
+                        batch = funnel.next_batch(datasets_fields, batch_size=eff_batch)
+                        if not batch:
+                            exhausted = True
+                            break
+                        stats["mined"] += len(batch)
+                        stats["batches"] += 1
+                        stage_tag = batch[0].get("stage", "STAGE1")
+                        ds_tag = batch[0].get("dataset_id", "")
+                        print(f"[MULTI_SIM] Dispatching {stage_tag} batch #{stats['batches']} ({len(batch)} alphas, ds={ds_tag})")
+                        in_flight.append(pool.submit(simulate_multi_alpha, client, batch))
 
-                # Check daily 22:00 Taipei flush
-                if auto_submit:
-                    taipei_now = datetime.now(timezone(timedelta(hours=8)))
-                    if taipei_now.hour >= flush_hour and client.get_daily_submission_count() < max_daily:
-                        flushed = client.flush_daily_candidates(max_daily_submissions=max_daily)
-                        for sr in flushed:
-                            _aid = str(sr.get("alpha_id") or "")
-                            if sr.get("success"):
-                                stats["submitted"] += 1
-                                for _a in vault.list_alphas():
-                                    if _a.get("brain_alpha_id") == _aid or _a.get("name") == f"BRAIN_{_aid}":
-                                        vault.delete_alpha(int(_a["id"]))
-                                print(f"[FLUSH_SUBMITTED] {_aid}")
-                            elif sr.get("corr_rejected") or "CORR" in str(sr.get("error") or "").upper():
-                                for _a in vault.list_alphas():
-                                    if _a.get("brain_alpha_id") == _aid or _a.get("name") == f"BRAIN_{_aid}":
-                                        vault.delete_alpha(int(_a["id"]))
-                                print(f"[FLUSH_CORR_DELETED] {_aid}: {sr.get('error')}")
+                _flush_pending_if_due()
 
                 if exhausted and not in_flight:
                     print("[DONE] All configured dataset fields and seeds exhausted.")
@@ -283,6 +286,8 @@ def run_headless_miner(
                     _handle_batch_results(fut.result(timeout=5.0 if auth_blocked else 15.0))
                 except Exception:
                     pass
+            if not auth_blocked:
+                _flush_pending_if_due()
 
     print(f"[SUMMARY] {stats} | funnel={funnel.summary()}")
     return stats
@@ -291,8 +296,8 @@ def run_headless_miner(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Standalone Multi-Simulation WorldQuant BRAIN Alpha Miner")
     parser.add_argument("--duration-minutes", type=float, default=0.0, help="0 = run 24/7 continuously")
-    parser.add_argument("--workers", type=int, default=int(os.getenv("BRAIN_MULTI_SIM_WORKERS", "3")))
-    parser.add_argument("--batch-size", type=int, default=int(os.getenv("BRAIN_MULTI_SIM_BATCH_SIZE", "8")))
+    parser.add_argument("--workers", type=int, default=int(os.getenv("BRAIN_MULTI_SIM_WORKERS", "2")))
+    parser.add_argument("--batch-size", type=int, default=int(os.getenv("BRAIN_MULTI_SIM_BATCH_SIZE", "5")))
     parser.add_argument("--datasets", type=str, default=",".join(DEFAULT_DATASETS))
     parser.add_argument("--seed-sharpe", type=float, default=0.90)
     args = parser.parse_args()

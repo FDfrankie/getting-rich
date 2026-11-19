@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import tempfile
 import threading
 import unittest
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.headless_brain_miner import run_headless_miner
+from worldquant_brain.alpha_vault import AlphaVault
 from worldquant_brain.multi_sim_client import _request_with_retry, simulate_multi_alpha
 from worldquant_brain.two_stage_funnel import TwoStageAlphaFunnel
 
@@ -33,7 +35,15 @@ class _FakeSession:
 
     def request(self, method: str, url: str, json=None, params=None, timeout=30.0):
         if method == "GET" and url.endswith("/data-fields"):
-            return _MockResp(200, {"results": [{"id": "anl4_eps_mean", "type": "MATRIX", "coverage": 0.92}, {"id": "anl4_sales_mean", "type": "MATRIX", "coverage": 0.88}]})
+            return _MockResp(
+                200,
+                {
+                    "results": [
+                        {"id": "anl4_eps_mean", "type": "MATRIX", "coverage": 0.92},
+                        {"id": "anl4_sales_mean", "type": "MATRIX", "coverage": 0.88},
+                    ]
+                },
+            )
         if method == "POST" and url.endswith("/simulations"):
             assert isinstance(json, list), "Expected Multi-Simulation list payload"
             self.post_batches.append(json)
@@ -43,7 +53,6 @@ class _FakeSession:
                 cid = f"child_{self._seq}"
                 aid = f"alpha_{self._seq}"
                 expr = item["regular"]
-                # Make first expression a negative-Sharpe seed, refined expressions high-Sharpe winners
                 if expr.startswith("-("):
                     sharpe, fitness = 1.95, 1.45
                 elif "anl4_eps_mean" in expr:
@@ -82,70 +91,124 @@ class _FakeBrainClient:
     authenticated = True
     timeout = 5.0
 
-    def __init__(self) -> None:
+    def __init__(self, *, fail_corr_on_flush: bool = False) -> None:
         self.session = _FakeSession()
         self.staged: list[str] = []
         self.submitted: list[str] = []
+        self.fail_corr_on_flush = fail_corr_on_flush
 
     def authenticate(self) -> bool:
         return True
-
-    def fetch_self_correlation(self, alpha_id: str) -> dict[str, Any]:
-        return {"passed": True, "self_correlation": 0.25}
 
     def get_daily_submission_count(self, day_str=None) -> int:
         return len(self.submitted)
 
     def stage_candidate_for_daily_selection(self, alpha_id: str, *args, **kwargs) -> None:
-        self.staged.append(alpha_id)
-
-    def submit_alpha(self, alpha_id: str, **kwargs) -> dict[str, Any]:
-        self.submitted.append(alpha_id)
-        return {"success": True, "status": "SUBMITTED", "alpha_id": alpha_id}
+        if alpha_id not in self.staged:
+            self.staged.append(alpha_id)
 
     def flush_daily_candidates(self, **kwargs) -> list[dict[str, Any]]:
-        return []
+        if not self.staged:
+            return []
+        aid = self.staged.pop(0)
+        if self.fail_corr_on_flush:
+            return [
+                {
+                    "success": False,
+                    "status": "SUBMIT_REJECTED",
+                    "alpha_id": aid,
+                    "corr_rejected": True,
+                    "error": "SELF_CORRELATION > 0.70",
+                }
+            ]
+        self.submitted.append(aid)
+        return [{"success": True, "status": "SUBMITTED", "alpha_id": aid}]
 
 
 class TestMultiSimAndTwoStageFunnel(unittest.TestCase):
-    def test_multi_sim_batch_and_sign_flip_promotion(self) -> None:
+    def test_rl_policy_repulsion_and_immediate_session_refinement(self) -> None:
         client = _FakeBrainClient()
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             db = Path(td) / "funnel.db"
             funnel = TwoStageAlphaFunnel(db, seed_sharpe_threshold=0.90)
-            batch1 = funnel.next_stage1_batch("analyst4", ["anl4_eps_mean", "anl4_sales_mean"], batch_size=4)
+            batch1 = funnel.next_batch({"analyst4": ["anl4_eps_mean", "anl4_sales_mean"]}, batch_size=4)
             self.assertEqual(len(batch1), 4)
             res = simulate_multi_alpha(client, batch1, poll_interval=0.01)
-            self.assertEqual(len(res), 4)
-            self.assertEqual(len(client.session.post_batches), 1)
-
             ing = funnel.ingest_results(res)
             self.assertGreaterEqual(ing["promoted"], 1)
-            # Negative Sharpe seed must be auto-negated in Stage 2
-            batch2 = funnel.next_stage2_batch(batch_size=4)
+            self.assertGreaterEqual(ing["rejected"], 1)
+
+            # Immediate in-session refinement works right away
+            batch2 = funnel.next_batch({"analyst4": ["anl4_eps_mean", "anl4_sales_mean"]}, batch_size=4)
             self.assertEqual(len(batch2), 4)
             self.assertTrue(all(item["expression"].startswith("-(") for item in batch2))
-            self.assertEqual(batch2[0]["stage"], "STAGE2")
 
-            # Restart resilience: new funnel instance on same DB does not repeat tried expressions
-            funnel_restarted = TwoStageAlphaFunnel(db, seed_sharpe_threshold=0.90)
-            self.assertGreater(funnel_restarted.summary()["tried_total"], 0)
+            # New session on same DB does NOT re-mine old near-miss seeds, but keeps RL policy & reference DB!
+            funnel_new_session = TwoStageAlphaFunnel(db, seed_sharpe_threshold=0.90)
+            self.assertEqual(funnel_new_session.pending_refinement_count(), 0)
+            summ = funnel_new_session.summary()
+            self.assertIn("REJECTED", summ["reference_outcomes"])
+            self.assertGreater(len(summ["top_rl_arms"]), 0)
 
-    def test_headless_miner_multi_sim_end_to_end(self) -> None:
-        client = _FakeBrainClient()
-        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
-            db = Path(td) / "vault.db"
-            stats = run_headless_miner(
-                duration_minutes=0.2,
-                num_workers=2,
-                batch_size=4,
-                datasets=["analyst4"],
-                brain_client=client,  # type: ignore[arg-type]
-                vault_db_path=db,
+            # Parameter-tweaked clone of an already-submitted expression is blocked by skeleton guard
+            funnel_new_session.mark_submitted(
+                alpha_id="sub_1",
+                expression="rank(ts_backfill(anl4_new_field, 20))",
+                dataset_id="analyst4",
+                probe="rank_bf",
             )
-            self.assertGreaterEqual(stats["batches"], 2)
-            self.assertGreaterEqual(stats["seeds_promoted"], 1)
-            self.assertGreaterEqual(stats["accepted"], 1)
+            with funnel_new_session._connect() as conn:
+                skels, ftoks = funnel_new_session._load_reference_guards(conn)
+                self.assertTrue(
+                    funnel_new_session._is_repelled_by_reference(
+                        "rank(ts_backfill(anl4_new_field, 10))", skels, ftoks
+                    )
+                )
+
+    def test_headless_miner_stages_and_removes_failed_submit(self) -> None:
+        client = _FakeBrainClient(fail_corr_on_flush=True)
+        prev_flush = os.environ.get("BRAIN_DAILY_FLUSH_HOUR")
+        os.environ["BRAIN_DAILY_FLUSH_HOUR"] = "0"
+        try:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+                db = Path(td) / "vault.db"
+                stats = run_headless_miner(
+                    duration_minutes=0.2,
+                    num_workers=2,
+                    batch_size=4,
+                    datasets=["analyst4"],
+                    brain_client=client,  # type: ignore[arg-type]
+                    vault_db_path=db,
+                )
+                self.assertGreaterEqual(stats["accepted"], 1)
+                self.assertGreaterEqual(stats["submit_failed_deleted"], 1)
+                vault = AlphaVault(str(db))
+                remaining = [a for a in vault.list_alphas() if a.get("brain_alpha_id") == "alpha_9"]
+                self.assertEqual(remaining, [])
+                funnel = TwoStageAlphaFunnel(db)
+                self.assertIn("SUBMIT_FAILED", funnel.summary()["reference_outcomes"])
+        finally:
+            if prev_flush is None:
+                os.environ.pop("BRAIN_DAILY_FLUSH_HOUR", None)
+            else:
+                os.environ["BRAIN_DAILY_FLUSH_HOUR"] = prev_flush
+
+
+
+    def test_multifactor_near_miss_boundaries(self) -> None:
+        from worldquant_brain.two_stage_funnel import classify_verdict
+        # High Sharpe but dead fitness -> REJECTED
+        v1, _ = classify_verdict({"sharpe": 1.15, "fitness": 0.35, "turnover": 0.20, "checks_passed": False, "failed_checks": ["LOW_FITNESS"]})
+        self.assertEqual(v1, "REJECTED")
+        # Delay 0 requires higher near-miss Sharpe (>= 1.45)
+        v2, _ = classify_verdict({"sharpe": 1.15, "fitness": 0.85, "turnover": 0.20, "checks_passed": False, "settings": {"delay": 0}, "failed_checks": ["LOW_SHARPE"]})
+        self.assertEqual(v2, "REJECTED")
+        # Rescuable single/double gap with solid fitness & turnover -> NEAR_MISS
+        v3, _ = classify_verdict({"sharpe": 1.12, "fitness": 0.78, "turnover": 0.25, "margin": 0.0012, "checks_passed": False, "failed_checks": ["LOW_SHARPE"]})
+        self.assertEqual(v3, "NEAR_MISS")
+        # Non-rescuable LOW_UNIVERSE -> REJECTED
+        v4, _ = classify_verdict({"sharpe": 1.30, "fitness": 1.05, "turnover": 0.25, "checks_passed": False, "failed_checks": ["LOW_UNIVERSE"]})
+        self.assertEqual(v4, "REJECTED")
 
     def test_403_single_sim_fallback_no_reauth(self) -> None:
         class _403Session:
@@ -232,7 +295,6 @@ class TestMultiSimAndTwoStageFunnel(unittest.TestCase):
         t2.join(timeout=5.0)
         self.assertEqual(locked_client.auth_calls, 1)
 
-        # Headless miner must abort cleanly when batches return CAPTCHA/429 AUTH_FAILED
         class _CaptchaSession(_FakeSession):
             def request(self, method: str, url: str, json=None, params=None, timeout=30.0):
                 if method == "POST" and url.endswith("/simulations"):
