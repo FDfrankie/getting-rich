@@ -1,6 +1,7 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+*.pyc
 *$py.class
 
 # C extensions
@@ -95,4 +96,6 @@ stage0_*.txt
 stage0_*.json
 .ruff_cache/
 scripts/*.zip
+data_persistence/*.log
+data_persistence/watchdog.paused
 taiwan_stock/reports/morning_report_*.md

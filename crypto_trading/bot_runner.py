@@ -147,7 +147,7 @@ class CryptoTradingBot:
                     price=current_price,
                 )
                 if res.get("success", False):
-                    order_id = res.get("exchange_order_id", f"MOCK_{int(time.time() * 1000)}")
+                    order_id = res.get("exchange_order_id") or res.get("order_id") or res.get("id") or f"MOCK_{int(time.time() * 1000)}"
                     fill_price = float(res.get("price", current_price))
                     self.last_order_info = res
                     self.log(
