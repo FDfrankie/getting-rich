@@ -97,6 +97,9 @@ def run_headless_miner(
                 submitted_ok = True
                 stats["submitted"] += 1
                 print(f"[SUBMITTED] Alpha {alpha_id} Sharpe={sharpe} Fitness={fitness}")
+            elif sub.get("corr_rejected") or "CORR" in str(sub.get("error") or "").upper():
+                print(f"[CORR_REJECTED_SKIPPED] Alpha {alpha_id}: {sub.get('error')}")
+                return
 
         if not submitted_ok:
             vault.save_alpha(

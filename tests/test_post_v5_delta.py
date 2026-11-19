@@ -150,7 +150,7 @@ class TestPostV5Delta(unittest.TestCase):
             )
             rl = RLAlphaStrategy(agent_weights_path=str(r_path))
             out_rl = rl.generate_signals(df)
-            self.assertIn(out_rl["model_status"].iloc[0], ("UNVERIFIED_MODEL_QUARANTINED", "MODEL_UNAVAILABLE"))
+            self.assertIn(out_rl["model_status"].iloc[0], ("UNVERIFIED_MODEL_QUARANTINED", "MODEL_UNAVAILABLE", "SYNTHETIC_MODEL_QUARANTINED"))
 
 
 

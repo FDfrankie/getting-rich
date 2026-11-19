@@ -81,6 +81,7 @@ Thumbs.db
 # Data & cache
 data_cache/
 reports/*.html
+reports/*.txt
 
 # Local workspace & patch backups
 .patch_backups/

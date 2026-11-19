@@ -200,5 +200,18 @@ class TestAll5Improvements(unittest.TestCase):
             self.assertEqual(cached_job.alpha_id, "ALPHA_CACHED_99")
 
 
+
+    def test_6_sim_budget_releases_for_continuous_pipelining(self) -> None:
+        from worldquant_brain.simulation_budget import Candidate, ThreeMinuteSimulationBudget
+
+        budget = ThreeMinuteSimulationBudget(minimum_interval_seconds=0.0, max_pending=6)
+        for i in range(10):
+            expr = f"rank(close_{i} / (volume + 1.0))"
+            fam = f"FAM_{i}"
+            dec = budget.admit(Candidate(candidate_id=expr[:40], expression=expr, blueprint_family=fam, data_domain=fam))
+            self.assertTrue(dec.admitted, f"Candidate {i} blocked: {dec.reason}")
+            budget.release(expr[:40], fam)
+
+
 if __name__ == "__main__":
     unittest.main()

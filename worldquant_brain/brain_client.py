@@ -804,6 +804,34 @@ class BrainClient:
             time.sleep(min(retry_after, 10.0))
             resp = self.session.post(url, timeout=self.timeout)
 
+        def _extract_failed_checks(payload: Any) -> list[str]:
+            if not isinstance(payload, dict):
+                return []
+            checks: list[Any] = []
+            is_blk = payload.get("is")
+            if isinstance(is_blk, dict) and isinstance(is_blk.get("checks"), list):
+                checks.extend(is_blk["checks"])
+            if isinstance(payload.get("checks"), list):
+                checks.extend(payload["checks"])
+            failed: list[str] = []
+            for chk in checks:
+                if isinstance(chk, dict) and str(chk.get("result") or "").upper() in ("FAIL", "FAILED", "ERROR"):
+                    failed.append(str(chk.get("name") or chk.get("message") or "CHECK_FAILED"))
+            return failed
+
+        def _verify_not_unsubmitted() -> tuple[bool, str, dict[str, Any]]:
+            try:
+                g = self.session.get(f"{self.BASE_URL}/alphas/{alpha_id}", timeout=min(self.timeout, 15.0))
+                if g.status_code == 200 and g.content:
+                    rdata = g.json() if hasattr(g, "json") else {}
+                    if isinstance(rdata, dict) and rdata.get("status"):
+                        rst = str(rdata.get("status") or "").upper()
+                        if rst in ("UNSUBMITTED", "REJECTED", "FAIL", "FAILED"):
+                            return False, rst, rdata
+            except Exception:
+                pass
+            return True, "", {}
+
         location = resp.headers.get("Location") or resp.headers.get("location")
         if resp.status_code in (200, 201, 202) and location:
             if location.startswith("/"):
@@ -816,16 +844,63 @@ class BrainClient:
                 if poll.status_code in (200, 201):
                     data = poll.json() if poll.content else {}
                     st = str(data.get("status") or data.get("state") or "SUBMITTED").upper()
+                    failed_checks = _extract_failed_checks(data)
+                    if failed_checks or st in ("FAIL", "FAILED", "ERROR"):
+                        corr_rej = any("CORR" in c.upper() for c in failed_checks) or ("CORR" in str(data).upper() and bool(failed_checks))
+                        return {
+                            "success": False,
+                            "status": "SUBMIT_REJECTED",
+                            "alpha_id": alpha_id,
+                            "failed_checks": failed_checks,
+                            "corr_rejected": corr_rej,
+                            "error": "BRAIN 提交被拒: " + (", ".join(failed_checks) if failed_checks else st),
+                            "raw": data,
+                        }
                     if st in ("COMPLETE", "COMPLETED", "SUBMITTED", "PASS", "ACTIVE"):
+                        ok_remote, remote_st, remote_raw = _verify_not_unsubmitted()
+                        if not ok_remote:
+                            r_failed = _extract_failed_checks(remote_raw)
+                            corr_rej = any("CORR" in c.upper() for c in r_failed)
+                            return {
+                                "success": False,
+                                "status": "SUBMIT_REJECTED",
+                                "alpha_id": alpha_id,
+                                "failed_checks": r_failed or [f"REMOTE_STATUS_{remote_st}"],
+                                "corr_rejected": corr_rej,
+                                "error": f"官網狀態仍為 {remote_st}，未正式送出",
+                                "raw": remote_raw or data,
+                            }
                         self._record_daily_submission(alpha_id, day_str=day_str)
                         return {"success": True, "status": "SUBMITTED", "alpha_id": alpha_id, "raw": data}
-                    if st in ("FAIL", "FAILED", "ERROR"):
-                        return {"success": False, "status": "SUBMIT_REJECTED", "alpha_id": alpha_id, "raw": data}
                 elif poll.status_code >= 400:
                     return {"success": False, "status": "SUBMIT_ERROR", "alpha_id": alpha_id, "http_status": poll.status_code}
                 time.sleep(min(self.poll_interval, 5.0))
         if resp.status_code in (200, 201):
             data = resp.json() if resp.content else {}
+            failed_checks = _extract_failed_checks(data)
+            if failed_checks:
+                corr_rej = any("CORR" in c.upper() for c in failed_checks)
+                return {
+                    "success": False,
+                    "status": "SUBMIT_REJECTED",
+                    "alpha_id": alpha_id,
+                    "failed_checks": failed_checks,
+                    "corr_rejected": corr_rej,
+                    "error": "BRAIN 提交被拒: " + ", ".join(failed_checks),
+                    "raw": data,
+                }
+            ok_remote, remote_st, remote_raw = _verify_not_unsubmitted()
+            if not ok_remote:
+                r_failed = _extract_failed_checks(remote_raw)
+                return {
+                    "success": False,
+                    "status": "SUBMIT_REJECTED",
+                    "alpha_id": alpha_id,
+                    "failed_checks": r_failed or [f"REMOTE_STATUS_{remote_st}"],
+                    "corr_rejected": any("CORR" in c.upper() for c in r_failed),
+                    "error": f"官網狀態仍為 {remote_st}，未正式送出",
+                    "raw": remote_raw or data,
+                }
             self._record_daily_submission(alpha_id, day_str=day_str)
             return {"success": True, "status": "SUBMITTED", "alpha_id": alpha_id, "raw": data}
         return {

@@ -279,13 +279,13 @@ def fractional_kelly_size(
     roundtrip_cost: float = 0.0004,
     kelly_fraction: float = 0.25,
     max_leverage: float = 1.0,
-    portfolio_cap: float = 0.25,
+    portfolio_cap: float | None = None,
 ) -> float:
-    """Computes cost-adjusted fractional Kelly position weight (enforces kelly_fraction <= 0.25 and portfolio_cap)."""
+    """Computes cost-adjusted fractional Kelly position weight (enforces max_leverage and optional portfolio_cap)."""
     if not np.isfinite(expected_return) or not np.isfinite(volatility) or volatility <= 1e-8:
         return 0.0
 
-    safe_fraction = min(0.25, max(0.0, float(kelly_fraction)))
+    safe_fraction = max(0.0, float(kelly_fraction))
     # Conservative shrinkage on expected return before subtracting round-trip friction
     conservative_edge = abs(expected_return) * 0.85 - max(0.0, float(roundtrip_cost))
     if conservative_edge <= 0.0:
@@ -293,7 +293,7 @@ def fractional_kelly_size(
 
     sign = 1.0 if expected_return > 0 else -1.0
     raw_f = safe_fraction * (conservative_edge / (volatility ** 2))
-    cap = min(float(max_leverage), float(portfolio_cap))
+    cap = float(max_leverage) if portfolio_cap is None else min(float(max_leverage), float(portfolio_cap))
     return float(sign * min(cap, raw_f))
 
 

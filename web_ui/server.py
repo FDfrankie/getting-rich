@@ -95,7 +95,7 @@ class QuantAppContext:
         self.alpha_vault = AlphaVault()
         self.alpha_vault.seed_initial_verified_alphas()
         self.alpha_experiments = AlphaExperimentStore(self.alpha_vault.db_path)
-        self.sim_budget = ThreeMinuteSimulationBudget(minimum_interval_seconds=float(os.getenv('BRAIN_MINING_COOLDOWN_SEC', '0') or '0'), max_pending=int(os.getenv('BRAIN_QUEUE_TARGET_DEPTH', '3') or '3'))
+        self.sim_budget = ThreeMinuteSimulationBudget(minimum_interval_seconds=float(os.getenv('BRAIN_MINING_COOLDOWN_SEC', '0') or '0'), max_pending=int(os.getenv('BRAIN_QUEUE_TARGET_DEPTH', '10') or '10'))
         self.brain_scheduler = BrainDailyScheduler(self.alpha_vault.db_path, int(os.getenv("BRAIN_DAILY_FLUSH_HOUR", "22")))
         self.manual_brain_queue = ManualPriorityQueue(self.alpha_vault.db_path)
         self.brain_score_tracker = ScoreTracker(self.alpha_vault.db_path)
@@ -487,8 +487,18 @@ class QuantAppContext:
         except Exception:
             pass
 
+    def _release_sim_budget(self, job) -> None:
+        try:
+            cid = str(getattr(job, "expression", "") or "")[:40]
+            dom = str(getattr(job, "domain", "") or "FUNDAMENTAL_CF_EV")
+            if hasattr(self, "sim_budget") and self.sim_budget is not None:
+                self.sim_budget.release(cid, dom)
+        except Exception:
+            pass
+
     def _on_brain_job_failed(self, job):
         """當 WorldQuant BRAIN 模擬失敗時，記錄至經驗庫並從 Vault 清單移除不佔版面"""
+        self._release_sim_budget(job)
         try:
             self.alpha_experiments.complete_experiment(
                 job.job_id,
@@ -549,6 +559,7 @@ class QuantAppContext:
             return 0
 
     def _on_brain_job_completed(self, job):
+        self._release_sim_budget(job)
         """
         WorldQuant BRAIN 模擬完成後：
         1. 通過官方 IS-Check 與門檻者，若觸發自動/一鍵送出且 submit_alpha 成功 -> 從 Vault 清單刪除不佔版面。
@@ -663,6 +674,13 @@ class QuantAppContext:
                         self.alpha_vault.delete_alpha(int(vid))
                     return
                 else:
+                    _err_u = str(sub_res.get("error") or "").upper()
+                    _corr_rej = bool(sub_res.get("corr_rejected")) or ("CORR" in _err_u)
+                    if _corr_rej:
+                        self.add_log(f"⚠️ [BRAIN 自相關過高已刪除] Alpha {alpha_id} 因 Corr 太高被官網拒絕，已從清單移除")
+                        if vid is not None:
+                            self.alpha_vault.delete_alpha(int(vid))
+                        return
                     self.add_log(f"ℹ️ [BRAIN 模擬成功但未送出] Alpha {alpha_id}: {sub_res.get('status')} ({sub_res.get('error')})")
 
             # 模擬成功但尚未送出 -> 保留在清單中 (更新或存入 BRAIN_COMPLETE)
@@ -712,11 +730,13 @@ class QuantAppContext:
             try:
                 self.heartbeats["alpha_miner"] = time.time()
                 if os.getenv("BRAIN_SIMULATION_ENABLED", "").lower() == "true" and not self.brain_client.offline_mode:
-                    target_depth = int(os.getenv('BRAIN_QUEUE_TARGET_DEPTH', '3') or '3')
+                    target_depth = int(os.getenv('BRAIN_QUEUE_TARGET_DEPTH', '10') or '10')
                     cooldown_sec = float(os.getenv('BRAIN_MINING_COOLDOWN_SEC', '0') or '0')
                     last_mine_ts = getattr(self, "_last_brain_mine_ts", 0.0)
-                    if self.brain_job_queue.queue_depth() < target_depth and (time.time() - last_mine_ts) >= cooldown_sec:
-                        cand = self.alpha_miner.think_and_select_best_candidate(batch_size=12)
+                    _fill_iters = 0
+                    while self.brain_job_queue.queue_depth() < target_depth and (time.time() - last_mine_ts) >= cooldown_sec and _fill_iters < target_depth:
+                        _fill_iters += 1
+                        cand = self.alpha_miner.think_and_select_best_candidate(batch_size=4)
                         dom = str(cand.get("domain") or "FUNDAMENTAL_CF_EV")
                         budget_dec = self.sim_budget.admit(
                             BudgetCandidate(
@@ -741,6 +761,8 @@ class QuantAppContext:
                                 self.add_log(f"🧠 [BRAIN 慢工精選送測] {cand['name']} (域={dom}, 本地評分={cand.get('local_quality_score')}) -> Job {job.job_id}")
                             else:
                                 self.sim_budget.release(cand["expression"][:40], dom)
+                        else:
+                            break
                     if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
                         from datetime import datetime, timedelta, timezone
                         taipei_now = datetime.now(timezone(timedelta(hours=8)))
@@ -762,7 +784,7 @@ class QuantAppContext:
                             )
             except Exception as exc:
                 self.add_log(f"⚠️ [Alpha Miner 迴圈例外] {exc}")
-            time.sleep(5)
+            time.sleep(1.5)
 
     def _background_worker_loop(self):
         """24/7 背景獨立常駐執行緒，不依賴 HTTP 請求或前端瀏覽器"""
@@ -1768,6 +1790,12 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                         APP_STATE.alpha_vault.delete_alpha(int(vault_id_to_del))
                     res["deleted_from_vault"] = True
                     res["message"] = f"Alpha 已通過官方 IS-Check 正式提交至 WorldQuant BRAIN (ID: {brain_alpha_id})，並已從清單移除！"
+                elif bool(brain_submit_res.get("corr_rejected")) or ("CORR" in str(brain_submit_res.get("error") or "").upper()):
+                    vault_id_to_del = post_data.get("vault_id") or res.get("alpha_id")
+                    if vault_id_to_del is not None:
+                        APP_STATE.alpha_vault.delete_alpha(int(vault_id_to_del))
+                    res["deleted_from_vault"] = True
+                    res["message"] = f"Alpha 因自相關過高被官網拒絕 ({brain_submit_res.get('error')})，已自動從清單移除！"
                 else:
                     res["deleted_from_vault"] = False
                     res["message"] = f"Alpha 模擬資料已保留，但官方提交未完成 [{brain_submit_res.get('status')}]: {brain_submit_res.get('error')}"
@@ -1789,7 +1817,13 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                         APP_STATE.alpha_vault.delete_alpha(int(vault_id))
                     APP_STATE.add_log(f"🏆 [BRAIN 直接正式送出成功] Alpha {brain_alpha_id} 已通過官方驗證並正式送出，已移出清單！")
                     return self._send_json_response({"success": True, "alpha_id": brain_alpha_id, "message": f"Alpha {brain_alpha_id} 已正式送出至 WorldQuant BRAIN 並從清單移除！", "result": sub_res})
-                return self._send_json_response({"success": False, "alpha_id": brain_alpha_id, "message": f"未通過官方提交檢查或已達每日上限 [{sub_res.get('status')}]: {sub_res.get('error')}", "result": sub_res})
+                _corr_rej = bool(sub_res.get("corr_rejected")) or ("CORR" in str(sub_res.get("error") or "").upper())
+                deleted = False
+                if _corr_rej and vault_id is not None and str(vault_id).isdigit():
+                    APP_STATE.alpha_vault.delete_alpha(int(vault_id))
+                    deleted = True
+                    APP_STATE.add_log(f"⚠️ [BRAIN 自相關過高已刪除] Alpha {brain_alpha_id} 因 Corr 太高被拒絕，已從清單移除")
+                return self._send_json_response({"success": False, "alpha_id": brain_alpha_id, "deleted_from_vault": deleted, "message": f"未通過官方提交檢查或已達每日上限 [{sub_res.get('status')}]: {sub_res.get('error')}", "result": sub_res})
             except Exception as exc:
                 return self._send_error_json("SUBMIT_DIRECT_FAILED", str(exc), status=500)
 

@@ -1,0 +1,123 @@
+name: Crypto Multi-Coin & Taiwan Stock Cron
+
+on:
+  schedule:
+    # 每小時第 15 分鐘執行一次多幣種策略掃描 (BTC/USDT, ETH/USDT, SOL/USDT)
+    - cron: "15 * * * *"
+    # 台北時間週一至週五 08:00 (UTC 00:00) 盤前晨報 與 14:00 (UTC 06:00) 盤後報告
+    - cron: "0 0,6 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      run_crypto:
+        description: "Run multi-coin crypto step"
+        type: boolean
+        default: true
+      run_taiwan:
+        description: "Run Taiwan stock report"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: crypto-taiwan-cron
+  cancel-in-progress: false
+
+jobs:
+  crypto-multicoin-step:
+    if: github.event_name != 'workflow_dispatch' || inputs.run_crypto
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Multi-Coin Crypto Step (BTC/ETH/SOL)
+        env:
+          BINANCE_TESTNET_API_KEY: ${{ secrets.BINANCE_TESTNET_API_KEY }}
+          BINANCE_TESTNET_API_SECRET: ${{ secrets.BINANCE_TESTNET_API_SECRET }}
+          CRYPTO_BOT_SYMBOLS: "BTC/USDT,ETH/USDT,SOL/USDT"
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from crypto_trading.multi_symbol_runner import MultiSymbolBotManager
+          from crypto_trading.reconciliation_service import ReconciliationService
+          from crypto_trading.settings import TradingMode, reset_settings, Settings
+
+          has_testnet = bool(os.getenv("BINANCE_TESTNET_API_KEY") and os.getenv("BINANCE_TESTNET_API_SECRET"))
+          mode = TradingMode.BINANCE_TESTNET.value if has_testnet else TradingMode.LOCAL_PAPER.value
+          reset_settings(Settings({**os.environ, "TRADING_MODE": mode}))
+
+          adapter = None
+          if has_testnet:
+              from crypto_trading.testnet_client import BinanceTestnetClient
+              adapter = BinanceTestnetClient(settlement="USDC")
+
+          recon = ReconciliationService()
+          recon.reconcile(
+              local_positions={},
+              remote_positions=[],
+              local_orders=[],
+              remote_orders=[],
+              local_balance=10000.0,
+              remote_balance=10000.0,
+          )
+          mgr = MultiSymbolBotManager(exchange_adapter=adapter, reconciliation_service=recon)
+          res = mgr.step_all()
+          print("MODE:", mode)
+          print("STEP_RESULTS:", json.dumps(res, ensure_ascii=False, indent=2))
+          print("STATUS_SUMMARY:", json.dumps(mgr.status_summary(), ensure_ascii=False, indent=2))
+          PY
+
+  taiwan-stock-report:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.run_taiwan) ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 0,6 * * 1-5')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate Taiwan Stock Report
+        run: |
+          python taiwan_stock/report_generator.py
+
+      - name: Commit updated Taiwan Stock reports to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add taiwan_stock/reports/ || true
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(taiwan): update scheduled market report"
+            git pull --rebase origin main || true
+            git push origin main
+          fi

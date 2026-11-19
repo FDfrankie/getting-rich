@@ -75,8 +75,7 @@ class ThreeMinuteSimulationBudget:
             return QueueDecision(False, "DUPLICATE_CANDIDATE_IN_QUEUE")
         if len(self._pending_ids) >= self.max_pending:
             return QueueDecision(False, "MAX_PENDING_REACHED")
-        if candidate.blueprint_family in self._active_families:
-            return QueueDecision(False, "FAMILY_BASELINE_ALREADY_ACTIVE")
+        # High-throughput mode: allow multiple distinct expressions per domain simultaneously
         if self.minimum_interval_seconds > 0 and self._last_queued_ts is not None:
             if (now - self._last_queued_ts) < self.minimum_interval_seconds:
                 return QueueDecision(False, "THROTTLED_MIN_INTERVAL")

@@ -1,505 +1,63 @@
 {
-  "bundle_name": "antigravity_all_in_one_master_upgrade.zip",
-  "version": "2026.11.19-stage11-blueprint-robustness-riskfix",
-  "total_files": 98,
-  "capabilities": [
-    "Taiwan Universe Gates U1-U16 (224 Popular Watchlist vs Official TWSE/TPEx Dynamic Full Universe, PIT History, Instrument Events, Symbol History, Corporate Actions, Dual-Source Reconciliation, 6-Layer Tradability Funnel, Executable Price Model)",
-    "Model Gates M1-M10 (Causal Trailing Volatility Triple-Barrier, Intrabar Ambiguity Policy, Event-Interval Purged CV & Embargo, OOF Meta-Labeling, Cross-Sectional LambdaRank Group Builder, Deflated Sharpe & PBO, IC-Weighted Linear Wrapper, Perp Carry Basis Strategy)",
-    "UI Gates UI1-UI8 (Antigravity Taiwan Market Map with Size/Color Decoupling, TW Red-Up / Global Green-Up / Colorblind-Safe Palettes, Multi-Metric Sector Aggregation, SNAPSHOT Orderbook Badge, Simple/Pro Mode, Whole/Odd-Lot Toggle)",
-    "WorldQuant BRAIN Challenge Score Tracker (/competition/challenge fetch_challenge_score & 10,000-pt Gold Progress Card)",
-    "Stage 1-11 High-Quality Alpha Research Factory (AlphaBlueprint, ComplexityBudget, Field Catalog Validation, 6-Dimension RobustnessEvaluator, AlphaQuality vs Submit-Ready Separation, 7-Stage Quality Lifecycle, ResearchLessons Memory, Idempotent SQLite Migrations)",
-    "RiskManager Capital Re-Anchoring Fix (Prevents false 50.19% drawdown circuit-breaker halt when loading persisted/Testnet ~4981 USDT balance against 10000 default peak_capital, plus alert deduplication)"
-  ],
+  "bundle_name": "alpha_diversity_success_upgrade.zip",
+  "version": "2026.11.19-v7-sqlite-disk-io-resilience",
+  "description": "Switches BrainJobQueue to journal_mode=DELETE (prevents Google Drive .db-wal disk I/O errors), adds 5x SQLite retry + try/except guard in _worker_loop, plus RiskManager UTC timestamp & step_size fixes.",
+  "total_files": 11,
   "files": [
     {
-      "path": "EXECUTION_CHECKLIST.md",
-      "size_bytes": 3377,
-      "sha256": "537b914563b67b36c162f6974d9a629600acc3d80b61ab3a9d74dcd3c095c470"
-    },
-    {
-      "path": "FUTURE_READINESS_ROADMAP.md",
-      "size_bytes": 1506,
-      "sha256": "a42a860daee6c9209b69e1f1e5bcba539cc911bc57494d812ddb13b1892938ad"
-    },
-    {
-      "path": "RESEARCH_SOURCES.md",
-      "size_bytes": 1696,
-      "sha256": "42fe7759b718ae9b4cf7601069469bb3f39bbdbfc2537bd6dc7eeacf2a87de98"
-    },
-    {
-      "path": "RUN_ALL_IN_ONE_MASTER.cmd",
-      "size_bytes": 4449,
-      "sha256": "42090fe53828390980e559d23500ad8dd1857f6f5ee87fb427d341824ea2787c"
-    },
-    {
-      "path": "render.yaml",
-      "size_bytes": 754,
-      "sha256": "cb7613bd6fb9700c08fbe9e6617c88eaeaa747547afc1f16567e2642c59c6aa0"
-    },
-    {
-      "path": "啟動量化交易平台.bat",
-      "size_bytes": 328,
-      "sha256": "3491f67eb5873156c0a5173231a4c8fe787ac19e5780384330252648dac91b58"
-    },
-    {
-      "path": "worldquant_brain/adaptive_submission.py",
-      "size_bytes": 6985,
-      "sha256": "5eb2511a37e01c6552a33de8367969c8fa3a33c449157e76914074f892ddbac6"
-    },
-    {
-      "path": "worldquant_brain/alpha_blueprint.py",
-      "size_bytes": 15889,
-      "sha256": "36d3645998921aac4f30fffa5832cd40a4bf573f39f060957b13390e16d1a775"
-    },
-    {
-      "path": "worldquant_brain/alpha_experiment_store.py",
-      "size_bytes": 8417,
-      "sha256": "21f9003725d19853319e434964f0e662bc189ef1de3783052ffcdeea3ed3dd61"
-    },
-    {
-      "path": "worldquant_brain/alpha_lifecycle.py",
-      "size_bytes": 6531,
-      "sha256": "1c608e9cc682c797cdb6205e0031736518ff9e1c582ca99842286d6a04f38f5f"
-    },
-    {
-      "path": "worldquant_brain/alpha_miner.py",
-      "size_bytes": 19785,
-      "sha256": "8c48ccf6b69b1aac17ff9e6c49f9fe234576264073daae496192d6eea6c93411"
-    },
-    {
-      "path": "worldquant_brain/alpha_quality.py",
-      "size_bytes": 10490,
-      "sha256": "78bd574eafd897a97ccf8804e073328aba83826e53213a6f35f2f60d4b1a7c37"
-    },
-    {
-      "path": "worldquant_brain/alpha_repository.py",
-      "size_bytes": 3128,
-      "sha256": "d46b43f0d729c20364b417f6646dc01e44efac6582941c98f0ff6e36275c707c"
-    },
-    {
-      "path": "worldquant_brain/alpha_service.py",
-      "size_bytes": 1092,
-      "sha256": "1774eebee1cf92ed196710c086bf66a587a6831383a5705d38bd2de40b0484dc"
-    },
-    {
-      "path": "worldquant_brain/alpha_vault.py",
-      "size_bytes": 21174,
-      "sha256": "dbfd411f74b059a27c6445effb4f219882f3554985ce98468748b89b320e696f"
-    },
-    {
-      "path": "worldquant_brain/brain_client.py",
-      "size_bytes": 32423,
-      "sha256": "1773cd6968ba979d86b695e952bd63fbeb0b2b15a0e0d47638a33a527eb67a8b"
-    },
-    {
-      "path": "worldquant_brain/brain_job_queue.py",
-      "size_bytes": 26272,
-      "sha256": "e41d9f63768039d0eeee915fe5368e175fae4c260e673ec54a529a0fbaaeeff8"
-    },
-    {
-      "path": "worldquant_brain/brain_quality_bridge.py",
-      "size_bytes": 2148,
-      "sha256": "79ccbf07799da1b3eea64f2e0daefee808377bba5a8f1e9a0c170092523c437b"
-    },
-    {
-      "path": "worldquant_brain/brain_result_parser.py",
-      "size_bytes": 10663,
-      "sha256": "41ff55098571d2e6c1070c3a24cd3317b73a0af4053f740522afc0a51859cb9c"
-    },
-    {
-      "path": "worldquant_brain/brain_scheduler.py",
-      "size_bytes": 4542,
-      "sha256": "7c0f594499041dc84cd11f29607a2e2f8778952033b8f59ecca34ff755158aa7"
-    },
-    {
-      "path": "worldquant_brain/candidate_utility.py",
-      "size_bytes": 8209,
-      "sha256": "d843226c90d8436e239085d3800cb569b7ac42153a5668ed7582d2b32c5f7fb5"
-    },
-    {
-      "path": "worldquant_brain/daily_candidate_selector.py",
-      "size_bytes": 4711,
-      "sha256": "c18ae8a3f6d7cc49ae73f0905018c9770211b7d6837907f3e297fd789a2bf086"
-    },
-    {
-      "path": "worldquant_brain/direct_submit_service.py",
-      "size_bytes": 1602,
-      "sha256": "754674103704241bfbfde88a83be7d184f03a94cb2ab7b017c567667422aa2ce"
-    },
-    {
-      "path": "worldquant_brain/manual_priority_queue.py",
-      "size_bytes": 6032,
-      "sha256": "cefb95e16ccb7d3935aabe2be74a827b54b73221a4f19926f7ae4744bda21a52"
-    },
-    {
-      "path": "worldquant_brain/meta_model.py",
-      "size_bytes": 2340,
-      "sha256": "d97f68e1a34ccea3b7302b7add9f91e486547297abacceb58c689da519ab6f48"
-    },
-    {
-      "path": "worldquant_brain/research_memory.py",
-      "size_bytes": 15044,
-      "sha256": "4eec40d23795a0194c8108029d10e2d5f8cf0258a19ac99e449df4a18ea24588"
-    },
-    {
-      "path": "worldquant_brain/robustness_evaluator.py",
-      "size_bytes": 9375,
-      "sha256": "eb928328599b157ddabb7bb75a44915af521f0ba53340bf21339c1e843da658e"
-    },
-    {
-      "path": "worldquant_brain/score_attribution.py",
-      "size_bytes": 4864,
-      "sha256": "a49671ae9bc2935b308152974152f779ab8976cbc570b25b8016b9634e10d799"
-    },
-    {
-      "path": "worldquant_brain/score_tracker.py",
-      "size_bytes": 9331,
-      "sha256": "7fabaa86cab20327d01b0f27007db1bc9d13bb3eda39e7e6146439b102c32926"
-    },
-    {
-      "path": "worldquant_brain/submission_service.py",
-      "size_bytes": 2957,
-      "sha256": "a6154871f7135b0bf05b4af61093370893bbae4098f29b265c1d22dfff04aea8"
+      "path": "crypto_trading/risk_manager.py",
+      "size_bytes": 13137,
+      "sha256": "9003b1a3c87f25e800f508f3bdc2ee5368577689252d76a7c236d70fce68ee14"
     },
     {
       "path": "web_ui/server.py",
-      "size_bytes": 94169,
-      "sha256": "62b9016aafdec74b5f639dc958b5dd4ccfaeea916e386988d71e8d37b92a5927"
+      "size_bytes": 98297,
+      "sha256": "71310c0ac42385b31564ce0aa3557b11ec6ea9196472ab29b6fb3ecd2084cb36"
     },
     {
-      "path": "web_ui/static/index.html",
-      "size_bytes": 149439,
-      "sha256": "43ab4b570c724b676eb82ff5aab2af1a9e6be35d9f56330e3175da1a01691b0e"
+      "path": "tests/test_alpha_diversity_upgrade.py",
+      "size_bytes": 10464,
+      "sha256": "1adbd7042cfb44316b355f98abb27771c7a1022b6b144a2150466e4e1eb433b3"
     },
     {
-      "path": "tools/migrations/archive/README.md",
-      "size_bytes": 128,
-      "sha256": "b431b1f6f89060d6caffc6cd3c55c758d5ed439d5518d61a3f9700db526f0c74"
+      "path": "tests/test_novelty_and_survey.py",
+      "size_bytes": 7662,
+      "sha256": "f114b3ac4cea195eca4ee9e2a5eef410a369d82f89bbb6b9be783b3d1110d2ea"
     },
     {
-      "path": "tests/test_alpha_blueprint_and_robustness.py",
-      "size_bytes": 14188,
-      "sha256": "8235c3a34294aa26ee9ae8a727333c90c9e7d929b6847dd34a2f294aacf6bddd"
+      "path": "worldquant_brain/alpha_miner.py",
+      "size_bytes": 30675,
+      "sha256": "9bd30bb37b29a52f320a88aeec7407488f4707a3fc07d8a9207a3cb32123d822"
     },
     {
-      "path": "tests/test_alpha_near_miss_refinement.py",
-      "size_bytes": 2380,
-      "sha256": "55084dc8bdd18d8412c6c6351dff1c613c5a6a467cf3e44440cbda08f8ba6bd8"
+      "path": "worldquant_brain/alpha_novelty.py",
+      "size_bytes": 7792,
+      "sha256": "195fee1ea7b8aa190c8a16baaf5d99da96ce6dbd750ce91160c508ba637a8e5b"
     },
     {
-      "path": "tests/test_alpha_quality.py",
-      "size_bytes": 1460,
-      "sha256": "dd5eb91689ac9cf99fcd8c410ad00bbdc751a12670e0e14e1c13dac2cf4c565b"
+      "path": "worldquant_brain/alpha_research_engines.py",
+      "size_bytes": 8646,
+      "sha256": "2be0b280643dbbf70a48d8fae75241115cefba0bf76855736ddace3ab5aad27b"
     },
     {
-      "path": "tests/test_alpha_vault_discovered_ui.py",
-      "size_bytes": 3453,
-      "sha256": "90be750f9e17981216ffe5202d2f18afe0894face1c58e1c124cf3a12f151e70"
+      "path": "worldquant_brain/brain_client.py",
+      "size_bytes": 47432,
+      "sha256": "dd2fe35181d98b9ead13f5f6dd8d47609ab92653be5c54a99bdb33be345012df"
     },
     {
-      "path": "tests/test_batches_a_to_j_platform.py",
-      "size_bytes": 19777,
-      "sha256": "bd88acac9246e415310e0fa3ec5d4bc3b35e88ae3fd39f490f508cf518342786"
+      "path": "worldquant_brain/brain_job_queue.py",
+      "size_bytes": 28459,
+      "sha256": "228aa7c60b1f2adac73e01c728a4b917f2554bc9a6a692b3fb5eda82d42f4e22"
     },
     {
-      "path": "tests/test_brain_result_parser.py",
-      "size_bytes": 2067,
-      "sha256": "592672d888dff1f554d200aa3c3ec97b28f136a2bfb9af10cf471a27105d290d"
+      "path": "worldquant_brain/data_survey.py",
+      "size_bytes": 4172,
+      "sha256": "66a80c230da77eeab44f0ff898ac27fac9bec7391ae8025f1f421c358b8b209b"
     },
     {
-      "path": "tests/test_future_foundations.py",
-      "size_bytes": 1524,
-      "sha256": "72a693e684d2e9eced7d8ca785b89d53ff24a98e32096da19d19ffbbd3c02905"
-    },
-    {
-      "path": "tests/test_headless_brain_miner.py",
-      "size_bytes": 587,
-      "sha256": "edf86721c265ca05bbf8aab9aed83255d32e3507012bf7f07c232e54a0ac7dd7"
-    },
-    {
-      "path": "tests/test_lgbm_validation_gate.py",
-      "size_bytes": 4893,
-      "sha256": "f4f7f80d0af1b717b0f58e1dc73bafb31530b4f93c2e1ff065a1dbbb845f0b2e"
-    },
-    {
-      "path": "tests/test_model_governance_phase8.py",
-      "size_bytes": 2308,
-      "sha256": "7142a6d21d1fb75be5aefc2737d9cdf13a5ebdf830018c176496be17d6a91017"
-    },
-    {
-      "path": "tests/test_phase10_score_policy.py",
-      "size_bytes": 2227,
-      "sha256": "6fda3d717da336d6bb37157a83110782b3575d915621d337350860fc90155912"
-    },
-    {
-      "path": "tests/test_phase9_brain_operations.py",
-      "size_bytes": 2846,
-      "sha256": "0643cd308a419de8f668e0ab06d9c3f30bd9ca0e29d60a8f7ed9dd23fd8934fc"
-    },
-    {
-      "path": "tests/test_phase9_server_callbacks.py",
-      "size_bytes": 2228,
-      "sha256": "9f97aa8ac944d106bbbdbda2d70b3ba7757fc502cdfc71ac991d107368e1943d"
-    },
-    {
-      "path": "tests/test_taiwan_universe_and_yuanta_ui.py",
-      "size_bytes": 11691,
-      "sha256": "f0c29efbda19a9a2ccd2cb999d88fba30aa65a5b413026c54b7ce7c809779b1a"
-    },
-    {
-      "path": "taiwan_stock/stock_screener.py",
-      "size_bytes": 13544,
-      "sha256": "800ac30ed742c9519ee8bc88c3518921b80bc6250308880f7e1d0ee0a885b5b6"
-    },
-    {
-      "path": "taiwan_stock/universe_registry.py",
-      "size_bytes": 85857,
-      "sha256": "a85015259515e608182bca23eaf4b3b720b67b82d8f0c97f60dde434fc816c7a"
-    },
-    {
-      "path": "scripts/apply_master_fix_and_cleanup.py",
-      "size_bytes": 64572,
-      "sha256": "6049315253de50b9783fd19e4f691576aadc3ccd5e8f6abf53276f47cdaa37a9"
-    },
-    {
-      "path": "scripts/audit_taiwan_universe.py",
-      "size_bytes": 4447,
-      "sha256": "53bd451f0f62df316170b6dd3730d4ceaec74aae30132896b005eff087abca40"
-    },
-    {
-      "path": "scripts/benchmark_timeframes.py",
-      "size_bytes": 11101,
-      "sha256": "9841aa1d869ca438fcb73d582525ec3cf8a89f5ea99d114be24440485f3a2744"
-    },
-    {
-      "path": "scripts/brain_ops.py",
-      "size_bytes": 2553,
-      "sha256": "b278df8c2a2d49395ad9687ec5c7590795e3d8ce84e2c41a36713872fb203b28"
-    },
-    {
-      "path": "scripts/brain_score.py",
-      "size_bytes": 805,
-      "sha256": "f45d588e1e8a22e5fa68bcd21d5b2180c59925976c55c3fb362dcd5a8ee690b8"
-    },
-    {
-      "path": "scripts/build_research_backlog.py",
-      "size_bytes": 887,
-      "sha256": "7e9c0f6a217c86afe9ffd538753dba25912c844744497903cf1ad8208d93687a"
-    },
-    {
-      "path": "scripts/fetch_historical_crypto.py",
-      "size_bytes": 3860,
-      "sha256": "f25cc7477c1db62ab93c65dca8058d31719eddc3a24cf72f38ecd33072f13a70"
-    },
-    {
-      "path": "scripts/headless_brain_miner.py",
-      "size_bytes": 6713,
-      "sha256": "d63fa686891a84d9b995616983e4436b318f58016c54e887bf894d58ab50d02f"
-    },
-    {
-      "path": "scripts/migrate_phase9_brain_governance.py",
-      "size_bytes": 3778,
-      "sha256": "55e0f9d2e91083251e09589855da936f482895af6310dd86781648417f21066d"
-    },
-    {
-      "path": "scripts/retrain_ppo_v2_5seed.py",
-      "size_bytes": 7940,
-      "sha256": "75e8469142978ffe33e13574e1ff8a4ea40d21837bbae3cf941091532d9201cd"
-    },
-    {
-      "path": "scripts/sync_taiwan_universe.py",
-      "size_bytes": 439,
-      "sha256": "52cffdd7685264ff06627c84700327810a9473568df660afa69856fbe2c9ac36"
-    },
-    {
-      "path": "scripts/train_models.py",
-      "size_bytes": 17003,
-      "sha256": "9df2600e0e2d4964ff81af17a6e3cf0db2673bd66d2ef004af28fba928cc71e8"
-    },
-    {
-      "path": "scripts/validate_lgbm_oos_and_costs.py",
-      "size_bytes": 7238,
-      "sha256": "abbe1f3e2541fa5da19892f6a0e520a39076e497c000bdbf34de580ea46df4b1"
-    },
-    {
-      "path": "scripts/verify_bundle_and_readiness.py",
-      "size_bytes": 2848,
-      "sha256": "f4e3e57e827a3579c2b85f9b082620ccfe36df137dda4f7ccbea28dcb20f4f1d"
-    },
-    {
-      "path": "research_catalog/research_backlog.json",
-      "size_bytes": 26551,
-      "sha256": "27146d3d2033e6ca2c4f6c36d4a90e3ae502efbd3e2f931ecc4e19488750cf3a"
-    },
-    {
-      "path": "research_catalog/strategy_hypotheses.yaml",
-      "size_bytes": 1282,
-      "sha256": "815faa830889a0bcde685432976881bc4b57633ec9fb57628d783e98ad19b0d7"
-    },
-    {
-      "path": "research_catalog/video_catalog.json",
-      "size_bytes": 2042,
-      "sha256": "326870f4b3d4d62088892a38f39d90d18737d23c22bc96f6d071b8de0cbf277d"
-    },
-    {
-      "path": "observability/__init__.py",
-      "size_bytes": 0,
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    {
-      "path": "observability/audit_log.py",
-      "size_bytes": 2092,
-      "sha256": "f16295d07884e63866ea3af2f7af84931939cba7d3fde9e27bd915c05bc7a337"
-    },
-    {
-      "path": "observability/telemetry.py",
-      "size_bytes": 2839,
-      "sha256": "dc391b1afd875be89e628322f2d90b3706cf02adbf1fc751ff28449d3915c0f1"
-    },
-    {
-      "path": "docs/MASTER_REPORT_AND_GEMINI_DIALOGUE.md",
-      "size_bytes": 4366,
-      "sha256": "3954c7249e700b135b8f7ee6fffeffa56ae0967f929a2bff6cdb83323c9865a4"
-    },
-    {
-      "path": "docs/repository_inventory.json",
-      "size_bytes": 220678,
-      "sha256": "5c0a9f14aa8a93eabe9998afdee9531e20ef2e282d04a08e2cbe51205a94b32f"
-    },
-    {
-      "path": "docs/repository_inventory.md",
-      "size_bytes": 1341,
-      "sha256": "d0ae103844a21033af943bdb64e9493ee76aaeaa4a7c00859e5893593b10954c"
-    },
-    {
-      "path": "deployment/render.future.yaml",
-      "size_bytes": 1139,
-      "sha256": "2ba0d09614d8148ae57efcc12e3d5ce5b2a22e68569b3d2cc81daa22af1df375"
-    },
-    {
-      "path": "data_persistence/migrations.py",
-      "size_bytes": 13622,
-      "sha256": "b02ec58572ae12407f6cd0da2b8964b4e452c7f7a83f75013ef775fb1cd1b2a7"
-    },
-    {
-      "path": "data_persistence/repositories.py",
-      "size_bytes": 8015,
-      "sha256": "ea8bfbcd092fba86ff68be5879399048a1b24cf42d6a822e7fa63503cc36b49e"
-    },
-    {
-      "path": "data_persistence/models/crypto_lgbm_manifest.json",
-      "size_bytes": 1548,
-      "sha256": "afef4490baefad04e23d80b4008670806bc949e69d484ad1852f70b8e006ee55"
-    },
-    {
-      "path": "data_persistence/models/crypto_lgbm_weights_manifest.json",
-      "size_bytes": 1548,
-      "sha256": "afef4490baefad04e23d80b4008670806bc949e69d484ad1852f70b8e006ee55"
-    },
-    {
-      "path": "data_persistence/models/crypto_ppo_agent_manifest.json",
-      "size_bytes": 1311,
-      "sha256": "935f103161f4814d81e664dcc0772582aec06a3de99a3202b582fefb5c881b79"
-    },
-    {
-      "path": "data_persistence/models/taiwan_stock_manifest.json",
-      "size_bytes": 1168,
-      "sha256": "cd53febd93b50c526577e1a5a5e95aa737acf400930004e39f28c82e8da38644"
-    },
-    {
-      "path": "crypto_trading/brain_feature_bridge.py",
-      "size_bytes": 4675,
-      "sha256": "9c64716141d67196a2a2953532d0d3f8ca59d8cb818392dc2cabad473ec2fe12"
-    },
-    {
-      "path": "crypto_trading/dataset_manifest.py",
-      "size_bytes": 2665,
-      "sha256": "d2468a1ff05d096e69b4449eb2c3d4f8f17feefe8a899449078398370caaf4a6"
-    },
-    {
-      "path": "crypto_trading/feature_engineer.py",
-      "size_bytes": 10239,
-      "sha256": "03a7e37847cf8b147079ef6565fc540b11151b617d7335269a79812b40cf164d"
-    },
-    {
-      "path": "crypto_trading/hypothesis_runner.py",
-      "size_bytes": 4137,
-      "sha256": "e518556284545c723b889818f64c8f1a54f685fc2a81662bdbbc57545f813cbd"
-    },
-    {
-      "path": "crypto_trading/indicator_library.py",
-      "size_bytes": 12282,
-      "sha256": "62e573c5c34a662c47c41ec1910fc04de49ae6382e891aa8c8ca93de4b816293"
-    },
-    {
-      "path": "crypto_trading/lgbm_validation_gate.py",
-      "size_bytes": 17162,
-      "sha256": "58771d8ae08c22dc25b9ca733c6df13727447540c9b4588ec59b1ca4062a5cd9"
-    },
-    {
-      "path": "crypto_trading/math_models.py",
-      "size_bytes": 12549,
-      "sha256": "ce531e3fa7c66da99e6505de09f6308036b9198d4be15ad395a3e1a72fe0d04a"
-    },
-    {
-      "path": "crypto_trading/meta_labeling.py",
-      "size_bytes": 17596,
-      "sha256": "20511688bc3747d58f0e9fec5088b8d48351dfa3423184e484690b600d4f62cb"
-    },
-    {
-      "path": "crypto_trading/model_governance.py",
-      "size_bytes": 3099,
-      "sha256": "8d9f8c410afe1d07bbdf4225f5047e7438e372e0b54119d22003c98fcadcc8ea"
-    },
-    {
-      "path": "crypto_trading/risk_manager.py",
-      "size_bytes": 11858,
-      "sha256": "9e121ed7581042d38adba31dbd4b690ec153f87e6a7435aa9bf7e87a7eb56910"
-    },
-    {
-      "path": "crypto_trading/rl_env.py",
-      "size_bytes": 7974,
-      "sha256": "fecc13f3d884aa1a1c6456378df2054692f2a9b23c39c26c3a8c2dde55d2e311"
-    },
-    {
-      "path": "crypto_trading/shadow_trading.py",
-      "size_bytes": 5384,
-      "sha256": "123ecbb65720e842983fe2b89beaa530ae1a49c11707cf19f4ce247c88278d42"
-    },
-    {
-      "path": "crypto_trading/strategies/__init__.py",
-      "size_bytes": 1005,
-      "sha256": "79a436f8aa9adf6c580ccd67b0e2f2d1a8a5dc6b2f995c124944caad4506ade9"
-    },
-    {
-      "path": "crypto_trading/strategies/brain_alpha_strategy.py",
-      "size_bytes": 12515,
-      "sha256": "762d9cc2bc2cc43c4c93de71aacc85674de60889ff3417ffe59f76a446a51d04"
-    },
-    {
-      "path": "crypto_trading/strategies/ml_strategy.py",
-      "size_bytes": 3412,
-      "sha256": "bdcdbb98d26bc893bc42c2b8d75d7271edcc5de1d4d1ad97b20891ece5f6075d"
-    },
-    {
-      "path": "crypto_trading/strategies/perp_carry_basis_strategy.py",
-      "size_bytes": 5839,
-      "sha256": "9877eca73ad21438207d952ef57a4bb27cdc4e8d59c00cf97e2f4ff3279de919"
-    },
-    {
-      "path": "crypto_trading/strategies/rl_strategy.py",
-      "size_bytes": 4816,
-      "sha256": "d4b32bb3f62abe3e639cd16a8854b38555979ff4dd89430e9b4d77be47d4b7d5"
-    },
-    {
-      "path": ".github/workflows/brain_miner.yml",
-      "size_bytes": 1959,
-      "sha256": "6a8e891b84ee4e36aedc1e00bc9035606ed42586f6029eaccc15520e815855f5"
-    },
-    {
-      "path": ".github/workflows/future-offline-ci.yml",
-      "size_bytes": 671,
-      "sha256": "c8cb54c42dbd3e31bc0fe237e5d7bd472409985937bc3068a8849b56ec950e4a"
+      "path": "worldquant_brain/simulation_budget.py",
+      "size_bytes": 3935,
+      "sha256": "a82fc65aa1da98ab0c404a5851a8422fc49fb2276ed7a0ad6afcfdb157aa7b03"
     }
   ]
 }
