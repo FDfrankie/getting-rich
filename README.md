@@ -78,7 +78,7 @@
 │       ├── crypto_ppo_agent.pt
 │       └── taiwan_stock_ranker.joblib
 │
-├── tests/                         # 🧪 單元測試與嚴格回歸審計套件 (28 Tests)
+├── tests/                         # 🧪 單元測試與嚴格回歸審計套件 (123+ Offline Tests)
 │   ├── test_architectural_upgrades.py # 交易所持倉同調、熔斷、流動性守護測試
 │   ├── test_no_lookahead_audit.py     # 嚴格防未來函數檢驗、5日隔離期審計
 │   ├── test_taiwan_stock_scoring.py   # 台股標準化評分 (0-100) 與透明度測試
@@ -209,3 +209,15 @@ python taiwan_stock/scheduler.py
 4. **代碼規範**：
    - 保持 Python 程式碼具備完整的 Type Hints（型別標註）與繁體中文 Docstring 註解。
    - 新增策略或模型請編寫對應之單元測試至 `tests/` 並通過測試。
+
+---
+
+## 🧠 WorldQuant BRAIN & IQC 2026 Alpha 工廠架構 (`worldquant_brain/`)
+
+- **Objective-aware 與優先級矩陣**：`optimization_policy.py`、`objective_aware_scheduler.py`、`improvement_priority.py`（P0–P6 分級、ExpectedYieldPerMinute 排序）。
+- **IQC 2026 三層評分與每日規劃**：`iqc_scoring.py`（Hard Gates、100 分 Candidate Score、20 分 Timing Score、每日 1–3 條且同家族限 1 條的 `plan_daily_submissions`）。
+- **PnL 跳變診斷與四層 Turnover**：`pnl_jump_scoring.py`（NaN 切換、快速變化、權重集中、市場曝險、Regime 失敗、Backfill 過期與多訊號過擬合診斷；Delay 0 Sharpe > 2.0 / Delay 1 > 1.25）。
+- **PnL 導向相關性與中性化消融**：`correlation_evidence.py`（區分 `SELF` / `PROD` / `INNER` / `D0_D1` / `PARENT_CHILD` 與代理指標）、`neutralization.py`（Expression vs Setting 層分離與多目標消融）。
+- **DSR 多重測試校正與局部快篩**：`trial_registry_dsr.py`、`local_cs_screener.py`、`alpha_yield_booster.py`（支援 `IQC_ENABLE_DELAY0=true`、`IQC_USE_TEST_PERIOD=true`）。
+- **SQL Migrations (`migrations/`)**：`006_research_evidence_repository.sql`、`007_objective_aware_optimization.sql`、`008_iqc_scoring.sql`、`009_correlation_evidence.sql`。
+- **批次評分 CLI**：`python -m scripts.score_alpha_candidates <檔案或資料夾> --pretty`

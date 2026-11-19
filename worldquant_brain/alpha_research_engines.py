@@ -286,10 +286,24 @@ class FormulaMCTSSearch:
     )
     NEUTRALIZATIONS: tuple[str, ...] = ("subindustry", "industry")
 
-    def __init__(self, exploration_weight: float = 1.1) -> None:
+    def __init__(self, exploration_weight: float = 1.1, subtree_avoidance_threshold: int = 4) -> None:
         self.exploration_weight = float(exploration_weight)
+        self.subtree_avoidance_threshold = max(2, int(subtree_avoidance_threshold))
         self.visits: dict[tuple[str, str, str], int] = {}
         self.rewards: dict[tuple[str, str, str], float] = {}
+        self.subtree_counts: dict[str, int] = {}
+        self.subtree_rewards: dict[str, float] = {}
+
+    def subtree_penalty(self, branch: tuple[str, str, str]) -> float:
+        key = f"{branch[1]}:{branch[2]}"
+        cnt = self.subtree_counts.get(key, 0)
+        if cnt < self.subtree_avoidance_threshold:
+            return 0.0
+        avg_r = self.subtree_rewards.get(key, 0.0) / max(1, cnt)
+        if avg_r >= 0.65:
+            return 0.0
+        # Frequent low-reward subtree avoidance (preserves small exploration floor)
+        return min(0.45, 0.08 * (cnt - self.subtree_avoidance_threshold + 1))
 
     def select_branch(self, domain: str) -> tuple[str, str, str]:
         branches = [(domain, t, n) for t in self.TRANSFORMS for n in self.NEUTRALIZATIONS]
@@ -302,7 +316,7 @@ class FormulaMCTSSearch:
         for b in branches:
             v = self.visits[b]
             q = self.rewards[b] / v
-            uct = q + self.exploration_weight * math.sqrt(math.log(max(1, total_v)) / v)
+            uct = q + self.exploration_weight * math.sqrt(math.log(max(1, total_v)) / v) - self.subtree_penalty(b)
             if uct > best_uct:
                 best_uct = uct
                 best_b = b
@@ -311,3 +325,6 @@ class FormulaMCTSSearch:
     def backpropagate(self, branch: tuple[str, str, str], reward: float) -> None:
         self.visits[branch] = self.visits.get(branch, 0) + 1
         self.rewards[branch] = self.rewards.get(branch, 0.0) + float(reward)
+        key = f"{branch[1]}:{branch[2]}"
+        self.subtree_counts[key] = self.subtree_counts.get(key, 0) + 1
+        self.subtree_rewards[key] = self.subtree_rewards.get(key, 0.0) + float(reward)

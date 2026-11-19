@@ -110,9 +110,9 @@ def test_batch_c_utility_v1_daily_top2_80_20_and_score_attribution(tmp_path: Pat
 
     # Daily Top-2 selection retains candidate 3 as pending and rejects duplicates
     cands = [
-        {"alpha_id": "A_best", "expression_hash": "e1", "sharpe": 2.0, "fitness": 1.5, "turnover": 0.2, "margin_bps": 20.0, "self_correlation": 0.15, "is_check_status": "PASS", "brain_simulation_id": "s1"},
-        {"alpha_id": "B_second", "expression_hash": "e2", "sharpe": 1.7, "fitness": 1.3, "turnover": 0.22, "margin_bps": 16.0, "self_correlation": 0.20, "is_check_status": "PASS", "brain_simulation_id": "s2"},
-        {"alpha_id": "C_third", "expression_hash": "e3", "sharpe": 1.4, "fitness": 1.1, "turnover": 0.25, "margin_bps": 12.0, "self_correlation": 0.25, "is_check_status": "PASS", "brain_simulation_id": "s3"},
+        {"alpha_id": "A_best", "expression_hash": "e1", "sharpe": 2.0, "fitness": 1.5, "turnover": 0.2, "margin_bps": 20.0, "self_correlation": 0.15, "is_check_status": "PASS", "brain_simulation_id": "s1", "simulation_id": "s1", "metrics_source": "WORLDQUANT_BRAIN", "max_instrument_weight": 0.05, "weight_test_passed": True, "sub_universe_passed": True, "bias_test_passed": True},
+        {"alpha_id": "B_second", "expression_hash": "e2", "sharpe": 1.7, "fitness": 1.3, "turnover": 0.22, "margin_bps": 16.0, "self_correlation": 0.20, "is_check_status": "PASS", "brain_simulation_id": "s2", "simulation_id": "s2", "metrics_source": "WORLDQUANT_BRAIN", "max_instrument_weight": 0.05, "weight_test_passed": True, "sub_universe_passed": True, "bias_test_passed": True},
+        {"alpha_id": "C_third", "expression_hash": "e3", "sharpe": 1.4, "fitness": 1.1, "turnover": 0.25, "margin_bps": 12.0, "self_correlation": 0.25, "is_check_status": "PASS", "brain_simulation_id": "s3", "simulation_id": "s3", "metrics_source": "WORLDQUANT_BRAIN", "max_instrument_weight": 0.05, "weight_test_passed": True, "sub_universe_passed": True, "bias_test_passed": True},
         {"alpha_id": "D_dup", "expression_hash": "e4", "duplicate_expression": True, "sharpe": 2.4, "fitness": 1.9},
     ]
     batch = select_daily_candidates(cands, top_k=2, formal_submission_count=0)
@@ -127,7 +127,20 @@ def test_batch_c_utility_v1_daily_top2_80_20_and_score_attribution(tmp_path: Pat
     assert out["retained_pending_ids"] == ["C_third"]
 
     ds = DirectSubmitService(lambda aid: {"success": True, "status": "SUBMITTED"})
-    d_res = ds.submit_existing_alpha({"brain_alpha_id": "WpX123", "status": "BRAIN_COMPLETE"})
+    d_res = ds.submit_existing_alpha({
+        "brain_alpha_id": "WpX123",
+        "simulation_id": "sim_wpx123",
+        "status": "BRAIN_COMPLETE",
+        "metrics_source": "WORLDQUANT_BRAIN",
+        "sharpe": 1.8,
+        "fitness": 1.3,
+        "turnover": 0.2,
+        "self_correlation": 0.25,
+        "max_instrument_weight": 0.05,
+        "weight_test_passed": True,
+        "sub_universe_passed": True,
+        "bias_test_passed": True,
+    })
     assert d_res["success"] is True and d_res["retained_in_vault"] is True
 
     # Score attribution & DST-aware New York refresh
@@ -373,7 +386,9 @@ def test_gates_m1_to_m10_triple_barrier_purging_oof_lambdarank_and_dsr_pbo(tmp_p
     assert dsr_res["dsr_prob"] >= 0.90 and dsr_res["pbo"] <= 0.30
 
 
-def test_brain_challenge_score_fetch_and_10k_progress(tmp_path: Path) -> None:
+def test_brain_challenge_score_fetch_and_10k_progress(tmp_path: Path, monkeypatch) -> None:
+    for _env_key in ("BRAIN_EMAIL", "BRAIN_USERNAME", "BRAIN_PASSWORD"):
+        monkeypatch.delenv(_env_key, raising=False)
     from worldquant_brain.brain_client import WorldQuantBrainClient
     from worldquant_brain.score_tracker import ScoreTracker, parse_score_payload
     from worldquant_brain.score_attribution import estimate_days_to_10k

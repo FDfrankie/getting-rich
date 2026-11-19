@@ -118,49 +118,47 @@ class CryptoDataLoader:
             ccxt_err = e
 
         # 1.5 本地 CSV 快取降級鏈 (crypto_trading/data_cache/*_{timeframe}_*.csv -> DataSource.CACHE)
-        _binance_mocked = ccxt is not None and hasattr(getattr(ccxt, "binance", None), "_mock_name")
-        if not _binance_mocked:
-            try:
-                clean_sym = target_symbol.replace("/", "_").replace(":", "_").upper()
-                candidates = sorted(
-                    Path_list
-                    for Path_list in [
-                        os.path.join(self.cache_dir, f"{clean_sym}_{target_timeframe}_180d.csv"),
-                        os.path.join(self.cache_dir, f"{clean_sym}_{target_timeframe}.csv"),
-                    ]
-                    if os.path.exists(Path_list)
-                )
-                if not candidates and os.path.isdir(self.cache_dir):
-                    prefix = f"{clean_sym}_{target_timeframe}_"
-                    for fname in sorted(os.listdir(self.cache_dir)):
-                        if fname.startswith(prefix) and fname.endswith(".csv"):
-                            candidates.append(os.path.join(self.cache_dir, fname))
-                            break
-                if candidates:
-                    cdf = pd.read_csv(candidates[0])
-                    ts_col = "timestamp" if "timestamp" in cdf.columns else ("datetime" if "datetime" in cdf.columns else None)
-                    if ts_col:
-                        cdf[ts_col] = pd.to_datetime(cdf[ts_col], utc=True)
-                        cdf.set_index(ts_col, inplace=True)
-                    cdf.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
-                    req_cols = ["Open", "High", "Low", "Close", "Volume"]
-                    if all(c in cdf.columns for c in req_cols) and len(cdf) >= 20:
-                        cdf = cdf[req_cols].tail(limit)
-                        if validate:
-                            ok, reason = validate_ohlcv(cdf, timeframe=target_timeframe, now_utc=now_utc)
-                            if not ok:
-                                raise DataQualityError(f"Cached OHLCV failed data quality check: {reason}")
-                        return OHLCVResult(
-                            df=cdf,
-                            source=DataSource.CACHE,
-                            symbol=target_symbol,
-                            timeframe=target_timeframe,
-                            is_synthetic=False,
-                        )
-            except DataQualityError:
-                raise
-            except Exception:
-                pass
+        try:
+            clean_sym = target_symbol.replace("/", "_").replace(":", "_").upper()
+            candidates = sorted(
+                Path_list
+                for Path_list in [
+                    os.path.join(self.cache_dir, f"{clean_sym}_{target_timeframe}_180d.csv"),
+                    os.path.join(self.cache_dir, f"{clean_sym}_{target_timeframe}.csv"),
+                ]
+                if os.path.exists(Path_list)
+            )
+            if not candidates and os.path.isdir(self.cache_dir):
+                prefix = f"{clean_sym}_{target_timeframe}_"
+                for fname in sorted(os.listdir(self.cache_dir)):
+                    if fname.startswith(prefix) and fname.endswith(".csv"):
+                        candidates.append(os.path.join(self.cache_dir, fname))
+                        break
+            if candidates:
+                cdf = pd.read_csv(candidates[0])
+                ts_col = "timestamp" if "timestamp" in cdf.columns else ("datetime" if "datetime" in cdf.columns else None)
+                if ts_col:
+                    cdf[ts_col] = pd.to_datetime(cdf[ts_col], utc=True)
+                    cdf.set_index(ts_col, inplace=True)
+                cdf.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
+                req_cols = ["Open", "High", "Low", "Close", "Volume"]
+                if all(c in cdf.columns for c in req_cols) and len(cdf) >= 20:
+                    cdf = cdf[req_cols].tail(limit)
+                    if validate:
+                        ok, reason = validate_ohlcv(cdf, timeframe=target_timeframe, now_utc=now_utc)
+                        if not ok:
+                            raise DataQualityError(f"Cached OHLCV failed data quality check: {reason}")
+                    return OHLCVResult(
+                        df=cdf,
+                        source=DataSource.CACHE,
+                        symbol=target_symbol,
+                        timeframe=target_timeframe,
+                        is_synthetic=False,
+                    )
+        except DataQualityError:
+            raise
+        except Exception:
+            pass
 
         # 2. 備援或測試模式判定
         if not allow_synthetic:

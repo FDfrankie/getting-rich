@@ -66,7 +66,7 @@ class TestNoveltySurveyAndBudget12Gates(unittest.TestCase):
 
     # 6. Same blueprint family only runs 1 baseline at a time
     def test_06_single_baseline_per_family(self):
-        budget = ThreeMinuteSimulationBudget(minimum_interval_seconds=0.0, max_pending=3)
+        budget = ThreeMinuteSimulationBudget(minimum_interval_seconds=0.0, max_pending=3, allow_multiple_per_family=False)
         c1 = Candidate("C1", "rank(operating_cashflow)", "ANALYST_REV", "ANALYST", local_corr=0.2)
         c2 = Candidate("C2", "rank(eps_consensus_mean)", "ANALYST_REV", "ANALYST", local_corr=0.2)
         self.assertTrue(budget.admit(c1).admitted)

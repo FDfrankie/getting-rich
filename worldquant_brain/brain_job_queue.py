@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -15,6 +16,8 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class BrainJobStatus(str, Enum):
@@ -183,6 +186,8 @@ class BrainJobQueue:
         self._effective_workers: int = self.num_workers
         self._init_persistence()
         self._restore_jobs()
+        if self._pending_queue and not getattr(self.brain_client, "offline_mode", False):
+            self._start_worker()
         if autostart:
             self.start()
 
@@ -278,8 +283,8 @@ class BrainJobQueue:
 
         try:
             execute_with_sqlite_retry(self.db_path, _op)
-        except sqlite3.OperationalError:
-            pass
+        except sqlite3.OperationalError as exc:
+            logger.warning("SQLite persistence failed for job %s (continuing in-memory): %s", job.job_id, exc)
 
     def _restore_jobs(self) -> None:
         if not self.db_path or self.db_path == ":memory:" or not os.path.exists(self.db_path):
@@ -335,7 +340,8 @@ class BrainJobQueue:
                     else:
                         self._pending_queue.append(job.job_id)
                 self._jobs[job.job_id] = job
-                self._key_to_job_id[job.simulation_key] = job.job_id
+                if job.status not in (BrainJobStatus.FAILED, BrainJobStatus.TIMEOUT, BrainJobStatus.AUTH_FAILED):
+                    self._key_to_job_id[job.simulation_key] = job.job_id
         except Exception:
             pass
         finally:
@@ -363,8 +369,10 @@ class BrainJobQueue:
         with self._lock:
             if key in self._key_to_job_id:
                 existing_id = self._key_to_job_id[key]
-                job = self._jobs[existing_id]
-                return job, False
+                job = self._jobs.get(existing_id)
+                if job is not None and job.status not in (BrainJobStatus.FAILED, BrainJobStatus.TIMEOUT, BrainJobStatus.AUTH_FAILED):
+                    return job, False
+                self._key_to_job_id.pop(key, None)
 
         cached = self._lookup_simulation_cache(key)
         if cached is not None:

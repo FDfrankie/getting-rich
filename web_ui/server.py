@@ -1,10 +1,13 @@
+import hashlib
 import json
 import os
+from pathlib import Path
 import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import numpy as np
 try:
     from zoneinfo import ZoneInfo
     _TAIPEI_TZ = ZoneInfo("Asia/Taipei")
@@ -95,19 +98,30 @@ class QuantAppContext:
         self.alpha_vault = AlphaVault()
         self.alpha_vault.seed_initial_verified_alphas()
         self.alpha_experiments = AlphaExperimentStore(self.alpha_vault.db_path)
-        self.sim_budget = ThreeMinuteSimulationBudget(
-            minimum_interval_seconds=float(os.getenv('BRAIN_MINING_COOLDOWN_SEC', '0') or '0'),
-            max_pending=int(os.getenv('BRAIN_QUEUE_TARGET_DEPTH', '10') or '10'),
-            allow_same_family=True,
-        )
+        self.sim_budget = ThreeMinuteSimulationBudget(minimum_interval_seconds=float(os.getenv('BRAIN_MINING_COOLDOWN_SEC', '0') or '0'), max_pending=int(os.getenv('BRAIN_QUEUE_TARGET_DEPTH', '10') or '10'), allow_multiple_per_family=True)
         self.brain_scheduler = BrainDailyScheduler(self.alpha_vault.db_path, int(os.getenv("BRAIN_DAILY_FLUSH_HOUR", "22")))
         self.manual_brain_queue = ManualPriorityQueue(self.alpha_vault.db_path)
         self.brain_score_tracker = ScoreTracker(self.alpha_vault.db_path)
         self.research_factory = AlphaResearchFactoryService(self.alpha_vault.db_path)
         try:
+            from worldquant_brain.trial_registry_dsr import TrialRegistry
+            self.trial_registry = TrialRegistry(self.alpha_vault.db_path)
+        except Exception:
+            self.trial_registry = None
+        try:
+            from worldquant_brain.objective_aware_scheduler import ObjectiveLaneBudget
+            self.objective_lane_budget = ObjectiveLaneBudget()
+            self.objective_lane_budget.validate()
+        except Exception:
+            self.objective_lane_budget = None
+        try:
             from worldquant_brain.evidence_repository import EvidenceRepository
             self.evidence_repo = EvidenceRepository(self.alpha_vault.db_path)
             self.evidence_repo.migrate()
+            _m007 = Path(__file__).resolve().parent.parent / "migrations" / "007_objective_aware_optimization.sql"
+            if _m007.exists():
+                with self.evidence_repo.connection() as _c007:
+                    _c007.executescript(_m007.read_text(encoding="utf-8"))
         except Exception:
             self.evidence_repo = None
         self.audit_log = AuditLog(self.alpha_vault.db_path)
@@ -493,16 +507,33 @@ class QuantAppContext:
 
     def _release_sim_budget(self, job) -> None:
         try:
-            cid = str(getattr(job, "expression", "") or "")[:40]
+            import hashlib as _hl
+            expr = str(getattr(job, "expression", "") or "").strip()
+            cid = getattr(job, "_budget_cid", None) or _hl.sha256(expr.encode("utf-8")).hexdigest()[:16]
             dom = str(getattr(job, "domain", "") or "FUNDAMENTAL_CF_EV")
             if hasattr(self, "sim_budget") and self.sim_budget is not None:
                 self.sim_budget.release(cid, dom)
+                if expr:
+                    self.sim_budget.release(expr[:40], dom)
         except Exception:
             pass
 
     def _on_brain_job_failed(self, job):
         """當 WorldQuant BRAIN 模擬失敗時，記錄至經驗庫並從 Vault 清單移除不佔版面"""
         self._release_sim_budget(job)
+        if getattr(self, "trial_registry", None) is not None:
+            try:
+                import hashlib as _hl
+                _eh = _hl.sha256((getattr(job, "expression", "") or "").strip().encode("utf-8")).hexdigest()
+                self.trial_registry.record_trial(
+                    expression_hash=_eh,
+                    settings_hash=str(getattr(job, "simulation_key", _eh)),
+                    blueprint_id=str(getattr(job, "domain", "DEFAULT")),
+                    metrics={"status": "FAILED"},
+                    accepted=False,
+                )
+            except Exception:
+                pass
         try:
             self.alpha_experiments.complete_experiment(
                 job.job_id,
@@ -583,8 +614,7 @@ class QuantAppContext:
             margin = m.get("margin")
             checks_passed = m.get("checks_passed", True)
             failed_checks = m.get("failed_checks") or []
-            if hasattr(self, "sim_budget"):
-                self.sim_budget.release(job.job_id, getattr(job, "domain", ""))
+
             alpha_id = job.alpha_id
             vid = getattr(job, "vault_id", None)
             if sharpe is None or fitness is None or not alpha_id:
@@ -668,6 +698,25 @@ class QuantAppContext:
                 except Exception:
                     pass
             self.alpha_miner.total_accepted += 1
+            if getattr(self, "trial_registry", None) is not None:
+                try:
+                    import hashlib as _hl
+                    _eh = _hl.sha256((job.expression or "").strip().encode("utf-8")).hexdigest()
+                    self.trial_registry.record_trial(
+                        expression_hash=_eh,
+                        settings_hash=str(getattr(job, "simulation_key", _eh)),
+                        blueprint_id=str(getattr(job, "domain", "DEFAULT")),
+                        metrics={
+                            "status": "BRAIN_COMPLETE",
+                            "sharpe": float(sharpe),
+                            "fitness": float(fitness),
+                            "turnover": float(turnover),
+                            "margin": margin,
+                        },
+                        accepted=True,
+                    )
+                except Exception:
+                    pass
             # Only direct manual auto_submit jobs submit immediately; background mined alphas enter the daily pool so only the highest-profitability top 2 are submitted per day.
             should_try_submit = bool(getattr(job, "auto_submit", False)) and not bool(getattr(job, "simulation_only", True))
 
@@ -692,11 +741,38 @@ class QuantAppContext:
                         return
                     self.add_log(f"ℹ️ [BRAIN 模擬成功但未送出] Alpha {alpha_id}: {sub_res.get('status')} ({sub_res.get('error')})")
 
-            # 模擬成功但尚未送出 -> 先檢核自相關，過門檻才存入清單與每日候選池；超標則立即啟動去相關 Near-Miss 微調
+            # 模擬成功但尚未送出 -> 先檢核自相關並保存證據，過門檻才存入清單與每日候選池；超標則立即啟動去相關 Near-Miss 微調
             if not submitted_ok:
                 corr_info = self.brain_client.fetch_self_correlation(str(alpha_id))
                 self_corr_val = corr_info.get("self_correlation")
                 corr_passed = corr_info.get("passed") is not False
+                if self_corr_val is not None:
+                    try:
+                        from worldquant_brain.correlation_evidence import (
+                            AlphaCorrelationEvidence,
+                            CorrelationEvidenceRepository,
+                            CorrelationSource,
+                            CorrelationType,
+                        )
+                        CorrelationEvidenceRepository(self.alpha_vault.db_path).save_evidence(
+                            AlphaCorrelationEvidence(
+                                candidate_alpha_id=str(alpha_id),
+                                compared_alpha_id="OWN_POOL",
+                                correlation_type=CorrelationType.SELF,
+                                correlation_source=CorrelationSource.BRAIN_SELF_CORRELATION,
+                                correlation_value=max(-1.0, min(1.0, float(self_corr_val))),
+                                candidate_delay=int((job.settings or {}).get("delay", 1) or 1),
+                                compared_delay=None,
+                                pnl_period_start=None,
+                                pnl_period_end=None,
+                                observations=None,
+                                official=True,
+                                checked_at=datetime.now(timezone.utc).isoformat(),
+                            ),
+                            raw_response=corr_info,
+                        )
+                    except Exception:
+                        pass
                 try:
                     self.alpha_miner.record_domain_feedback(
                         getattr(job, "domain", "FUNDAMENTAL_CF_EV"),
@@ -722,6 +798,7 @@ class QuantAppContext:
                     if vid is not None:
                         self.alpha_vault.delete_alpha(int(vid))
                     return
+
                 if vid is not None:
                     self.alpha_vault.delete_alpha(int(vid))
                 self.alpha_vault.save_alpha(
@@ -738,11 +815,20 @@ class QuantAppContext:
                     is_check_status="PASS" if checks_passed else "FAIL",
                     self_correlation=float(self_corr_val) if self_corr_val is not None else None,
                 )
-                if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
+                if not checks_passed:
+                    self.add_log(f"ℹ️ [BRAIN 未排入送出池] Alpha {alpha_id} 未通過 IS-Checks，僅留存觀察")
+                elif os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
                     self.brain_client.stage_candidate_for_daily_selection(
                         str(alpha_id), job.expression, float(sharpe), float(fitness), float(turnover), float(margin or 0.0),
                         self_correlation=self_corr_val,
                     )
+                    _flush_hr = int(os.getenv("BRAIN_DAILY_FLUSH_HOUR", "22") or "22")
+                    _max_daily = int(os.getenv("BRAIN_MAX_DAILY_SUBMISSIONS", "2") or "2")
+                    _tp_now = _now_taipei()
+                    self.add_log(f"📅 [BRAIN 已排入每日擇優送出池] Alpha {alpha_id} (將於每日 {_flush_hr:02d}:00 台北時間擇優送出)")
+                    if _tp_now.hour >= _flush_hr and self.brain_client.get_daily_submission_count() < _max_daily:
+                        _flushed = self.brain_client.flush_daily_candidates(max_daily_submissions=_max_daily)
+                        self._handle_daily_flush_results(_flushed, label="BRAIN 補齊每日配額送出")
                 if checks_passed and corr_passed and float(sharpe) >= 1.45 and float(fitness) >= 1.10:
                     try:
                         from worldquant_brain.alpha_research_engines import warm_start_structural_mutate
@@ -796,6 +882,11 @@ class QuantAppContext:
                     cooldown_sec = float(os.getenv('BRAIN_MINING_COOLDOWN_SEC', '0') or '0')
                     last_mine_ts = getattr(self, "_last_brain_mine_ts", 0.0)
                     _fill_iters = 0
+                    if self.brain_job_queue.queue_depth() > 0 and not self.brain_job_queue.worker_alive():
+                        self.brain_job_queue._start_worker()
+                    if self.brain_job_queue.queue_depth() == 0 and getattr(self.sim_budget, "_pending_ids", None):
+                        self.sim_budget._pending_ids.clear()
+                        self.sim_budget._active_families.clear()
                     from worldquant_brain.alpha_research_engines import estimate_local_structural_correlation
                     existing_completed_exprs = [
                         str(a.get("expression") or "")
@@ -807,9 +898,10 @@ class QuantAppContext:
                         cand = self.alpha_miner.think_and_select_best_candidate(batch_size=12)
                         dom = str(cand.get("domain") or "FUNDAMENTAL_CF_EV")
                         local_corr, shares_raw = estimate_local_structural_correlation(cand["expression"], existing_completed_exprs)
+                        _cid = hashlib.sha256(str(cand["expression"]).strip().encode("utf-8")).hexdigest()[:16]
                         budget_dec = self.sim_budget.admit(
                             BudgetCandidate(
-                                candidate_id=cand["expression"][:40],
+                                candidate_id=_cid,
                                 expression=cand["expression"],
                                 blueprint_family=dom,
                                 data_domain=dom,
@@ -824,6 +916,7 @@ class QuantAppContext:
                                 cand["expression"], settings=sim_settings, priority=20, source="AUTO_MINING", simulation_only=True
                             )
                             if is_new:
+                                job._budget_cid = _cid
                                 job.domain = dom
                                 job.mcts_branch = cand.get("mcts_branch")
                                 self._last_brain_mine_ts = time.time()
@@ -831,12 +924,15 @@ class QuantAppContext:
                                 self.alpha_miner.total_mined += 1
                                 self.add_log(f"🧠 [BRAIN 慢工精選送測] {cand['name']} (域={dom}, 本地評分={cand.get('local_quality_score')}, 預估Corr={local_corr}) -> Job {job.job_id}")
                             else:
-                                self.sim_budget.release(cand["expression"][:40], dom)
+                                self.sim_budget.release(_cid, dom)
                         else:
+                            _now_m = time.time()
+                            if _now_m - getattr(self, "_last_budget_skip_log_ts", 0.0) > 60.0:
+                                self._last_budget_skip_log_ts = _now_m
+                                self.add_log(f"ℹ️ [BRAIN 挖礦節流] 候選未進佇列: {budget_dec.reason} (queue={self.brain_job_queue.queue_depth()})")
                             break
                     if os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "false").lower() == "true":
-                        from datetime import datetime, timedelta, timezone
-                        taipei_now = datetime.now(timezone(timedelta(hours=8)))
+                        taipei_now = _now_taipei()
                         max_daily = int(os.getenv("BRAIN_MAX_DAILY_SUBMISSIONS", "2") or "2")
                         claim = self.brain_scheduler.claim_due_run(worker_id=f"web-{os.getpid()}", now=taipei_now)
                         if claim.acquired:
@@ -920,6 +1016,9 @@ class QuantAppContext:
                             if not rec["in_sync"]:
                                 self.add_log(f"🔄 Bitunix 持倉同調: {rec['message']}")
                                 self.active_bot.position = rec["remote_position"]
+                            self._run_reconciliation_sync()
+                        else:
+                            self._run_reconciliation_sync()
 
                     # 每 30 秒記錄一次常駐心跳
                     if int(time.time()) % 30 < 5:
@@ -931,32 +1030,51 @@ class QuantAppContext:
             time.sleep(5)
 
     def _run_reconciliation_sync(self):
-        """執行即時交易所對帳並更新 ReconciliationService 狀態，讓 /api/trading/snapshot 維持 HEALTHY"""
+        """執行即時交易所對帳並更新 ReconciliationService 狀態（支援多幣種與幣對格式正規化）"""
         try:
+            from crypto_trading.reconciliation_service import _normalize_recon_symbol
+            mgr = getattr(self, "bot_manager", None)
+            all_bots = list(mgr.bots.values()) if mgr is not None and getattr(mgr, "bots", None) else []
+            if self.active_bot not in all_bots:
+                all_bots.insert(0, self.active_bot)
+
             if self.execution_mode == "BINANCE_TESTNET" and not getattr(self.testnet_client, "mock_mode", True) and getattr(self.testnet_client, "is_connected", False):
                 bal = self.testnet_client.fetch_balance()
                 rem_pos = self.testnet_client.fetch_positions() or []
                 oo_fn = getattr(self.testnet_client, "fetch_open_orders", None)
                 rem_orders = (oo_fn(self.active_bot.symbol) or []) if callable(oo_fn) else []
                 rem_eq = float(bal.get("total_equity") or 0.0) if bal.get("total_equity") is not None else float(self.active_bot.balance_usdt)
-                self.active_bot.balance_usdt = rem_eq
-                rm = getattr(self.active_bot, "risk_manager", None)
-                if rm is not None and rem_eq > 0 and not getattr(self, "_risk_capital_anchored", False):
-                    rm.initial_capital = rem_eq
-                    rm.peak_capital = rem_eq
-                    rm.current_capital = rem_eq
-                    rm.is_halted = False
-                    self._risk_capital_anchored = True
-                # 同步本地持倉與遠端持倉，避免初始啟動時產生持倉或餘額 drift
-                target_pos = 0.0
+
+                # 將遠端持倉轉為正規化 map (例如 BTCUSDT -> BTC/USDT)
+                remote_map: dict[str, float] = {}
                 for rp in rem_pos:
-                    if rp.get("symbol") == self.active_bot.symbol:
-                        amt = float(rp.get("contracts", 0.0))
-                        side = str(rp.get("side", "LONG")).upper()
-                        target_pos = amt if side == "LONG" else -amt
-                        break
-                self.active_bot.position = target_pos
-                loc_pos = {self.active_bot.symbol: target_pos} if target_pos else {}
+                    nsym = _normalize_recon_symbol(str(rp.get("symbol", "")))
+                    amt = float(rp.get("contracts", 0.0))
+                    side = str(rp.get("side", "LONG")).upper()
+                    if nsym and abs(amt) > 0:
+                        remote_map[nsym] = amt if side == "LONG" else -amt
+
+                loc_pos: dict[str, float] = {}
+                for b in all_bots:
+                    b.balance_usdt = rem_eq
+                    rm = getattr(b, "risk_manager", None)
+                    if rm is not None and rem_eq > 0 and not getattr(b, "_risk_capital_anchored", False):
+                        rm.initial_capital = rem_eq
+                        rm.peak_capital = rem_eq
+                        rm.current_capital = rem_eq
+                        rm.is_halted = False
+                        b._risk_capital_anchored = True
+                    bsym = _normalize_recon_symbol(getattr(b, "symbol", "BTC/USDT"))
+                    target_pos = remote_map.get(bsym, 0.0)
+                    b.position = target_pos
+                    if abs(target_pos) > 0:
+                        loc_pos[bsym] = target_pos
+
+                # 若遠端有非目前 bot_manager 管理的幣種殘餘倉位，記錄警示但不阻斷已管理幣種對帳
+                for rsym, ramt in remote_map.items():
+                    if rsym not in loc_pos and abs(ramt) > 1e-4:
+                        loc_pos[rsym] = ramt
+
                 self.reconciliation_service.reconcile(
                     local_positions=loc_pos,
                     remote_positions=rem_pos,
@@ -967,10 +1085,14 @@ class QuantAppContext:
                 )
             else:
                 eq = float(getattr(self.active_bot, "balance_usdt", 0.0) or 0.0)
-                pos = float(getattr(self.active_bot, "position", 0.0) or 0.0)
-                sym = getattr(self.active_bot, "symbol", "BTC/USDT")
-                loc_pos = {sym: pos} if pos else {}
-                rem_pos = [{"symbol": sym, "contracts": abs(pos), "side": "LONG" if pos >= 0 else "SHORT"}] if pos else []
+                loc_pos = {}
+                rem_pos = []
+                for b in all_bots:
+                    pos = float(getattr(b, "position", 0.0) or 0.0)
+                    sym = _normalize_recon_symbol(getattr(b, "symbol", "BTC/USDT"))
+                    if abs(pos) > 0:
+                        loc_pos[sym] = pos
+                        rem_pos.append({"symbol": sym, "contracts": abs(pos), "side": "LONG" if pos >= 0 else "SHORT"})
                 self.reconciliation_service.reconcile(
                     local_positions=loc_pos,
                     remote_positions=rem_pos,
@@ -1055,6 +1177,219 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             else:
                 self.send_error(404, "Handbook not found")
                 return
+
+        # API: IQC 2026 候選 Alpha 評分列表 (GET /api/brain/iqc/candidates)
+        if path == "/api/brain/iqc/candidates":
+            from worldquant_brain.iqc_scoring import (
+                IQC_POLICY_VERSION,
+                IQCScoringRepository,
+                build_iqc_input_from_trusted_record,
+                evaluate_iqc_candidate,
+            )
+            vault_rows = APP_STATE.alpha_vault.list_alphas()
+            repo = IQCScoringRepository(APP_STATE.alpha_vault.db_path)
+            reports = []
+            for row in vault_rows:
+                inp = build_iqc_input_from_trusted_record(dict(row))
+                rep = evaluate_iqc_candidate(inp)
+                repo.save_report_with_audit(rep)
+                reports.append(rep.to_dict())
+            reports.sort(key=lambda x: (x.get("hard_gates_passed", False), x.get("candidate_score", 0.0)), reverse=True)
+            return self._send_json_response({
+                "ok": True,
+                "policy_version": IQC_POLICY_VERSION,
+                "count": len(reports),
+                "candidates": reports,
+            })
+
+        # API: IQC 2026 每日提交規劃 (GET /api/brain/iqc/daily-plan)
+        if path == "/api/brain/iqc/daily-plan":
+            from worldquant_brain.iqc_scoring import (
+                IQC_POLICY_VERSION,
+                build_iqc_input_from_trusted_record,
+                evaluate_iqc_candidate,
+                plan_daily_submissions,
+            )
+            vault_rows = APP_STATE.alpha_vault.list_alphas()
+            reports = [evaluate_iqc_candidate(build_iqc_input_from_trusted_record(dict(row))) for row in vault_rows]
+            selected = plan_daily_submissions(reports, max_daily=3, max_per_family=1)
+            return self._send_json_response({
+                "ok": True,
+                "policy_version": IQC_POLICY_VERSION,
+                "max_daily": 3,
+                "max_per_family": 1,
+                "selected": [r.to_dict() for r in selected],
+            })
+
+        # API: 查詢單一 Alpha 的 IQC 2026 評分與稽核 (GET /api/brain/iqc/candidates/{alpha_id})
+        if path.startswith("/api/brain/iqc/candidates/"):
+            aid = path[len("/api/brain/iqc/candidates/"):].strip("/")
+            if not aid:
+                return self._send_error_json("MISSING_ALPHA_ID", "Alpha ID 未指定", status=400)
+            target = None
+            for row in APP_STATE.alpha_vault.list_alphas():
+                if str(row.get("id")) == aid or str(row.get("brain_alpha_id")) == aid or str(row.get("name")) == f"BRAIN_{aid}":
+                    target = dict(row)
+                    break
+            if target is None:
+                return self._send_error_json("ALPHA_NOT_FOUND", f"找不到 Alpha: {aid}", status=404)
+            from worldquant_brain.iqc_scoring import (
+                IQCScoringRepository,
+                build_iqc_input_from_trusted_record,
+                evaluate_iqc_candidate,
+            )
+            rep = evaluate_iqc_candidate(build_iqc_input_from_trusted_record(target))
+            repo = IQCScoringRepository(APP_STATE.alpha_vault.db_path)
+            audit_id = repo.save_report_with_audit(rep)
+            return self._send_json_response({"ok": True, "audit_id": audit_id, **rep.to_dict()})
+
+        # API: 查詢單一 Alpha 相關性證據 (GET /api/brain/alphas/{id}/correlations 與 /top-correlated)
+        if path.startswith("/api/brain/alphas/") and (path.endswith("/correlations") or path.endswith("/top-correlated")):
+            is_top = path.endswith("/top-correlated")
+            suffix = "/top-correlated" if is_top else "/correlations"
+            aid = path[len("/api/brain/alphas/"):-len(suffix)].strip("/")
+            if not aid:
+                return self._send_error_json("MISSING_ALPHA_ID", "Alpha ID 未指定", status=400)
+            from worldquant_brain.correlation_evidence import CorrelationEvidenceRepository, CorrelationType
+            repo = CorrelationEvidenceRepository(APP_STATE.alpha_vault.db_path)
+            rows = repo.list_for_candidate(
+                aid,
+                correlation_type=CorrelationType.SELF if is_top else None,
+                limit=5 if is_top else 20,
+            )
+            return self._send_json_response({
+                "ok": True,
+                "alpha_id": aid,
+                "count": len(rows),
+                "items": rows,
+            })
+
+        # API: 查詢 D0/D1 配對 PnL 相關性決策 (GET /api/brain/alphas/{id}/delay-pair)
+        if path.startswith("/api/brain/alphas/") and path.endswith("/delay-pair"):
+            aid = path[len("/api/brain/alphas/"):-len("/delay-pair")].strip("/")
+            if not aid:
+                return self._send_error_json("MISSING_ALPHA_ID", "Alpha ID 未指定", status=400)
+            from worldquant_brain.correlation_evidence import CorrelationEvidenceRepository, CorrelationType
+            repo = CorrelationEvidenceRepository(APP_STATE.alpha_vault.db_path)
+            rows = repo.list_for_candidate(aid, correlation_type=CorrelationType.D0_D1, limit=5)
+            return self._send_json_response({
+                "ok": True,
+                "alpha_id": aid,
+                "items": rows,
+            })
+
+        # API: 查詢單一 Alpha 中性化層級與診斷 (GET /api/brain/alphas/{id}/neutralization-ablation)
+        if path.startswith("/api/brain/alphas/") and path.endswith("/neutralization-ablation"):
+            aid = path[len("/api/brain/alphas/"):-len("/neutralization-ablation")].strip("/")
+            if not aid:
+                return self._send_error_json("MISSING_ALPHA_ID", "Alpha ID 未指定", status=400)
+            target = None
+            for row in APP_STATE.alpha_vault.list_alphas():
+                if str(row.get("id")) == aid or str(row.get("brain_alpha_id")) == aid or str(row.get("name")) == f"BRAIN_{aid}":
+                    target = dict(row)
+                    break
+            if target is None:
+                return self._send_error_json("ALPHA_NOT_FOUND", f"找不到 Alpha: {aid}", status=404)
+            from worldquant_brain.neutralization import (
+                NeutralizationConfiguration,
+                NeutralizationLayer,
+                NeutralizationMode,
+                has_effective_final_neutralization,
+            )
+            expr = str(target.get("expression") or "")
+            sim_mode_str = str(target.get("neutralization") or "SUBINDUSTRY").upper()
+            try:
+                sim_mode = NeutralizationMode(sim_mode_str)
+            except ValueError:
+                sim_mode = NeutralizationMode.SUBINDUSTRY
+            gn_count = expr.lower().count("group_neutralize(")
+            outermost = expr.strip().lower().startswith("group_neutralize(")
+            layer = (
+                NeutralizationLayer.BOTH if gn_count > 0 and sim_mode != NeutralizationMode.NONE
+                else NeutralizationLayer.EXPRESSION if gn_count > 0
+                else NeutralizationLayer.SIMULATION_SETTING
+            )
+            cfg = NeutralizationConfiguration(
+                simulation_mode=sim_mode,
+                expression_group_neutralize_count=gn_count,
+                outermost_group_neutralize=outermost,
+                decay=int(target.get("decay") or 0),
+                truncation=float(target.get("truncation") or 0.0),
+                layer=layer,
+            )
+            return self._send_json_response({
+                "ok": True,
+                "alpha_id": aid,
+                "simulation_mode": sim_mode.value,
+                "layer": layer.value,
+                "effective_final_neutralization": has_effective_final_neutralization(cfg),
+                "double_neutralization": gn_count > 0 and sim_mode != NeutralizationMode.NONE,
+            })
+
+        # API: 查詢單一 Alpha PnL 跳變診斷 (GET /api/brain/alphas/{id}/pnl-diagnosis)
+        if path.startswith("/api/brain/alphas/") and path.endswith("/pnl-diagnosis"):
+            aid = path[len("/api/brain/alphas/"):-len("/pnl-diagnosis")].strip("/")
+            if not aid:
+                return self._send_error_json("MISSING_ALPHA_ID", "Alpha ID 未指定", status=400)
+            target = None
+            for row in APP_STATE.alpha_vault.list_alphas():
+                if str(row.get("id")) == aid or str(row.get("brain_alpha_id")) == aid or str(row.get("name")) == f"BRAIN_{aid}":
+                    target = dict(row)
+                    break
+            if target is None:
+                return self._send_error_json("ALPHA_NOT_FOUND", f"找不到 Alpha: {aid}", status=404)
+            from worldquant_brain.pnl_jump_scoring import (
+                build_pnl_jump_input_from_trusted_record,
+                evaluate_pnl_jump,
+            )
+            rep = evaluate_pnl_jump(build_pnl_jump_input_from_trusted_record(target))
+            return self._send_json_response({"ok": True, **rep.to_dict()})
+
+        # API: 查詢單一 Alpha 改進檢查清單 (GET /api/brain/alphas/{id}/improvement-checklist)
+        if path.startswith("/api/brain/alphas/") and path.endswith("/improvement-checklist"):
+            aid = path[len("/api/brain/alphas/"):-len("/improvement-checklist")].strip("/")
+            if not aid:
+                return self._send_error_json("MISSING_ALPHA_ID", "Alpha ID 未指定", status=400)
+            target = None
+            for row in APP_STATE.alpha_vault.list_alphas():
+                if str(row.get("id")) == aid or str(row.get("brain_alpha_id")) == aid or str(row.get("name")) == f"BRAIN_{aid}":
+                    target = dict(row)
+                    break
+            if target is None:
+                return self._send_error_json("ALPHA_NOT_FOUND", f"找不到 Alpha: {aid}", status=404)
+            from worldquant_brain.pnl_jump_scoring import (
+                build_pnl_jump_input_from_trusted_record,
+                evaluate_pnl_jump,
+            )
+            rep = evaluate_pnl_jump(build_pnl_jump_input_from_trusted_record(target))
+            return self._send_json_response({
+                "ok": True,
+                "alpha_id": aid,
+                "checklist_doc": "docs/ALPHA_IMPROVEMENT_CHECKLIST.md",
+                "hard_blockers": list(rep.hard_blockers),
+                "turnover_band": rep.turnover_band.value,
+                "diagnoses": [d.value for d in rep.diagnoses],
+                "actions": [a.to_dict() if hasattr(a, "to_dict") else {"action": a.action, "priority": a.priority.value, "required_validation": list(a.required_validation)} for a in rep.actions],
+                "warnings": list(rep.warnings),
+            })
+
+        # API: 查詢單一 Alpha 改進優先級計畫 (GET /api/brain/alphas/{id}/improvement-plan)
+        if path.startswith("/api/brain/alphas/") and path.endswith("/improvement-plan"):
+            aid = path[len("/api/brain/alphas/"):-len("/improvement-plan")].strip("/")
+            if not aid:
+                return self._send_error_json("MISSING_ALPHA_ID", "Alpha ID 未指定", status=400)
+            target = None
+            for row in APP_STATE.alpha_vault.list_alphas():
+                if str(row.get("id")) == aid or str(row.get("brain_alpha_id")) == aid or str(row.get("name")) == f"BRAIN_{aid}":
+                    target = dict(row)
+                    break
+            if target is None:
+                return self._send_error_json("ALPHA_NOT_FOUND", f"找不到 Alpha: {aid}", status=404)
+            from worldquant_brain.improvement_priority import evaluate_improvement_priority
+            target.setdefault("metrics_source", "WORLDQUANT_BRAIN" if target.get("brain_alpha_id") else "UNKNOWN")
+            target.setdefault("official_simulation_id", target.get("brain_simulation_id") or target.get("brain_alpha_id"))
+            plan = evaluate_improvement_priority(target)
+            return self._send_json_response({"ok": True, **plan.to_dict()})
 
         # API: 查詢 Brain 模擬 Job 狀態 (GET /api/brain/jobs/{job_id})
         if path.startswith("/api/brain/jobs/"):
@@ -1819,6 +2154,48 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                 )
                 return self._send_json_response({"success": True, "source": "AUTHENTICATED_CHALLENGE_API", "endpoint": res.get("endpoint")})
             return self._send_json_response({"success": False, "error": res.get("error", "無法連線取得 Challenge 分數"), "status": res.get("status")}, status=200)
+
+        # POST /api/brain/iqc/recalculate：僅從後端可信 Vault 重算 IQC 評分（忽略任何用戶端傳入指標，並依 input_snapshot_hash 冪等）
+        if path == "/api/brain/iqc/recalculate":
+            from worldquant_brain.iqc_scoring import (
+                IQC_POLICY_VERSION,
+                IQCScoringRepository,
+                build_iqc_input_from_trusted_record,
+                evaluate_iqc_candidate,
+            )
+            aid = str((post_data or {}).get("alpha_id") or "").strip()
+            vault_rows = APP_STATE.alpha_vault.list_alphas()
+            repo = IQCScoringRepository(APP_STATE.alpha_vault.db_path)
+            if aid:
+                target = None
+                for row in vault_rows:
+                    if str(row.get("id")) == aid or str(row.get("brain_alpha_id")) == aid or str(row.get("name")) == f"BRAIN_{aid}":
+                        target = dict(row)
+                        break
+                if target is None:
+                    return self._send_error_json("ALPHA_NOT_FOUND", f"找不到 Alpha: {aid}", status=404)
+                rep = evaluate_iqc_candidate(build_iqc_input_from_trusted_record(target))
+                audit_id, created = repo.save_report_if_changed(rep)
+                return self._send_json_response({
+                    "ok": True,
+                    "audit_id": audit_id,
+                    "audit_created": created,
+                    **rep.to_dict(),
+                })
+            recalculated = []
+            for row in vault_rows:
+                rep = evaluate_iqc_candidate(build_iqc_input_from_trusted_record(dict(row)))
+                audit_id, created = repo.save_report_if_changed(rep)
+                item = rep.to_dict()
+                item["audit_id"] = audit_id
+                item["audit_created"] = created
+                recalculated.append(item)
+            return self._send_json_response({
+                "ok": True,
+                "policy_version": IQC_POLICY_VERSION,
+                "count": len(recalculated),
+                "candidates": recalculated,
+            })
 
         if path == "/api/brain/submit_alpha":
             name = post_data.get("name", "Custom_Alpha")

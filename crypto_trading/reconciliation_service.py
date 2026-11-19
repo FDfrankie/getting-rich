@@ -4,6 +4,15 @@ from typing import Any
 from crypto_trading.order_manager import OrderManager, OrderState
 
 
+def _normalize_recon_symbol(symbol: str) -> str:
+    s = (symbol or "").strip().upper().replace(":USDT", "").replace(":USDC", "").replace("_", "/")
+    if "/" not in s and s.endswith("USDT") and len(s) > 4:
+        return f"{s[:-4]}/USDT"
+    if "/" not in s and s.endswith("USDC") and len(s) > 4:
+        return f"{s[:-4]}/USDC"
+    return s
+
+
 class ReconciliationService:
     """
     對帳生命週期服務
@@ -48,19 +57,25 @@ class ReconciliationService:
         """
         discrepancies = []
 
-        # 1. 持倉對帳
-        remote_pos_map = {}
-        for rp in remote_positions:
-            sym = rp.get("symbol", "")
-            amt = float(rp.get("contracts", 0.0))
-            side = rp.get("side", "LONG").upper()
-            signed_amt = amt if side == "LONG" else -amt
-            remote_pos_map[sym] = signed_amt
+        # 1. 持倉對帳 (正規化幣對格式，如 BTCUSDT -> BTC/USDT)
+        norm_local_positions: dict[str, float] = {}
+        for k, v in (local_positions or {}).items():
+            nk = _normalize_recon_symbol(str(k))
+            norm_local_positions[nk] = norm_local_positions.get(nk, 0.0) + float(v or 0.0)
 
-        all_symbols = set(local_positions.keys()).union(set(remote_pos_map.keys()))
+        remote_pos_map: dict[str, float] = {}
+        for rp in remote_positions:
+            sym = _normalize_recon_symbol(str(rp.get("symbol", "")))
+            amt = float(rp.get("contracts", 0.0))
+            side = str(rp.get("side", "LONG")).upper()
+            signed_amt = amt if side == "LONG" else -amt
+            if sym:
+                remote_pos_map[sym] = signed_amt
+
+        all_symbols = set(norm_local_positions.keys()).union(set(remote_pos_map.keys()))
         pos_diffs = {}
         for s in all_symbols:
-            loc = local_positions.get(s, 0.0)
+            loc = norm_local_positions.get(s, 0.0)
             rem = remote_pos_map.get(s, 0.0)
             diff = round(abs(loc - rem), 6)
             if diff > 1e-4:

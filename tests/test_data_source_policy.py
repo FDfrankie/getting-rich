@@ -2,6 +2,7 @@
 Tests for DataSource policy and DataUnavailableError enforcement.
 """
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -13,8 +14,9 @@ from crypto_trading.data_loader import (
 )
 
 
-def test_fetch_ohlcv_disallow_synthetic_raises_when_no_network():
+def test_fetch_ohlcv_disallow_synthetic_raises_when_no_network(tmp_path: Path):
     loader = CryptoDataLoader()
+    loader.cache_dir = str(tmp_path)
     # Mock ccxt failure
     with (
         patch(
@@ -26,8 +28,9 @@ def test_fetch_ohlcv_disallow_synthetic_raises_when_no_network():
         loader.fetch_ohlcv_result(limit=20, allow_synthetic=False)
 
 
-def test_fetch_ohlcv_allow_synthetic_returns_synthetic_source():
+def test_fetch_ohlcv_allow_synthetic_returns_synthetic_source(tmp_path: Path):
     loader = CryptoDataLoader()
+    loader.cache_dir = str(tmp_path)
     with patch(
         "crypto_trading.data_loader.ccxt.binance",
         side_effect=Exception("Network unreachable"),

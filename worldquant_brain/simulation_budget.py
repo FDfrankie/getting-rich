@@ -43,12 +43,13 @@ class ThreeMinuteSimulationBudget:
         minimum_interval_seconds: float = 0.0,
         max_pending: int = 3,
         duplicate_threshold: float = 0.86,
+        allow_multiple_per_family: bool = False,
         allow_same_family: bool = False,
     ) -> None:
         self.minimum_interval_seconds = float(minimum_interval_seconds)
         self.max_pending = int(max_pending)
         self.duplicate_threshold = float(duplicate_threshold)
-        self.allow_same_family = bool(allow_same_family)
+        self.allow_multiple_per_family = bool(allow_multiple_per_family or allow_same_family)
         self._last_queued_ts: float | None = None
         self._pending_ids: set[str] = set()
         self._active_families: set[str] = set()
@@ -77,7 +78,7 @@ class ThreeMinuteSimulationBudget:
             return QueueDecision(False, "DUPLICATE_CANDIDATE_IN_QUEUE")
         if len(self._pending_ids) >= self.max_pending:
             return QueueDecision(False, "MAX_PENDING_REACHED")
-        if not self.allow_same_family and candidate.blueprint_family in self._active_families:
+        if not self.allow_multiple_per_family and candidate.blueprint_family in self._active_families:
             return QueueDecision(False, "FAMILY_BASELINE_ALREADY_ACTIVE")
         if self.minimum_interval_seconds > 0 and self._last_queued_ts is not None:
             if (now - self._last_queued_ts) < self.minimum_interval_seconds:

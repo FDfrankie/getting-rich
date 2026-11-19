@@ -27,7 +27,6 @@ from worldquant_brain.alpha_research_engines import (
 from worldquant_brain.alpha_template_expander import generate_diverse_domain_candidate
 
 
-
 def _shift_to_prime_windows(expr: str) -> str:
     """Shift standard round lookback windows to non-consensus prime windows to reduce self-correlation."""
     import re
@@ -95,6 +94,11 @@ class ContinuousAlphaMiner:
         ]
 
     def generate_candidate_settings(self, domain: str = "") -> dict[str, Any]:
+        try:
+            from worldquant_brain.alpha_yield_booster import generate_smart_settings
+            return generate_smart_settings(domain=domain)
+        except Exception:
+            pass
         """Rotate proven BRAIN settings with domain-aware decay (low decay for Fundamental/Analyst, higher decay for PV/Sentiment)."""
         dom = (domain or "").upper()
         if "FUNDAMENTAL" in dom or "ANALYST" in dom:
@@ -409,9 +413,17 @@ class ContinuousAlphaMiner:
         ]
         for attempt in range(max_attempts):
             r = random.random()
-            if domain is not None or r < 0.70:
+            if domain is not None:
                 cand = self.generate_high_pass_domain_candidate(domain=domain, mcts_branch=mcts_branch)
-            elif verified and r < 0.85:
+            elif r < 0.40:
+                try:
+                    from worldquant_brain.alpha_yield_booster import generate_orthogonal_combo_candidate
+                    cand = generate_orthogonal_combo_candidate()
+                except Exception:
+                    cand = self.generate_high_pass_domain_candidate(mcts_branch=mcts_branch)
+            elif r < 0.75:
+                cand = self.generate_high_pass_domain_candidate(mcts_branch=mcts_branch)
+            elif verified and r < 0.88:
                 base = random.choice(verified)
                 w = random.choice([40, 60])
                 cand_expr = f"hump(group_neutralize(ts_regression({base['expression']}, returns, {w}, rettype=0), subindustry), hump=0.01)"
@@ -549,6 +561,21 @@ class ContinuousAlphaMiner:
             pool.append((sc, cand))
 
         pool.sort(key=lambda x: x[0], reverse=True)
+        # Optional parallel local cross-sectional pre-screening when local US panel cache exists
+        try:
+            from worldquant_brain.local_cs_screener import LocalCrossSectionalScreener
+            if not hasattr(self, "_local_screener") or self._local_screener is None:
+                self._local_screener = LocalCrossSectionalScreener()
+            if self._local_screener.has_panel():
+                cands_sorted = [c for _sc, c in pool]
+                screened = self._local_screener.screen_batch(cands_sorted, top_k=1, allow_download=False)
+                if screened:
+                    chosen = screened[0]
+                    self.mark_expression_tried(chosen["expression"])
+                    chosen["local_quality_score"] = pool[0][0]
+                    return chosen
+        except Exception:
+            pass
         best_score, best_cand = pool[0]
         self.mark_expression_tried(best_cand["expression"])
         best_cand["local_quality_score"] = best_score
@@ -578,8 +605,8 @@ class ContinuousAlphaMiner:
         )
         failed = {str(c).upper() for c in (failed_checks or [])}
         near_miss = (
-            abs(float(sharpe)) >= 0.85
-            or (float(fitness) >= 0.65 and float(sharpe) >= 0.70)
+            abs(float(sharpe)) >= 0.75
+            or (float(fitness) >= 0.55 and float(sharpe) >= 0.70)
             or (
                 abs(float(sharpe)) >= 0.75
                 and any(
@@ -600,7 +627,7 @@ class ContinuousAlphaMiner:
         # 1. Negative Sharpe sign-flip
         if float(sharpe) <= -1.10 and not expr.startswith("-1 * ("):
             s1 = dict(base_settings)
-            candidates.append({
+            candidates.insert(0, {
                 "name": "NearMiss_SignFlip",
                 "expression": f"-1 * ({expr})",
                 "settings": s1,
@@ -711,6 +738,15 @@ class ContinuousAlphaMiner:
                 "reason": "group_neutralize_subindustry",
             })
 
+        try:
+            from worldquant_brain.alpha_yield_booster import precision_repair_near_miss
+            candidates.extend(precision_repair_near_miss(
+                expr, base_settings, sharpe=float(sharpe), fitness=float(fitness),
+                turnover=float(turnover), margin=norm_margin, failed_checks=list(failed),
+            ))
+        except Exception:
+            pass
+
         emitted: list[dict[str, Any]] = []
         for c in candidates:
             if len(emitted) >= max_variants:
@@ -719,6 +755,23 @@ class ContinuousAlphaMiner:
                 self.mark_expression_tried(c["expression"])
                 emitted.append(c)
         return emitted
+
+
+    def generate_locally_screened_batch(self, raw_batch_size: int = 32, top_k: int = 6) -> list[dict[str, Any]]:
+        """Generate a large batch locally and run parallel cross-sectional PV pre-screening before BRAIN submission."""
+        raw_cands = [self.generate_unique_candidate(mark_tried=False) for _ in range(max(top_k, int(raw_batch_size)))]
+        selected = raw_cands[:top_k]
+        try:
+            from worldquant_brain.local_cs_screener import LocalCrossSectionalScreener
+            if not hasattr(self, "_local_screener") or self._local_screener is None:
+                self._local_screener = LocalCrossSectionalScreener()
+            if self._local_screener.has_panel():
+                selected = self._local_screener.screen_batch(raw_cands, top_k=top_k, allow_download=False)
+        except Exception:
+            pass
+        for c in selected:
+            self.mark_expression_tried(c["expression"])
+        return selected
 
 if __name__ == "__main__":
     miner = ContinuousAlphaMiner()

@@ -108,7 +108,7 @@ class CryptoTradingBot:
             current_price = float(_spec.normalize_price(current_price))
         except Exception:
             pass
-        _ex_connected = True if self.exchange_adapter is None else bool(getattr(self.exchange_adapter, "is_connected", True))
+        _ex_connected = True if (self.exchange_adapter is None or getattr(self.exchange_adapter, "mock_mode", False)) else bool(getattr(self.exchange_adapter, "is_connected", True))
         risk_decision = self.risk_manager.evaluate_order(
             symbol=self.symbol,
             side=order_side,

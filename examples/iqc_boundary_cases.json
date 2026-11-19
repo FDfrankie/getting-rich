@@ -1,0 +1,71 @@
+[
+  {
+    "case": "corr_just_below_cutoff",
+    "alpha_id": "bnd_corr_06999",
+    "self_correlation": 0.6999,
+    "expected_hard_gates_passed": true
+  },
+  {
+    "case": "corr_at_cutoff",
+    "alpha_id": "bnd_corr_07000",
+    "self_correlation": 0.7000,
+    "expected_hard_gates_passed": false,
+    "expected_blocker": "SELF_CORRELATION_NOT_PASSED"
+  },
+  {
+    "case": "turnover_at_lower_bound",
+    "alpha_id": "bnd_to_00100",
+    "turnover": 0.01,
+    "expected_hard_gates_passed": false,
+    "expected_blocker": "TURNOVER_NOT_PASSED"
+  },
+  {
+    "case": "turnover_just_above_lower_bound",
+    "alpha_id": "bnd_to_00101",
+    "turnover": 0.010001,
+    "expected_hard_gates_passed": true
+  },
+  {
+    "case": "turnover_just_below_upper_bound",
+    "alpha_id": "bnd_to_06999",
+    "turnover": 0.699999,
+    "expected_hard_gates_passed": true
+  },
+  {
+    "case": "turnover_at_upper_bound",
+    "alpha_id": "bnd_to_07000",
+    "turnover": 0.70,
+    "expected_hard_gates_passed": false,
+    "expected_blocker": "TURNOVER_NOT_PASSED"
+  },
+  {
+    "case": "weight_just_below_limit",
+    "alpha_id": "bnd_wt_00999",
+    "max_instrument_weight": 0.099999,
+    "expected_hard_gates_passed": true
+  },
+  {
+    "case": "weight_at_limit",
+    "alpha_id": "bnd_wt_01000",
+    "max_instrument_weight": 0.10,
+    "expected_hard_gates_passed": false,
+    "expected_blocker": "MAX_WEIGHT_NOT_PASSED"
+  },
+  {
+    "case": "negative_merged_contribution",
+    "alpha_id": "bnd_neg_merged",
+    "delta_merged_sharpe": -0.025,
+    "official_before_after_improves": false,
+    "expected_hard_gates_passed": true,
+    "expected_blocker": "MERGED_SCORE_NEGATIVE"
+  },
+  {
+    "case": "local_proxy_high_metrics",
+    "alpha_id": "bnd_local_proxy",
+    "metrics_source": "LOCAL_PROXY",
+    "sharpe": 2.40,
+    "fitness": 2.10,
+    "expected_hard_gates_passed": false,
+    "expected_blocker": "UNVERIFIED_METRICS_SOURCE"
+  }
+]

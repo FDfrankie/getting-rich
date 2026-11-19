@@ -38,11 +38,11 @@ class LocalPersistenceService:
 
     def get_connection(self):
         """獲取帶有超時、WAL 與外鍵保護的 SQLite 連線"""
-        conn = sqlite3.connect(self.db_path, timeout=15.0)
+        conn = sqlite3.connect(self.db_path, timeout=25.0)
         conn.execute("PRAGMA journal_mode = WAL;")
-        conn.execute("PRAGMA synchronous = FULL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
         conn.execute("PRAGMA foreign_keys = ON;")
-        conn.execute("PRAGMA busy_timeout = 15000;")
+        conn.execute("PRAGMA busy_timeout = 25000;")
         return conn
 
     def init_db(self):

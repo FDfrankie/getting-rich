@@ -1,0 +1,8 @@
+[
+  {"case":"nan_transition","nan_transition_rate":0.12,"expected_action":"TEST_CAUSAL_BACKFILL"},
+  {"case":"rapid_change","alpha_change_rate":0.55,"expected_action":"TEST_DECAY"},
+  {"case":"weight_concentration","max_instrument_weight":0.12,"expected_action":"TEST_TRUNCATION_RANK_WINSORIZE"},
+  {"case":"market_exposure","market_beta":0.65,"expected_action":"TEST_NEUTRALIZATION"},
+  {"case":"stale_backfill","backfill_window_days":90,"field_staleness_days":75,"expected_action":"REDUCE_OR_REMOVE_BACKFILL"},
+  {"case":"multi_signal_overfit","primary_signal_count":2,"confirmation_signal_count":2,"condition_count":5,"expected_action":"SPLIT_INTO_ATOMIC_ALPHAS"}
+]
