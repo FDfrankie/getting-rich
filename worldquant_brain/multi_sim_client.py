@@ -214,6 +214,81 @@ def _request_with_retry(
     return resp
 
 
+def fetch_available_datasets(
+    client: Any,
+    *,
+    region: str = "USA",
+    universe: str = "TOP3000",
+    delay: int = 1,
+    min_coverage: float = 0.40,
+    max_datasets: int = 30,
+) -> list[dict[str, Any]]:
+    """Dynamically discover datasets unlocked on the user's BRAIN account via GET /data-sets.
+
+    Prioritizes higher valueScore and lower global alphaCount (less crowded = easier corr pass).
+    """
+    if getattr(client, "offline_mode", True):
+        return []
+    if not getattr(client, "is_authenticated", False) and not client.authenticate():
+        return []
+
+    base_url = getattr(client, "BASE_URL", "https://api.worldquantbrain.com")
+    params = {
+        "instrumentType": "EQUITY",
+        "region": region,
+        "universe": universe,
+        "delay": int(delay),
+        "limit": 50,
+        "offset": 0,
+    }
+    try:
+        resp = _request_with_retry(client, "GET", f"{base_url}/data-sets", params=params, max_retries=2)
+        if int(getattr(resp, "status_code", 0) or 0) != 200:
+            return []
+        data = resp.json() if getattr(resp, "content", None) else {}
+        results = data.get("results") if isinstance(data, Mapping) else None
+        if not isinstance(results, list):
+            return []
+    except Exception as exc:
+        logger.warning("fetch_available_datasets error: %s", exc)
+        return []
+
+    items: list[dict[str, Any]] = []
+    for row in results:
+        if not isinstance(row, Mapping):
+            continue
+        ds_id = str(row.get("id") or "").strip()
+        if not ds_id:
+            continue
+        cov = row.get("coverage")
+        if cov is not None:
+            try:
+                if float(cov) < min_coverage:
+                    continue
+            except (TypeError, ValueError):
+                pass
+        val_score = float(row.get("valueScore") or 1.0)
+        alpha_cnt = int(row.get("alphaCount") or 0)
+        field_cnt = int(row.get("fieldCount") or 0)
+        cat = row.get("category")
+        cat_id = str(cat.get("id") if isinstance(cat, Mapping) else (cat or "")).lower()
+        items.append(
+            {
+                "id": ds_id,
+                "name": str(row.get("name") or ds_id),
+                "category": cat_id,
+                "value_score": val_score,
+                "alpha_count": alpha_cnt,
+                "field_count": field_cnt,
+                "coverage": float(cov) if cov is not None else 1.0,
+            }
+        )
+
+    # Sort: highest valueScore first, then lowest alpha_count (least crowded), deprioritize pv (>1M alphas)
+    items.sort(key=lambda d: (d["alpha_count"] > 1_000_000, -d["value_score"], d["alpha_count"]))
+    return items[:max_datasets]
+
+
 def fetch_dataset_fields(
     client: Any,
     dataset_id: str,
@@ -221,14 +296,17 @@ def fetch_dataset_fields(
     region: str = "USA",
     universe: str = "TOP3000",
     delay: int = 1,
-    min_coverage: float = 0.60,
+    min_coverage: float = 0.50,
     limit: int = 100,
-    matrix_only: bool = True,
+    matrix_only: bool = False,
 ) -> list[str]:
-    """Fetch high-coverage data fields for a dataset from WorldQuant BRAIN /data-fields."""
+    """Fetch high-coverage MATRIX and VECTOR data fields for a dataset from /data-fields.
+
+    VECTOR fields are prefixed with `VEC:` internally so probes wrap them with vec_avg/vec_sum.
+    """
     if getattr(client, "offline_mode", True):
         return list(CURATED_DATASET_FIELDS.get(dataset_id, ()))
-    if not _ensure_authenticated(client, force_refresh=False):
+    if not getattr(client, "is_authenticated", False) and not client.authenticate():
         return list(CURATED_DATASET_FIELDS.get(dataset_id, ()))
 
     base_url = getattr(client, "BASE_URL", "https://api.worldquantbrain.com")
@@ -263,6 +341,8 @@ def fetch_dataset_fields(
                 ftype = str(row.get("type") or "MATRIX").upper()
                 if matrix_only and ftype != "MATRIX":
                     continue
+                if ftype not in ("MATRIX", "VECTOR"):
+                    continue
                 cov = row.get("coverage")
                 if cov is not None:
                     try:
@@ -270,7 +350,7 @@ def fetch_dataset_fields(
                             continue
                     except (TypeError, ValueError):
                         pass
-                fields.append(fid)
+                fields.append(f"VEC:{fid}" if ftype == "VECTOR" else fid)
                 if len(fields) >= limit:
                     break
             if len(results) < page_size:

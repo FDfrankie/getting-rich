@@ -31,10 +31,27 @@ from worldquant_brain.multi_sim_client import DEFAULT_SIM_SETTINGS
 STAGE1_PROBES: tuple[tuple[str, str], ...] = (
     ("rank_bf", "rank(ts_backfill({f}, 20))"),
     ("zscore60", "ts_zscore(ts_backfill({f}, 20), 60)"),
+    ("grp_zscore", "group_zscore(ts_backfill({f}, 20), industry)"),
     ("grp_delta20", "group_rank(ts_delta(ts_backfill({f}, 20), 20), subindustry)"),
     ("tsrank120", "winsorize(ts_rank(ts_backfill({f}, 20), 120), std=4)"),
     ("decay5_bf", "winsorize(rank(ts_decay_linear(ts_backfill({f}, 20), 5)), std=4)"),
+    ("trade_vol", "trade_when(volume > adv20, rank(ts_backfill({f}, 20)), -1)"),
+    ("corr_ret20", "ts_corr(ts_backfill({f}, 20), returns, 20)"),
+    ("spow_rank", "signed_power(rank(ts_backfill({f}, 20)) - 0.5, 2)"),
+    ("cap_norm_gauss", "quantile(divide(ts_backfill({f}, 20), cap), driver=\"gaussian\")"),
+    ("cap_bucket_neut", "group_neutralize(rank(ts_backfill({f}, 20)), bucket(rank(cap), range=\"0, 1, 0.1\"))"),
+    ("last_revision", "rank(ts_backfill({f}, 20) - last_diff_value(ts_backfill({f}, 20), 252))"),
+    ("ts_av_diff60", "quantile(ts_av_diff(ts_backfill({f}, 20), 60), driver=\"gaussian\")"),
+    ("reg_resid60", "rank(ts_regression(ts_backfill({f}, 20), returns, 60, lag=0, rettype=0))"),
 )
+
+
+def _format_probe(template: str, raw_field: str) -> str:
+    if raw_field.startswith("VEC:"):
+        base_f = f"vec_avg({raw_field[4:]})"
+    else:
+        base_f = raw_field
+    return template.format(f=base_f)
 
 STAGE2_NEUTRALIZATIONS: tuple[str, ...] = (
     "SUBINDUSTRY",
@@ -402,10 +419,13 @@ class TwoStageAlphaFunnel:
         src_to = result.get("turnover")
 
         candidates: list[tuple[str, dict[str, Any]]] = []
-        if "TURNOVER" in reason or (src_to is not None and float(src_to) > 0.35):
+        # Target 12.5% turnover sweet spot (Fitness floor) and Sub-Universe / Weight robustness via hump()
+        if "TURNOVER" in reason or "FITNESS" in reason or (src_to is not None and float(src_to) > 0.15):
+            candidates.append((f"hump(winsorize({expr}, std=4), hump=0.01)", dict(base_sett, decay=4)))
             candidates.append((f"ts_decay_linear({expr}, 8)", dict(base_sett, decay=6)))
             candidates.append((f"winsorize(ts_mean({expr}, 5), std=4)", dict(base_sett, decay=6)))
         if "WEIGHT" in reason or "SUB_UNIVERSE" in reason:
+            candidates.append((f"hump({expr}, hump=0.01)", dict(base_sett, truncation=0.06)))
             for trunc in (0.05, 0.06):
                 candidates.append((f"winsorize({expr}, std=3)", dict(base_sett, truncation=trunc)))
         for neut in STAGE2_NEUTRALIZATIONS:
@@ -471,7 +491,7 @@ class TwoStageAlphaFunnel:
                 for field in datasets_fields.get(ds_id, ()):
                     if len(out) >= batch_size:
                         return out
-                    expr = template.format(f=field)
+                    expr = _format_probe(template, field)
                     sett = dict(self.base_settings)
                     sh = _sim_hash(expr, sett)
                     if self._is_tried(conn, sh):

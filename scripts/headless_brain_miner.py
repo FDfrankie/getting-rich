@@ -44,7 +44,7 @@ except ImportError:
 
 from worldquant_brain.alpha_vault import AlphaVault
 from worldquant_brain.brain_client import BrainClient
-from worldquant_brain.multi_sim_client import fetch_dataset_fields, simulate_multi_alpha
+from worldquant_brain.multi_sim_client import fetch_available_datasets, fetch_dataset_fields, simulate_multi_alpha
 from worldquant_brain.two_stage_funnel import TwoStageAlphaFunnel, classify_verdict
 
 DEFAULT_DATASETS: tuple[str, ...] = (
@@ -101,7 +101,15 @@ def run_headless_miner(
             print("[ERROR] WorldQuant BRAIN authentication returned False.")
             return stats
 
-    ds_list = list(datasets) if datasets else list(DEFAULT_DATASETS)
+    if datasets:
+        ds_list = list(datasets)
+    else:
+        discovered = fetch_available_datasets(client)
+        if discovered:
+            ds_list = [d["id"] for d in discovered]
+            print("[AUTO_DATASETS] Discovered from BRAIN /data-sets (by valueScore & uncrowdedness):", ", ".join(f"{d['id']}(vs={d['value_score']:g},alphas={d['alpha_count']})" for d in discovered[:10]))
+        else:
+            ds_list = list(DEFAULT_DATASETS)
     funnel = TwoStageAlphaFunnel(vault.db_path, seed_sharpe_threshold=seed_sharpe_threshold)
 
     datasets_fields: dict[str, list[str]] = {}
@@ -298,10 +306,10 @@ def main() -> int:
     parser.add_argument("--duration-minutes", type=float, default=0.0, help="0 = run 24/7 continuously")
     parser.add_argument("--workers", type=int, default=int(os.getenv("BRAIN_MULTI_SIM_WORKERS", "2")))
     parser.add_argument("--batch-size", type=int, default=int(os.getenv("BRAIN_MULTI_SIM_BATCH_SIZE", "5")))
-    parser.add_argument("--datasets", type=str, default=",".join(DEFAULT_DATASETS))
+    parser.add_argument("--datasets", type=str, default="")
     parser.add_argument("--seed-sharpe", type=float, default=0.90)
     args = parser.parse_args()
-    ds_list = [d.strip() for d in args.datasets.split(",") if d.strip()]
+    ds_list = [d.strip() for d in args.datasets.split(",") if d.strip()] or None
     run_headless_miner(
         duration_minutes=args.duration_minutes,
         num_workers=args.workers,

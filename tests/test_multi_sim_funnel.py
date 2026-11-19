@@ -34,6 +34,17 @@ class _FakeSession:
         self._seq = 0
 
     def request(self, method: str, url: str, json=None, params=None, timeout=30.0):
+        if method == "GET" and url.endswith("/data-sets"):
+            return _MockResp(
+                200,
+                {
+                    "results": [
+                        {"id": "pv1", "valueScore": 1, "alphaCount": 2319487, "fieldCount": 24, "coverage": 1.0, "category": {"id": "pv"}},
+                        {"id": "analyst4", "valueScore": 1, "alphaCount": 191793, "fieldCount": 875, "coverage": 0.82, "category": {"id": "analyst"}},
+                        {"id": "rare_ds", "valueScore": 3, "alphaCount": 127, "fieldCount": 6, "coverage": 1.0, "category": {"id": "model"}},
+                    ]
+                },
+            )
         if method == "GET" and url.endswith("/data-fields"):
             return _MockResp(
                 200,
@@ -141,7 +152,7 @@ class TestMultiSimAndTwoStageFunnel(unittest.TestCase):
             # Immediate in-session refinement works right away
             batch2 = funnel.next_batch({"analyst4": ["anl4_eps_mean", "anl4_sales_mean"]}, batch_size=4)
             self.assertEqual(len(batch2), 4)
-            self.assertTrue(all(item["expression"].startswith("-(") for item in batch2))
+            self.assertTrue(all("-(" in item["expression"] for item in batch2))
 
             # New session on same DB does NOT re-mine old near-miss seeds, but keeps RL policy & reference DB!
             funnel_new_session = TwoStageAlphaFunnel(db, seed_sharpe_threshold=0.90)
@@ -209,6 +220,39 @@ class TestMultiSimAndTwoStageFunnel(unittest.TestCase):
         # Non-rescuable LOW_UNIVERSE -> REJECTED
         v4, _ = classify_verdict({"sharpe": 1.30, "fitness": 1.05, "turnover": 0.25, "checks_passed": False, "failed_checks": ["LOW_UNIVERSE"]})
         self.assertEqual(v4, "REJECTED")
+
+
+
+    def test_auto_dataset_discovery_prioritizes_high_value_uncrowded(self) -> None:
+        from worldquant_brain.multi_sim_client import fetch_available_datasets
+        client = _FakeBrainClient()
+        ds = fetch_available_datasets(client)
+        self.assertEqual([d["id"] for d in ds], ["rare_ds", "analyst4", "pv1"])
+
+
+
+    def test_vector_field_wrapping_and_hump_stage2(self) -> None:
+        from worldquant_brain.multi_sim_client import fetch_dataset_fields
+        class _VecSession(_FakeSession):
+            def request(self, method: str, url: str, json=None, params=None, timeout=30.0):
+                if method == "GET" and url.endswith("/data-fields"):
+                    return _MockResp(200, {"results": [{"id": "nws12_range", "type": "VECTOR", "coverage": 0.85}]})
+                return super().request(method, url, json=json, params=params, timeout=timeout)
+        client = _FakeBrainClient()
+        client.session = _VecSession()
+        fields = fetch_dataset_fields(client, "news12")
+        self.assertEqual(fields, ["VEC:nws12_range"])
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            funnel = TwoStageAlphaFunnel(Path(td) / "vec.db")
+            b1 = funnel.next_batch({"news12": fields}, batch_size=3)
+            self.assertTrue(all("vec_avg(nws12_range)" in item["expression"] for item in b1))
+            # Check hump() is generated when NEAR_MISS has SUB_UNIVERSE or turnover > 0.15
+            funnel._enqueue_immediate_refinement(
+                {"expression": "rank(vec_avg(nws12_range))", "sharpe": 1.10, "fitness": 0.75, "turnover": 0.25, "dataset_id": "news12"},
+                "SUB_UNIVERSE",
+            )
+            b2 = funnel.next_stage2_batch(batch_size=5)
+            self.assertTrue(any("hump(" in item["expression"] for item in b2))
 
     def test_403_single_sim_fallback_no_reauth(self) -> None:
         class _403Session:
