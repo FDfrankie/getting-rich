@@ -43,10 +43,6 @@ STAGE1_PROBES: tuple[tuple[str, str], ...] = (
     ("last_revision", "rank(ts_backfill({f}, 20) - last_diff_value(ts_backfill({f}, 20), 252))"),
     ("ts_av_diff60", "quantile(ts_av_diff(ts_backfill({f}, 20), 60), driver=\"gaussian\")"),
     ("reg_resid60", "rank(ts_regression(ts_backfill({f}, 20), returns, 60, lag=0, rettype=0))"),
-    ("vol_bucket_neut", "group_neutralize(rank(ts_backfill({f}, 20)), bucket(rank(volume), range=\"0, 1, 0.2\"))"),
-    ("sqrt_rank", "sqrt(rank(ts_backfill({f}, 20)))"),
-    ("fwd_val_ind", "group_rank(ts_rank(divide(ts_backfill({f}, 20), close), 60), industry)"),
-    ("regime_rev60", "rank(ts_sum(ts_backfill({f}, 20), 60)) > 0.5 ? (1 + rank(ts_backfill({f}, 20))) : rank(-ts_delta(close, 3))"),
 )
 
 
@@ -72,22 +68,24 @@ _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _sim_hash(expression: str, settings: Mapping[str, Any]) -> str:
+    from worldquant_brain.canonical_ast import parse_fastexpr
+
     norm = {
-        "expr": " ".join(str(expression).strip().split()),
+        "expr": parse_fastexpr(expression).canonical_expression,
         "neutralization": str(settings.get("neutralization", "SUBINDUSTRY")).upper(),
         "decay": int(settings.get("decay", 4) or 0),
         "truncation": round(float(settings.get("truncation", 0.08) or 0.08), 4),
         "universe": str(settings.get("universe", "TOP3000")).upper(),
-        "delay": int(settings["delay"]) if settings.get("delay") is not None else 1,
-        "nanHandling": str(settings.get("nanHandling", "OFF")).upper(),
+        "delay": int(settings.get("delay", 1) or 1),
     }
     return hashlib.sha256(json.dumps(norm, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 def _structural_skeleton(expression: str) -> str:
-    """Strip numeric parameters so parameter-tweaked clones map to the same skeleton."""
-    s = re.sub(r"\b\d+(?:\.\d+)?\b", "#", str(expression).strip())
-    return " ".join(s.split())
+    """Delegate structural skeleton extraction to Canonical FastExpr AST."""
+    from worldquant_brain.canonical_ast import parse_fastexpr
+
+    return parse_fastexpr(expression).normalized_expression
 
 
 def _token_set(expression: str) -> frozenset[str]:
@@ -176,9 +174,7 @@ def classify_verdict(
     if abs(sh) < eff_nm_sharpe:
         return "REJECTED", ";".join(reasons)
     min_nm_fit = 0.50 if abs(sh) >= eff_min_sharpe else 0.55
-    # On BRAIN, negative-Sharpe alphas also have negative Fitness; evaluate magnitude for NEAR_MISS sign-flip
-    eff_nm_fit = abs(fit) if sh < 0 else fit
-    if eff_nm_fit < min_nm_fit:
+    if fit < min_nm_fit:
         return "REJECTED", ";".join(reasons)
     if not (0.005 < to < 0.95):
         return "REJECTED", ";".join(reasons)
@@ -343,53 +339,22 @@ class TwoStageAlphaFunnel:
             (arm, dataset_id, probe or "DEFAULT", float(reward), float(reward), now_iso),
         )
 
-    @staticmethod
-    def _pareto_reward(verdict: str, sharpe: float | None, fitness: float | None, turnover: float | None) -> float:
-        """AlphaPareto-inspired multi-objective reward balancing Sharpe, Fitness, and 12.5% turnover sweet spot."""
-        if verdict == "REJECTED" or sharpe is None or fitness is None:
-            return -0.5
-        sh_term = max(-1.0, min(2.5, abs(float(sharpe)) / 1.25))
-        fit_term = max(0.0, min(2.0, abs(float(fitness)) / 1.0))
-        to_val = float(turnover) if turnover is not None else 0.25
-        # Peak bonus near 12.5% turnover floor; penalize extreme turnover > 0.65
-        to_bonus = 0.4 if 0.05 <= to_val <= 0.30 else (-0.3 if to_val > 0.65 else 0.1)
-        base = 0.5 * sh_term + 0.5 * fit_term + to_bonus
-        return round(base + (1.0 if verdict == "PASSED" else 0.0), 4)
-
     def _ucb_rank_arms(
         self,
         conn: sqlite3.Connection,
         dataset_ids: Sequence[str],
         probes: Sequence[tuple[str, str]],
     ) -> list[tuple[str, str, str]]:
-        """Rank (dataset_id, probe_name, template) arms using UCB1 + Forbidden Patterns auto-cooldown."""
+        """Rank (dataset_id, probe_name, template) arms using UCB1 over historical RL rewards."""
         rows = conn.execute("SELECT arm_key, pulls, reward_sum FROM funnel_rl_policy").fetchall()
         arm_map = {str(r["arm_key"]): (int(r["pulls"]), float(r["reward_sum"])) for r in rows}
-        hit_rows = conn.execute(
-            """
-            SELECT dataset_id, probe,
-                   SUM(CASE WHEN outcome IN ('PASSED', 'NEAR_MISS', 'SUBMITTED') THEN 1 ELSE 0 END) AS hits,
-                   COUNT(*) AS total
-            FROM funnel_reference_db
-            WHERE probe != ''
-            GROUP BY dataset_id, probe
-            """
-        ).fetchall()
-        forbidden_arms = {
-            f"{r['dataset_id']}::{r['probe']}"
-            for r in hit_rows
-            if int(r["total"]) >= 5 and int(r["hits"]) == 0
-        }
         total_pulls = max(1, sum(p for p, _ in arm_map.values()))
         scored: list[tuple[float, str, str, str]] = []
         for ds_id in dataset_ids:
             for probe_name, template in probes:
-                key = f"{ds_id}::{probe_name}"
-                pulls, r_sum = arm_map.get(key, (0, 0.0))
-                if key in forbidden_arms:
-                    ucb = -100.0  # Auto-cooled forbidden pattern (0 hits in >=5 trials)
-                elif pulls == 0:
-                    ucb = 10.0  # Untried arms get priority exploration
+                pulls, r_sum = arm_map.get(f"{ds_id}::{probe_name}", (0, 0.0))
+                if pulls == 0:
+                    ucb = 10.0  # untried arms get priority exploration
                 else:
                     mean_r = r_sum / pulls
                     ucb = mean_r + 1.25 * math.sqrt(math.log(total_pulls + 1.0) / pulls)
@@ -457,9 +422,6 @@ class TwoStageAlphaFunnel:
         src_to = result.get("turnover")
 
         candidates: list[tuple[str, dict[str, Any]]] = []
-        if sharpe is not None and float(sharpe) < 0:
-            # Test the exact sign-flipped baseline first so a -1.4 Sharpe immediately becomes +1.4!
-            candidates.append((expr, dict(base_sett)))
         # Target 12.5% turnover sweet spot (Fitness floor) and Sub-Universe / Weight robustness via hump()
         if "TURNOVER" in reason or "FITNESS" in reason or (src_to is not None and float(src_to) > 0.15):
             candidates.append((f"hump(winsorize({expr}, std=4), hump=0.01)", dict(base_sett, decay=4)))
@@ -475,9 +437,6 @@ class TwoStageAlphaFunnel:
             candidates.append((expr, dict(base_sett, decay=dec)))
         for trunc in STAGE2_TRUNCATIONS:
             candidates.append((expr, dict(base_sett, truncation=trunc)))
-        # Official webinar technique: nanHandling="ON" captures analyst/sparse coverage premium
-        if str(base_sett.get("nanHandling", "OFF")).upper() != "ON":
-            candidates.append((expr, dict(base_sett, nanHandling="ON")))
 
         added = 0
         with self._connect() as conn:
@@ -717,16 +676,16 @@ class TwoStageAlphaFunnel:
                     ),
                 )
 
-                rew = self._pareto_reward(verdict, sharpe, fitness, turnover)
-                self._update_rl_arm(conn, ds_id, probe, rew)
                 if verdict == "PASSED":
                     passed += 1
+                    self._update_rl_arm(conn, ds_id, probe, +2.0)
                     if ds_id:
                         conn.execute(
                             "UPDATE funnel_dataset_stats SET passed_count = passed_count + 1, updated_at = ? WHERE dataset_id = ?",
                             (now_iso, ds_id),
                         )
                 elif verdict == "NEAR_MISS":
+                    self._update_rl_arm(conn, ds_id, probe, +0.8)
                     if stage == "STAGE1":
                         promoted += 1
                         near_misses_to_queue.append((r, reason))
@@ -737,6 +696,7 @@ class TwoStageAlphaFunnel:
                             )
                 else:
                     rejected += 1
+                    self._update_rl_arm(conn, ds_id, probe, -0.4)
 
         for nm_res, nm_reason in near_misses_to_queue:
             self._enqueue_immediate_refinement(nm_res, nm_reason)

@@ -104,16 +104,16 @@ def _family_signature(fields: Iterable[str], operators: Iterable[str]) -> str:
 
 
 def fingerprint(expression: str) -> AlphaFingerprint:
-    c = _compact(expression)
-    norm = _normalize_numbers(expression)
-    struct = _strip_outer_decay(expression)
-    flds = _fields(expression)
-    ops = _operators(expression)
+    from worldquant_brain.canonical_ast import parse_fastexpr
+
+    parsed = parse_fastexpr(expression)
+    flds = parsed.fields
+    ops = parsed.operators
     fam = _family_signature(flds, ops)
     return AlphaFingerprint(
-        exact_hash=hashlib.sha256(c.encode("utf-8")).hexdigest(),
-        normalized_hash=hashlib.sha256(norm.encode("utf-8")).hexdigest(),
-        structural_hash=hashlib.sha256(struct.encode("utf-8")).hexdigest(),
+        exact_hash=parsed.exact_hash,
+        normalized_hash=parsed.normalized_hash,
+        structural_hash=parsed.structural_hash,
         fields=flds,
         operators=ops,
         family=fam,

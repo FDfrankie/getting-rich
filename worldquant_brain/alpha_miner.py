@@ -28,7 +28,12 @@ from worldquant_brain.alpha_template_expander import generate_diverse_domain_can
 
 
 def _shift_to_prime_windows(expr: str) -> str:
-    """Shift standard round lookback windows to non-consensus prime windows to reduce self-correlation."""
+    """PARAMETER_VARIANT helper only.
+
+    Official BRAIN self-correlation is PnL-based; shifting lookback windows to
+    prime numbers must NEVER be counted as Structural Novelty, Correlation Repair,
+    or a New Economic Idea.
+    """
     import re
     prime_map = {
         "3": "5", "5": "7", "10": "13", "15": "17", "20": "23",
@@ -43,21 +48,10 @@ def _shift_to_prime_windows(expr: str) -> str:
 
 
 def extract_expression_skeleton(expression: str) -> str:
-    """Normalize numbers and strip outer ts_decay_linear/rank/group_neutralize wrappers to detect structural clones."""
-    import re
-    s = (expression or "").strip().lower()
-    # Unwrap repeated outer ts_decay_linear(..., N)
-    changed = True
-    while changed:
-        changed = False
-        m = re.match(r"^ts_decay_linear\((.+),\s*\d+\s*\)$", s)
-        if m:
-            s = m.group(1).strip()
-            changed = True
-    # Normalize numbers to N
-    s = re.sub(r"\b\d+(?:\.\d+)?\b", "N", s)
-    s = re.sub(r"\s+", "", s)
-    return s
+    """Delegate structural skeleton extraction to the single Canonical FastExpr AST source of truth."""
+    from worldquant_brain.canonical_ast import parse_fastexpr
+
+    return parse_fastexpr(expression).structural_expression
 
 class ContinuousAlphaMiner:
     """
@@ -93,33 +87,65 @@ class ContinuousAlphaMiner:
             ("ts_delta", [1, 3, 5]),
         ]
 
-    def generate_candidate_settings(self, domain: str = "") -> dict[str, Any]:
-        try:
-            from worldquant_brain.alpha_yield_booster import generate_smart_settings
-            return generate_smart_settings(domain=domain)
-        except Exception:
-            pass
-        """Rotate proven BRAIN settings with domain-aware decay (low decay for Fundamental/Analyst, higher decay for PV/Sentiment)."""
+    EXPLORATION_PROBABILITY: float = 0.10
+
+    def generate_candidate_settings(
+        self,
+        domain: str = "",
+        *,
+        exploration_probability: float | None = None,
+        random_seed: int | None = None,
+    ) -> dict[str, Any]:
+        """Evidence-weighted domain settings with bounded (<=10%) logged exploration."""
         dom = (domain or "").upper()
+        exp_prob = self.EXPLORATION_PROBABILITY if exploration_probability is None else max(0.0, min(0.15, float(exploration_probability)))
+        rng = random.Random(random_seed) if random_seed is not None else random
         if "FUNDAMENTAL" in dom or "ANALYST" in dom:
-            decays = [0, 2, 4]
+            default_decay, allowed_decays = 2, [0, 2, 4]
+            default_neut = "SUBINDUSTRY"
         elif "PV" in dom or "SENTIMENT" in dom or "VOLATILITY" in dom:
-            decays = [4, 6, 8, 10]
+            default_decay, allowed_decays = 6, [4, 6, 8, 10]
+            default_neut = "SUBINDUSTRY"
         else:
-            decays = [2, 4, 6, 8]
+            default_decay, allowed_decays = 4, [2, 4, 6, 8]
+            default_neut = "SUBINDUSTRY"
+        allowed_neuts = ["SUBINDUSTRY", "INDUSTRY"]
+        allowed_truncs = [0.04, 0.05, 0.06]
+        use_explore = rng.random() < exp_prob
+        if use_explore:
+            decay = rng.choice(allowed_decays)
+            neut = rng.choice(allowed_neuts)
+            trunc = rng.choice(allowed_truncs)
+            why = "bounded_epsilon_exploration"
+        else:
+            decay = default_decay
+            neut = default_neut
+            trunc = 0.05
+            why = "evidence_weighted_domain_default"
         return {
             "instrumentType": "EQUITY",
             "region": "USA",
             "universe": "TOP3000",
             "delay": 1,
-            "decay": random.choice(decays),
-            "neutralization": random.choice(["SUBINDUSTRY", "INDUSTRY"]),
-            "truncation": random.choice([0.04, 0.05, 0.06]),
+            "decay": decay,
+            "neutralization": neut,
+            "truncation": trunc,
             "pasteurization": "ON",
             "unitHandling": "VERIFY",
             "nanHandling": "OFF",
             "language": "FASTEXPR",
             "visualization": False,
+            "_selection_audit": {
+                "exploration_probability": exp_prob,
+                "used_exploration": use_explore,
+                "random_seed": random_seed,
+                "allowed_action_space": {
+                    "decay": allowed_decays,
+                    "neutralization": allowed_neuts,
+                    "truncation": allowed_truncs,
+                },
+                "why_exploration_was_used": why,
+            },
         }
 
     def _legacy_generate_candidate_settings(self) -> dict[str, Any]:
@@ -670,43 +696,68 @@ class ContinuousAlphaMiner:
             "reason": f"neutralization->{alt_neut}",
         })
 
-        # 3b. Correlation failure -> orthogonalize residual against returns + prime-window nonlinear reshaping
+        # 3b. Correlation failure -> orthogonalize residual against returns (PnL-based; prime windows are PARAMETER_VARIANT only)
         if any("CORRELATION" in fc or "CORR" in fc for fc in failed):
             s_corr1 = dict(base_settings)
             s_corr1["truncation"] = 0.05
             s_corr2 = dict(base_settings)
             s_corr2["neutralization"] = alt_neut
-            prime_expr = _shift_to_prime_windows(expr)
             candidates.insert(0, {
                 "name": "NearMiss_OrthogonalResid",
                 "expression": f"hump(group_neutralize(winsorize(rank(ts_regression({expr}, returns, 43, rettype=0)), std=3.5), subindustry), hump=0.01)",
                 "settings": s_corr1,
                 "reason": "SELF_CORRELATION_ORTHOGONALIZATION",
+                "edit_class": "STRUCTURAL_ORTHOGONALIZATION",
+                "structural_novelty": True,
             })
             candidates.insert(1, {
-                "name": "NearMiss_PrimeNonlinearOrthog",
-                "expression": f"hump(group_neutralize(winsorize(signed_power(ts_zscore({prime_expr}, 19), 0.75), std=3.5), {alt_neut.lower()}), hump=0.008)",
-                "settings": s_corr2,
-                "reason": "PRIME_WINDOW_NONLINEAR_ORTHOGONAL",
-            })
-            candidates.insert(2, {
                 "name": "NearMiss_VolScaleOrthog",
                 "expression": f"hump(group_rank(ts_regression({expr}, returns, 37, rettype=0), industry), hump=0.01)",
                 "settings": dict(base_settings),
                 "reason": "SELF_CORRELATION_RESIDUAL_RANK",
+                "edit_class": "STRUCTURAL_ORTHOGONALIZATION",
+                "structural_novelty": True,
             })
+            prime_expr = _shift_to_prime_windows(expr)
+            if prime_expr != expr:
+                candidates.append({
+                    "name": "NearMiss_ParamVariantPrimeWindow",
+                    "expression": prime_expr,
+                    "settings": s_corr2,
+                    "reason": "PARAMETER_VARIANT_ONLY",
+                    "edit_class": "PARAMETER_VARIANT",
+                    "structural_novelty": False,
+                })
 
-        # 4. Sub-Universe / Robust-Universe failure -> liquidity-core boost + liquidity-weighted decay
+        # 4. Sub-Universe / Robust-Universe failure -> diagnose root cause before mutating (avoid blind rank wrap)
         if any("SUB_UNIVERSE" in fc or "ROBUST_UNIVERSE" in fc for fc in failed):
+            from worldquant_brain.sub_universe_classifier import classify_sub_universe_failure
+
+            diag = classify_sub_universe_failure(
+                main_sharpe=float(sharpe or 0.0),
+                sub_universe_sharpe=base_settings.get("sub_universe_sharpe"),
+                coverage=base_settings.get("coverage"),
+                max_instrument_weight=base_settings.get("max_instrument_weight"),
+                turnover=float(turnover) if turnover is not None else None,
+                neutralization=str(base_settings.get("neutralization") or "SUBINDUSTRY"),
+                universe=str(base_settings.get("universe") or "TOP3000"),
+                dataset_domain=str(base_settings.get("dataset_domain") or ""),
+            )
             s4 = dict(base_settings)
-            s4["universe"] = "TOP3000"
+            s4["universe"] = "TOP1000" if diag.root_cause.value in ("ILLIQUID_DEPENDENCY", "SMALL_CAP_BIAS", "DATASET_UNIVERSE_MISMATCH") else "TOP3000"
             s4["truncation"] = 0.04
             s4["decay"] = max(4, base_decay)
+            if "ADD_RANK" in diag.disallowed_blind_edits:
+                sub_expr = f"group_neutralize(winsorize({expr}, std=3.5), {alt_neut.lower()})"
+            else:
+                sub_expr = f"hump(group_neutralize(winsorize((0.5 + 0.5 * rank(ts_mean(volume * close, 21))) * rank({expr}), std=3.5), subindustry), hump=0.01)"
             candidates.insert(0, {
-                "name": "NearMiss_SubUniverseLiqBoost",
-                "expression": f"hump(group_neutralize(winsorize((0.5 + 0.5 * rank(ts_mean(volume * close, 21))) * rank({expr}), std=3.5), subindustry), hump=0.01)",
+                "name": "NearMiss_SubUniverseTargeted",
+                "expression": sub_expr,
                 "settings": s4,
-                "reason": "sub_universe_liquidity_boost",
+                "reason": f"sub_universe_{diag.root_cause.value.lower()}",
+                "sub_universe_diagnosis": diag.root_cause.value,
+                "allowed_repairs": list(diag.allowed_repairs),
             })
             s4b = dict(s4)
             s4b["truncation"] = 0.05

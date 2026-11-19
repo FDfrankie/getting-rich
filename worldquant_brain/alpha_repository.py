@@ -13,10 +13,10 @@ from worldquant_brain.alpha_lifecycle import AlphaState, normalize_legacy_state,
 
 
 def compute_ast_family_hash(expression: str) -> str:
-    """Normalize numeric window literals so variants like ts_decay_linear(X,3/5/8) share one AST family cluster."""
-    expr = re.sub(r"\s+", "", (expression or "").strip().lower())
-    skeleton = re.sub(r"(?<=[,(])[-+]?\d+(?:\.\d+)?(?=[,)])", "N", expr)
-    return hashlib.sha256(skeleton.encode("utf-8")).hexdigest()[:16]
+    """Delegate AST family clustering to the single Canonical FastExpr AST source of truth."""
+    from worldquant_brain.canonical_ast import parse_fastexpr
+
+    return parse_fastexpr(expression).ast_family_hash
 
 
 class AlphaRepository:

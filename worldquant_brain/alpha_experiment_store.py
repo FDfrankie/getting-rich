@@ -15,12 +15,15 @@ def utc_now() -> str:
 
 
 def normalize_expression(expression: str) -> str:
-    text = re.sub(r"\s+", " ", expression.strip())
-    return re.sub(r"\s*([(),+*/-])\s*", r"\1", text).lower()
+    from worldquant_brain.canonical_ast import parse_fastexpr
+
+    return parse_fastexpr(expression).canonical_expression
 
 
 def expression_hash(expression: str) -> str:
-    return hashlib.sha256(normalize_expression(expression).encode("utf-8")).hexdigest()
+    from worldquant_brain.canonical_ast import parse_fastexpr
+
+    return parse_fastexpr(expression).exact_hash
 
 
 class AlphaExperimentStore:
