@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import math
 import re
 import sqlite3
@@ -53,13 +54,21 @@ def _format_probe(template: str, raw_field: str) -> str:
         base_f = raw_field
     return template.format(f=base_f)
 
-STAGE2_NEUTRALIZATIONS: tuple[str, ...] = (
+_DEFAULT_STAGE2_NEUTRALIZATIONS: tuple[str, ...] = (
     "SUBINDUSTRY",
     "INDUSTRY",
     "SECTOR",
     "MARKET",
-    "CROWDING",
-    "STATISTICAL",
+)
+_env_neuts = [
+    tok.strip().upper()
+    for tok in os.getenv("BRAIN_STAGE2_NEUTRALIZATIONS", "").split(",")
+    if tok.strip()
+]
+STAGE2_NEUTRALIZATIONS: tuple[str, ...] = tuple(_env_neuts) if _env_neuts else _DEFAULT_STAGE2_NEUTRALIZATIONS
+_UNAVAILABLE_NEUT_RE = re.compile(
+    r"Neutralization\s+([A-Z0-9_]+)\s+is\s+not\s+available",
+    re.IGNORECASE,
 )
 STAGE2_DECAYS: tuple[int, ...] = (0, 4, 8, 15)
 STAGE2_TRUNCATIONS: tuple[float, ...] = (0.05, 0.08, 0.10)
@@ -77,7 +86,6 @@ def _sim_hash(expression: str, settings: Mapping[str, Any]) -> str:
         "truncation": round(float(settings.get("truncation", 0.08) or 0.08), 4),
         "universe": str(settings.get("universe", "TOP3000")).upper(),
         "delay": int(settings.get("delay", 1) or 1),
-        "nanHandling": str(settings.get("nanHandling", "OFF")).upper(),
     }
     return hashlib.sha256(json.dumps(norm, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -174,10 +182,10 @@ def classify_verdict(
         return "REJECTED", ";".join(reasons)
     if abs(sh) < eff_nm_sharpe:
         return "REJECTED", ";".join(reasons)
-    # When Sharpe is strongly negative (e.g. -1.48), BRAIN Fitness and Margin may also be negative;
-    # evaluate their sign-flipped magnitude when negative so Stage-2 negation (-1 * expr) can rescue them.
-    eff_fit = abs(fit) if (sh < 0 and fit < 0) else fit
-    eff_margin = abs(norm_margin) if (sh < 0 and norm_margin is not None and norm_margin < 0) else norm_margin
+    # When Sharpe is strongly negative (e.g. -1.48), BRAIN Fitness and Margin are also negative;
+    # evaluate their sign-flipped magnitude so Stage-2 negation (-1 * expr) can rescue them.
+    eff_fit = -fit if sh < 0 else fit
+    eff_margin = (-norm_margin if (norm_margin is not None and sh < 0) else norm_margin)
     min_nm_fit = 0.50 if abs(sh) >= eff_min_sharpe else 0.55
     if eff_fit < min_nm_fit:
         return "REJECTED", ";".join(reasons)
@@ -208,6 +216,7 @@ class TwoStageAlphaFunnel:
             self.base_settings.update(dict(base_settings))
         # In-session only: near-miss seeds are refined immediately in this run, never re-mined from DB
         self._session_refinement_queue: list[dict[str, Any]] = []
+        self._unavailable_neutralizations: set[str] = set()
         self._session_seen_hashes: set[str] = set()
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
@@ -289,8 +298,8 @@ class TwoStageAlphaFunnel:
                 cols = {r["name"] for r in conn.execute("PRAGMA table_info(funnel_reference_db)").fetchall()}
                 if "skeleton" not in cols:
                     conn.execute("ALTER TABLE funnel_reference_db ADD COLUMN skeleton TEXT NOT NULL DEFAULT ''")
-                ds_cols = {r["name"] for r in conn.execute("PRAGMA table_info(funnel_dataset_stats)").fetchall()}
-                if "submit_failed_count" not in ds_cols:
+                stat_cols = {r["name"] for r in conn.execute("PRAGMA table_info(funnel_dataset_stats)").fetchall()}
+                if "submit_failed_count" not in stat_cols:
                     conn.execute("ALTER TABLE funnel_dataset_stats ADD COLUMN submit_failed_count INTEGER NOT NULL DEFAULT 0")
             finally:
                 conn.commit()
@@ -439,14 +448,28 @@ class TwoStageAlphaFunnel:
             candidates.append((f"hump({expr}, hump=0.01)", dict(base_sett, truncation=0.06)))
             for trunc in (0.05, 0.06):
                 candidates.append((f"winsorize({expr}, std=3)", dict(base_sett, truncation=trunc)))
+        base_neut = str(base_sett.get("neutralization") or "").upper()
+        base_decay = int(base_sett.get("decay", 4) or 0)
+        base_trunc = round(float(base_sett.get("truncation", 0.08) or 0.08), 4)
+        low_turnover = (src_to is not None and float(src_to) < 0.08 and "TURNOVER" not in reason)
+        weight_issue = ("WEIGHT" in reason or "SUB_UNIVERSE" in reason)
+
         for neut in STAGE2_NEUTRALIZATIONS:
+            if neut == base_neut or neut in self._unavailable_neutralizations:
+                continue
             candidates.append((expr, dict(base_sett, neutralization=neut)))
         for dec in STAGE2_DECAYS:
+            if dec == base_decay:
+                continue
+            if low_turnover and dec > base_decay:
+                continue
             candidates.append((expr, dict(base_sett, decay=dec)))
         for trunc in STAGE2_TRUNCATIONS:
+            if round(float(trunc), 4) == base_trunc:
+                continue
+            if not weight_issue and trunc < 0.06:
+                continue
             candidates.append((expr, dict(base_sett, truncation=trunc)))
-        if str(base_sett.get("nanHandling", "OFF")).upper() != "ON":
-            candidates.append((expr, dict(base_sett, nanHandling="ON")))
 
         added = 0
         with self._connect() as conn:
@@ -649,6 +672,9 @@ class TwoStageAlphaFunnel:
                     )
 
                 verdict, reason = classify_verdict(r, near_miss_sharpe=self.seed_sharpe_threshold)
+                err_blob = f"{r.get('error') or ''} {reason or ''}"
+                for m_neut in _UNAVAILABLE_NEUT_RE.finditer(err_blob):
+                    self._unavailable_neutralizations.add(m_neut.group(1).upper())
                 sh_hash = _sim_hash(expr, sett) if expr else hashlib.sha256(str(alpha_id or now_iso).encode()).hexdigest()
 
                 conn.execute(

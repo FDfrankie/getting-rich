@@ -28,7 +28,7 @@ from typing import Any, Sequence
 for _stream in (sys.stdout, sys.stderr):
     if _stream is not None and hasattr(_stream, "reconfigure"):
         try:
-            _stream.reconfigure(encoding="utf-8", errors="replace")
+            _stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
         except Exception:
             pass
 
@@ -208,6 +208,11 @@ def run_headless_miner(
                 )
             print(f"[PENDING_STAGED] Alpha {alpha_id} ({r.get('stage')}) Sharpe={sharpe:.2f} Fitness={fitness:.2f}")
 
+        print(
+            f"[BATCH_RESULT] batch_size={len(results)} | totals: mined={stats['mined']} "
+            f"completed={stats['completed']} failed={stats['failed']} "
+            f"accepted={stats['accepted']} submitted={stats['submitted']}"
+        )
         return hit_cooldown
 
     def _flush_pending_if_due() -> None:
@@ -319,8 +324,11 @@ def run_headless_miner(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Standalone Multi-Simulation WorldQuant BRAIN Alpha Miner")
     parser.add_argument("--duration-minutes", type=float, default=0.0, help="0 = run 24/7 continuously")
-    parser.add_argument("--workers", type=int, default=int(os.getenv("BRAIN_MULTI_SIM_WORKERS", "2")))
-    parser.add_argument("--batch-size", type=int, default=int(os.getenv("BRAIN_MULTI_SIM_BATCH_SIZE", "5")))
+    _single_mode = os.getenv("BRAIN_DISABLE_MULTI_SIM", "false").lower() == "true"
+    _default_workers = "3" if _single_mode else "2"
+    _default_batch = "2" if _single_mode else "5"
+    parser.add_argument("--workers", type=int, default=int(os.getenv("BRAIN_MULTI_SIM_WORKERS", _default_workers)))
+    parser.add_argument("--batch-size", type=int, default=int(os.getenv("BRAIN_MULTI_SIM_BATCH_SIZE", _default_batch)))
     parser.add_argument("--datasets", type=str, default="")
     parser.add_argument("--seed-sharpe", type=float, default=0.90)
     args = parser.parse_args()

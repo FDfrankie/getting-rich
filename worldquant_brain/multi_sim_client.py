@@ -7,6 +7,8 @@ child alpha metrics & IS-checks, and querying /data-fields for non-PV screening.
 from __future__ import annotations
 
 import logging
+import os
+import re
 import threading
 import time
 from typing import Any, Mapping, Sequence
@@ -363,6 +365,9 @@ def fetch_dataset_fields(
     return fields if fields else list(CURATED_DATASET_FIELDS.get(dataset_id, ()))
 
 
+_UNAVAILABLE_NEUT_RE = re.compile(r"Neutralization\s+([A-Z0-9_]+)\s+is\s+not\s+available", re.IGNORECASE)
+
+
 def _simulate_single_fallback(
     client: Any,
     items: Sequence[Mapping[str, Any]],
@@ -372,12 +377,34 @@ def _simulate_single_fallback(
     item_delay_seconds: float = 1.0,
 ) -> list[dict[str, Any]]:
     """Sequentially fall back to single-alpha simulation when multi-sim batch POST is rejected."""
+    unavailable_neuts: set[str] = getattr(client, "_unavailable_neutralizations", None)
+    if unavailable_neuts is None:
+        unavailable_neuts = set()
+        try:
+            setattr(client, "_unavailable_neutralizations", unavailable_neuts)
+        except Exception as _attr_exc:
+            logger.debug("Could not attach _unavailable_neutralizations to client: %s", _attr_exc)
+
     results: list[dict[str, Any]] = []
     for idx, it in enumerate(items):
         expr = str(it.get("expression") or "")
         sett = dict(it.get("settings") or DEFAULT_SIM_SETTINGS)
         stage = it.get("stage", "STAGE1")
         dataset_id = it.get("dataset_id", "")
+        item_neut = str(sett.get("neutralization") or "").upper()
+        if item_neut and item_neut in unavailable_neuts:
+            results.append(
+                {
+                    "success": False,
+                    "status": "SKIPPED",
+                    "expression": expr,
+                    "settings": sett,
+                    "stage": stage,
+                    "dataset_id": dataset_id,
+                    "error": f"Neutralization {item_neut} is not available (cached)",
+                }
+            )
+            continue
         try:
             res = client.simulate_alpha(
                 expr,
@@ -392,6 +419,8 @@ def _simulate_single_fallback(
             out["dataset_id"] = dataset_id
             results.append(out)
             err_text = str(out.get("error") or "")
+            for m_neut in _UNAVAILABLE_NEUT_RE.finditer(err_text):
+                unavailable_neuts.add(m_neut.group(1).upper())
             status_text = str(out.get("status") or "").upper()
             if status_text == "AUTH_FAILED" or _is_auth_rate_or_captcha_error(err_text):
                 for rem in items[idx + 1 :]:
@@ -409,6 +438,8 @@ def _simulate_single_fallback(
                 break
         except Exception as exc:
             err_text = str(exc)
+            for m_neut in _UNAVAILABLE_NEUT_RE.finditer(err_text):
+                unavailable_neuts.add(m_neut.group(1).upper())
             is_auth = _is_auth_rate_or_captcha_error(err_text)
             results.append(
                 {
@@ -470,9 +501,8 @@ def simulate_multi_alpha(
             for it in items
         ]
 
-    # Session-level circuit breaker: if Multi-Sim POST already returned HTTP 403
-    # for this client, skip the wasted batch POST and route directly to single-alpha simulation.
-    if getattr(client, "_multi_sim_forbidden", False) and len(items) > 1:
+    # Bypass Multi-Sim batch POST when explicitly disabled via env or circuit-broken by HTTP 403
+    if (os.getenv("BRAIN_DISABLE_MULTI_SIM", "false").lower() == "true" or getattr(client, "_multi_sim_forbidden", False)) and len(items) > 1:
         return _simulate_single_fallback(
             client,
             items,
