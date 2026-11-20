@@ -111,7 +111,7 @@ def submission_eligibility(alpha: Mapping[str, Any]) -> SubmissionEligibility:
         reasons.append("CORRELATION_GATE_FAILED")
     if not alpha.get("brain_simulation_id"):
         reasons.append("SIMULATION_ID_MISSING")
-    if alpha.get("brain_alpha_id") or alpha.get("submitted_at"):
+    if alpha.get("submitted_at") or state == AlphaState.SUBMITTED:
         reasons.append("ALREADY_SUBMITTED")
     if alpha.get("rejection_code"):
         reasons.append("REJECTED")

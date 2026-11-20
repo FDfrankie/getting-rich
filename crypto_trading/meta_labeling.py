@@ -248,7 +248,9 @@ def apply_meta_label_filter(
 
     rng = np.random.default_rng(42)
     rand_mask = rng.uniform(0, 1, size=n) >= 0.3
-    conf_mask = np.abs(sig) >= np.median(np.abs(sig))
+    abs_sig = np.abs(sig)
+    causal_med = pd.Series(abs_sig).expanding(min_periods=1).median().to_numpy()
+    conf_mask = abs_sig >= causal_med
 
     comparison = {
         "primary_only": _eval_net(np.sign(sig)),
@@ -357,7 +359,7 @@ def compute_deflated_sharpe_and_pbo(
             total_splits += 1
         pbo = round(float(underperformed) / max(1, total_splits), 4)
     else:
-        pbo = 0.15 if best_sr > 0.5 else 0.60
+        pbo = 1.0  # Fail-closed when n_trials < 2 or n_obs < 40
 
     # Check fold dominance across 4 quartiles
     q_size = max(1, n_obs // 4)

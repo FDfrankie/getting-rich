@@ -1,6 +1,7 @@
 """Portfolio-level risk allocator across multiple crypto symbols (BTC, ETH, SOL, etc.)."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Mapping
 
@@ -29,6 +30,12 @@ class PortfolioRiskAllocator:
         self.max_total_exposure_pct = max(0.1, float(max_total_exposure_pct))
         self.max_single_symbol_pct = max(0.05, float(max_single_symbol_pct))
 
+    def update_equity(self, new_equity_usdt: float) -> None:
+        val = float(new_equity_usdt)
+        if not math.isfinite(val):
+            return
+        self.total_equity_usdt = max(0.0, val)
+
     def evaluate_allocation(
         self,
         symbol: str,
@@ -36,7 +43,10 @@ class PortfolioRiskAllocator:
         active_positions_notional: Mapping[str, float],
         *,
         is_reduce_only: bool = False,
+        min_notional_usdt: float = 0.0,
     ) -> PortfolioAllocationDecision:
+        if not math.isfinite(float(requested_notional_usdt)):
+            return PortfolioAllocationDecision(False, symbol, 0.0, "NON_FINITE_INPUT")
         if is_reduce_only:
             return PortfolioAllocationDecision(
                 allowed=True,
@@ -48,6 +58,8 @@ class PortfolioRiskAllocator:
         if self.total_equity_usdt <= 0:
             return PortfolioAllocationDecision(False, symbol, 0.0, "ZERO_EQUITY")
 
+        if not math.isfinite(float(requested_notional_usdt)) or not math.isfinite(self.total_equity_usdt):
+            return PortfolioAllocationDecision(False, symbol, 0.0, "NON_FINITE_INPUT")
         req = max(0.0, float(requested_notional_usdt))
         open_syms = {k for k, v in active_positions_notional.items() if abs(float(v)) > 0}
         if symbol not in open_syms and len(open_syms) >= self.max_open_positions:
@@ -73,6 +85,13 @@ class PortfolioRiskAllocator:
                 symbol=symbol,
                 approved_notional_usdt=0.0,
                 reason="EXPOSURE_CAP_EXHAUSTED",
+            )
+        if min_notional_usdt > 0.0 and approved < float(min_notional_usdt):
+            return PortfolioAllocationDecision(
+                allowed=False,
+                symbol=symbol,
+                approved_notional_usdt=0.0,
+                reason=f"BELOW_MIN_NOTIONAL:{approved:.2f}<{float(min_notional_usdt):.2f}",
             )
 
         return PortfolioAllocationDecision(

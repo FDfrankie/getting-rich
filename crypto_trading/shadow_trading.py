@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -41,7 +42,7 @@ class OrderIntent:
 
 class ShadowTradingService:
     def __init__(self, db_path: str | Path) -> None:
-        self.repo = SQLiteRepository(db_path)
+        self.repo = db_path if isinstance(db_path, SQLiteRepository) else SQLiteRepository(db_path)
 
     def create_order_intent(
         self,
@@ -77,29 +78,6 @@ class ShadowTradingService:
             eff_sig = float(signal)
             eff_pos = float(target_position)
 
-        # Idempotent duplicate check on (strategy, symbol, features_hash)
-        with self.repo.connect() as conn:
-            dup = conn.execute(
-                "SELECT * FROM order_intents WHERE strategy=? AND symbol=? AND features_hash=? LIMIT 1",
-                (strategy, symbol, f_hash),
-            ).fetchone()
-            if dup:
-                return OrderIntent(
-                    intent_id=dup["intent_id"],
-                    strategy=dup["strategy"],
-                    model_version=dup["model_version"],
-                    symbol=dup["symbol"],
-                    features_hash=dup["features_hash"],
-                    signal=float(dup["signal"]),
-                    confidence=float(dup["confidence"]),
-                    target_position=float(dup["target_position"]),
-                    risk_decision="BLOCKED_DUPLICATE_INTENT",
-                    cost_estimate_bps=float(dup["cost_estimate_bps"]),
-                    expected_fill_price=float(dup["expected_fill_price"] or current_price),
-                    counterfactual_pnl=float(dup["counterfactual_pnl"] or 0.0),
-                    created_at=dup["created_at"],
-                )
-
         cf_pnl = 0.0
         if next_realized_price is not None and current_price > 0 and eff_pos != 0.0:
             gross = eff_pos * ((float(next_realized_price) - float(current_price)) / float(current_price))
@@ -120,29 +98,77 @@ class ShadowTradingService:
             counterfactual_pnl=cf_pnl,
             created_at=now,
         )
+
+        # Single-transaction idempotent insert with UNIQUE index (eliminates TOCTOU race)
         with self.repo.connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO order_intents (
-                    intent_id, strategy, model_version, symbol, features_hash,
-                    signal, confidence, target_position, risk_decision,
-                    cost_estimate_bps, expected_fill_price, counterfactual_pnl, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    intent.intent_id,
-                    intent.strategy,
-                    intent.model_version,
-                    intent.symbol,
-                    intent.features_hash,
-                    intent.signal,
-                    intent.confidence,
-                    intent.target_position,
-                    intent.risk_decision,
-                    intent.cost_estimate_bps,
-                    intent.expected_fill_price,
-                    intent.counterfactual_pnl,
-                    intent.created_at,
-                ),
-            )
+            try:
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_order_intents_dedup "
+                    "ON order_intents (strategy, symbol, features_hash)"
+                )
+            except sqlite3.OperationalError:
+                pass
+            dup = conn.execute(
+                "SELECT * FROM order_intents WHERE strategy=? AND symbol=? AND features_hash=? LIMIT 1",
+                (strategy, symbol, f_hash),
+            ).fetchone()
+            if dup:
+                return OrderIntent(
+                    intent_id=dup["intent_id"],
+                    strategy=dup["strategy"],
+                    model_version=dup["model_version"],
+                    symbol=dup["symbol"],
+                    features_hash=dup["features_hash"],
+                    signal=float(dup["signal"]),
+                    confidence=float(dup["confidence"]),
+                    target_position=float(dup["target_position"]),
+                    risk_decision="BLOCKED_DUPLICATE_INTENT",
+                    cost_estimate_bps=float(dup["cost_estimate_bps"]),
+                    expected_fill_price=float(dup["expected_fill_price"] or current_price),
+                    counterfactual_pnl=float(dup["counterfactual_pnl"] or 0.0),
+                    created_at=dup["created_at"],
+                )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO order_intents (
+                        intent_id, strategy, model_version, symbol, features_hash,
+                        signal, confidence, target_position, risk_decision,
+                        cost_estimate_bps, expected_fill_price, counterfactual_pnl, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        intent.intent_id,
+                        intent.strategy,
+                        intent.model_version,
+                        intent.symbol,
+                        intent.features_hash,
+                        intent.signal,
+                        intent.confidence,
+                        intent.target_position,
+                        intent.risk_decision,
+                        intent.cost_estimate_bps,
+                        intent.expected_fill_price,
+                        intent.counterfactual_pnl,
+                        intent.created_at,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                return OrderIntent(
+                    intent_id=intent.intent_id,
+                    strategy=strategy,
+                    model_version=model_version,
+                    symbol=symbol,
+                    features_hash=f_hash,
+                    signal=eff_sig,
+                    confidence=float(confidence),
+                    target_position=eff_pos,
+                    risk_decision="BLOCKED_DUPLICATE_INTENT",
+                    cost_estimate_bps=float(cost_estimate_bps),
+                    expected_fill_price=float(current_price),
+                    counterfactual_pnl=cf_pnl,
+                    created_at=now,
+                )
         return intent
+
+ShadowOrderIntent = OrderIntent

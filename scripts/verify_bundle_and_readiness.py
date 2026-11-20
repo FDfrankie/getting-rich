@@ -78,3 +78,5 @@ def evaluate_readiness(root: Path = BASE_DIR) -> dict[str, Any]:
 if __name__ == "__main__":
     res = evaluate_readiness()
     print(json.dumps(res, indent=2, ensure_ascii=False))
+    if res.get("overall_status") == "BLOCKED":
+        sys.exit(1)
