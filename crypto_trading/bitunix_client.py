@@ -150,12 +150,20 @@ class BitunixClient:
                     "free_balance": round(free, 2),
                     "data": d,
                 }
+            return {
+                "mode": "BITUNIX_ERROR",
+                "exchange": "bitunix",
+                "error": f"HTTP {resp.status_code}",
+                "total_equity": None,
+                "free_balance": None,
+            }
         except Exception as e:
             return {
                 "mode": "BITUNIX_ERROR",
+                "exchange": "bitunix",
                 "error": str(e),
-                "total_equity": self._simulated_balance["USDT"],
-                "free_balance": self._simulated_balance["USDT"],
+                "total_equity": None,
+                "free_balance": None,
             }
 
     def fetch_positions(self) -> list[dict[str, Any]]:
@@ -304,6 +312,7 @@ class BitunixClient:
             count = len(self._simulated_positions)
             self._simulated_positions.clear()
         else:
+            failed_errors: list[str] = []
             try:
                 positions = self.fetch_positions()
                 for p in positions:
@@ -317,8 +326,19 @@ class BitunixClient:
                     )
                     if res.get("success"):
                         count += 1
-            except Exception:
-                pass
+                    else:
+                        failed_errors.append(f"{p.get('symbol')}: {res.get('error') or res.get('message') or 'FAILED'}")
+            except Exception as exc:
+                failed_errors.append(str(exc))
+
+            if failed_errors:
+                return {
+                    "success": False,
+                    "exchange": "bitunix",
+                    "closed_count": count,
+                    "errors": failed_errors,
+                    "message": f"[Bitunix 實盤] 平倉部分或全部失敗 ({len(failed_errors)} 筆錯誤)",
+                }
 
         return {
             "success": True,

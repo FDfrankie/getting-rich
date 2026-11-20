@@ -235,7 +235,8 @@ def evaluate_fastexpr_panel(expression: str, panel: Mapping[str, pd.DataFrame]) 
         "signed_power": signed_power,
         "trade_when": trade_when,
     }
-    res = eval(expr, {"__builtins__": {}}, env)
+    from worldquant_brain.safe_expr_eval import safe_eval_expr
+    res = safe_eval_expr(expr, env)
     return _as_df(res).replace([np.inf, -np.inf], np.nan)
 
 

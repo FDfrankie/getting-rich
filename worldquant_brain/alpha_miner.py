@@ -420,9 +420,40 @@ class ContinuousAlphaMiner:
                 turnover=result["turnover"],
                 category=result["category"],
             )
+            self.record_simulation_outcome(
+                expression=result["expression"],
+                settings=result.get("settings"),
+                metrics=result,
+                dataset_id=str(result.get("category") or ""),
+            )
             self.last_mined_alpha = result
             return result
         return None
+
+    def record_simulation_outcome(
+        self,
+        *,
+        expression: str,
+        settings: dict[str, Any] | None = None,
+        metrics: dict[str, Any] | None = None,
+        alpha_id: str | None = None,
+        parent_expression: str | None = None,
+        dataset_id: str = "",
+    ) -> dict[str, Any]:
+        """Record simulation outcome into Shadow Pareto Archive & Forbidden Edit Motif (never raises)."""
+        try:
+            from worldquant_brain.shadow_writeback import record_simulation_shadow
+            return record_simulation_shadow(
+                self._dedup_db_path(),
+                expression=expression,
+                settings=settings,
+                metrics=metrics,
+                alpha_id=alpha_id,
+                parent_expression=parent_expression,
+                dataset_id=dataset_id,
+            )
+        except Exception as exc:
+            return {"recorded_pareto": False, "recorded_motif": False, "degraded": True, "error": str(exc)}
 
 
     def _dedup_db_path(self) -> str:
@@ -430,7 +461,9 @@ class ContinuousAlphaMiner:
 
     def has_tried_expression(self, expression: str) -> bool:
         import hashlib, sqlite3
-        expr_hash = hashlib.sha256(expression.strip().encode("utf-8")).hexdigest()
+        from worldquant_brain.canonical_ast import parse_fastexpr
+        canon = parse_fastexpr(expression).canonical_expression or expression.strip()
+        expr_hash = hashlib.sha256(canon.encode("utf-8")).hexdigest()
         db_p = self._dedup_db_path()
         if not db_p or db_p == ":memory:" or not os.path.exists(db_p):
             return False
@@ -447,7 +480,9 @@ class ContinuousAlphaMiner:
     def mark_expression_tried(self, expression: str) -> None:
         import hashlib, sqlite3
         from datetime import datetime, timezone
-        expr_hash = hashlib.sha256(expression.strip().encode("utf-8")).hexdigest()
+        from worldquant_brain.canonical_ast import parse_fastexpr
+        canon = parse_fastexpr(expression).canonical_expression or expression.strip()
+        expr_hash = hashlib.sha256(canon.encode("utf-8")).hexdigest()
         db_p = self._dedup_db_path()
         if not db_p or db_p == ":memory:":
             return
@@ -782,7 +817,7 @@ class ContinuousAlphaMiner:
             })
             prime_expr = _shift_to_prime_windows(expr)
             if prime_expr != expr:
-                candidates.append({
+                candidates.insert(2, {
                     "name": "NearMiss_ParamVariantPrimeWindow",
                     "expression": prime_expr,
                     "settings": s_corr2,
@@ -860,6 +895,38 @@ class ContinuousAlphaMiner:
                 "settings": s5,
                 "reason": "group_neutralize_subindustry",
             })
+
+        # 6b. Multi-Parameter Adaptive Optimizer (Binary / Ternary / Coordinate Ascent)
+        try:
+            from worldquant_brain.multi_param_optimizer import propose_multi_param_tuning_candidates
+            mp_cands = propose_multi_param_tuning_candidates(
+                expr,
+                base_settings,
+                base_metrics={"sharpe": float(sharpe), "fitness": float(fitness), "turnover": float(turnover), "margin": norm_margin},
+                failed_checks=list(failed),
+                max_candidates=max_variants,
+            )
+            candidates.extend(mp_cands)
+        except Exception:
+            pass
+
+        # 6. Single-Failure Bounded Parameter Binary Search (when len(failed) == 1)
+        if len(failed) == 1:
+            try:
+                from worldquant_brain.param_binary_search import generate_single_failure_binary_search
+                bs_cands = generate_single_failure_binary_search(
+                    expr,
+                    base_settings,
+                    failed_checks=list(failed),
+                    sharpe=float(sharpe),
+                    turnover=float(turnover) if turnover is not None else None,
+                    max_candidates=max_variants,
+                )
+                insert_at = 3 if any("CORRELATION" in fc or "CORR" in fc for fc in failed) else 2
+                insert_at = min(insert_at, len(candidates))
+                candidates = candidates[:insert_at] + bs_cands + candidates[insert_at:]
+            except Exception:
+                pass
 
         try:
             from worldquant_brain.alpha_yield_booster import precision_repair_near_miss

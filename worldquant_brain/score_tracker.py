@@ -68,7 +68,7 @@ def _find(payload: Mapping[str, Any], paths: Iterable[str]) -> Any:
 def parse_score_payload(payload: Mapping[str, Any], *, source: str = "AUTHENTICATED_API") -> ScoreSnapshot:
     """Parse several known/likely schema names without inventing missing values."""
     total = _number(_find(payload, (
-        "totalScore", "total_score", "score", "data.totalScore", "data.total_score", "leader.totalScore",
+        "leaderboard.score", "totalScore", "total_score", "score", "data.totalScore", "data.total_score", "leader.totalScore",
     )))
     daily = _number(_find(payload, (
         "dailyScore", "daily_score", "scoreToday", "todayScore", "data.dailyScore", "data.daily_score",
@@ -76,7 +76,7 @@ def parse_score_payload(payload: Mapping[str, Any], *, source: str = "AUTHENTICA
     cap = _number(_find(payload, (
         "dailyScoreCap", "daily_score_cap", "maxDailyScore", "data.dailyScoreCap", "data.daily_score_cap",
     )))
-    rank = _integer(_find(payload, ("rank", "rankValue", "data.rank", "leader.rank")))
+    rank = _integer(_find(payload, ("leaderboard.rank", "rank", "rankValue", "data.rank", "leader.rank")))
     days = _integer(_find(payload, (
         "daysOfSubmission", "submissionDays60d", "submission_days_60d", "data.daysOfSubmission",
     )))

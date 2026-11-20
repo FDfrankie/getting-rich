@@ -276,7 +276,7 @@ class ReportGenerator:
             badge_class = "bg-amber-500/20 text-amber-400 border border-amber-500/30"
             light_icon = "🟡 中性震盪盤整"
 
-        html = f"""
+        html_out = f"""
         <div class="space-y-6 text-slate-100 font-sans print:text-black">
             <!-- 頂部 Header 卡片 -->
             <div class="bg-gradient-to-r from-slate-900 to-indigo-950/80 border border-indigo-500/30 rounded-2xl p-5 shadow-2xl">
@@ -343,7 +343,7 @@ class ReportGenerator:
         """
 
         if not picks:
-            html += """
+            html_out += """
                             <tr>
                                 <td colspan="8" class="text-center py-4 text-amber-400 font-sans bg-amber-950/20">
                                     ⚠️ 今日篩選池中無標的完全符合突破門檻 (分數 &ge; 50 分)，系統啟動防守保護機制！以下為最接近門檻標的：
@@ -358,7 +358,7 @@ class ReportGenerator:
                         for s in p["signals"]
                     ]
                 )
-                html += f"""
+                html_out += f"""
                             <tr class="hover:bg-slate-800/40 transition">
                                 <td class="py-2.5 px-3 font-bold text-white font-sans">{p["symbol"]} <span class="text-[10px] text-amber-400">(觀察中)</span></td>
                                 <td class="py-2.5 px-3 text-slate-200">${p["close"]}</td>
@@ -379,7 +379,7 @@ class ReportGenerator:
                         for s in p["signals"]
                     ]
                 )
-                html += f"""
+                html_out += f"""
                             <tr class="hover:bg-slate-800/40 transition">
                                 <td class="py-2.5 px-3 font-bold text-white font-sans">{p["symbol"]}</td>
                                 <td class="py-2.5 px-3 text-slate-200">${p["close"]}</td>
@@ -394,7 +394,7 @@ class ReportGenerator:
 
         # 空頭防禦避險標的表格
         if defense_hedges:
-            html += """
+            html_out += """
                         </tbody>
                     </table>
                 </div>
@@ -421,7 +421,7 @@ class ReportGenerator:
                         <tbody class="divide-y divide-slate-800/60 font-mono">
             """
             for d in defense_hedges:
-                html += f"""
+                html_out += f"""
                             <tr class="hover:bg-slate-800/40 transition">
                                 <td class="py-2.5 px-3 font-bold text-amber-300 font-sans">{d["symbol"]}</td>
                                 <td class="py-2.5 px-3 text-slate-200">${d["close"]}</td>
@@ -429,7 +429,7 @@ class ReportGenerator:
                                 <td class="py-2.5 px-3 text-slate-300 font-sans">{d["reason"]}</td>
                             </tr>
                 """
-            html += """
+            html_out += """
                         </tbody>
                     </table>
                 </div>
@@ -489,7 +489,7 @@ class ReportGenerator:
                     if is_html_fallback
                     else '<span class="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold">LightGBM ML Verified</span>'
                 )
-                html += f"""
+                html_out += f"""
                 <!-- 第 3 區塊：ML 多因子排序榜 -->
                 <div class="bg-slate-900/90 border border-indigo-500/30 rounded-xl p-4">
                     <div class="flex items-center justify-between mb-3">
@@ -516,7 +516,7 @@ class ReportGenerator:
                 for _, r in rank_df.head(5).iterrows():
                     ret_val = float(r["predicted_fwd_5d_ret_pct"])
                     ret_color = "text-rose-400" if ret_val >= 0 else "text-emerald-400"
-                    html += f"""
+                    html_out += f"""
                                 <tr class="hover:bg-slate-800/40 transition">
                                     <td class="py-2.5 px-3 font-bold text-indigo-400 font-sans">#{int(r["rank"])}</td>
                                     <td class="py-2.5 px-3 font-bold text-white font-sans">{r["symbol"]}</td>
@@ -526,21 +526,21 @@ class ReportGenerator:
                                     <td class="py-2.5 px-3 text-slate-300">{float(r["rsi_14"]):.1f}</td>
                                 </tr>
                     """
-                html += """
+                html_out += """
                             </tbody>
                         </table>
                     </div>
                 </div>
                 """
         except Exception as e:
-            html += f"""
+            html_out += f"""
             <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-4 text-xs text-slate-500">
                 ML 多因子排序榜載入略過: {html.escape(str(e), quote=True)}
             </div>
             """
 
         post_mortems = self.sync.get_recent_post_mortems(limit=5)
-        html += """
+        html_out += """
             <!-- 覆盤與虧損檢討區塊 -->
             <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-4">
                 <div class="flex items-center justify-between mb-3">
@@ -565,14 +565,14 @@ class ReportGenerator:
                         <tbody class="divide-y divide-slate-800/60 font-mono">
         """
         if not post_mortems:
-            html += """
+            html_out += """
                             <tr>
                                 <td colspan="7" class="text-center py-4 text-slate-500 font-sans">近期無停損或虧損事件，系統執行紀律良好。</td>
                             </tr>
             """
         else:
             for pm in post_mortems:
-                html += f"""
+                html_out += f"""
                             <tr class="hover:bg-slate-800/40 transition">
                                 <td class="py-2.5 px-3 text-slate-300 font-sans">{pm["date"]}</td>
                                 <td class="py-2.5 px-3 font-bold text-white font-sans">{pm["symbol"]}</td>
@@ -583,14 +583,14 @@ class ReportGenerator:
                                 <td class="py-2.5 px-3 text-slate-300 font-sans">{pm["cause_analysis"]}</td>
                             </tr>
                 """
-        html += """
+        html_out += """
                         </tbody>
                     </table>
                 </div>
             </div>
         </div>
         """
-        return html
+        return html_out
 
 
 if __name__ == "__main__":

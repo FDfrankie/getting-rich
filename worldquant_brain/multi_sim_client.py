@@ -538,6 +538,7 @@ def simulate_multi_alpha(
         if code == 403:
             try:
                 setattr(client, "_multi_sim_forbidden", True)
+                setattr(client, "_multi_sim_forbidden_reason", "FEATURE_NOT_ENTITLED")
             except Exception:
                 pass
         logger.warning(

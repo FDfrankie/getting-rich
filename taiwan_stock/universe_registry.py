@@ -1115,7 +1115,10 @@ def _safe_float(v: Any) -> float | None:
     if not s or s in {"--", "---", "X", "N/A"}:
         return None
     try:
-        return float(s)
+        f = float(s)
+        if np.isnan(f) or np.isinf(f):
+            return None
+        return f
     except ValueError:
         return None
 
@@ -1141,16 +1144,7 @@ def get_taiwan_tick_size(price: float) -> float:
 
 
 
-def _safe_float(val: Any) -> float | None:
-    try:
-        if val is None:
-            return None
-        f = float(val)
-        if np.isnan(f) or np.isinf(f):
-            return None
-        return f
-    except Exception:
-        return None
+
 
 
 

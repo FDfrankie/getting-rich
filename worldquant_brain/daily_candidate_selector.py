@@ -29,11 +29,26 @@ def should_use_exploration_slot(formal_submission_count: int) -> bool:
     return (next_submission_number % 5) == 0
 
 
+def _is_pool_safe_for_reserve(candidate: Mapping[str, Any], result: UtilityResult) -> bool:
+    """Ensure reserve_high_value=True never picks pool-degrading alphas."""
+    if result.submission_utility <= 0.0:
+        return False
+    corr = candidate.get("self_correlation")
+    if corr is not None:
+        try:
+            if float(corr) >= 0.50:
+                return False
+        except (TypeError, ValueError):
+            pass
+    return True
+
+
 def select_daily_candidates(
     candidates: Iterable[Mapping[str, Any]],
     *,
     top_k: int = 2,
     formal_submission_count: int = 0,
+    reserve_high_value: bool = False,
 ) -> SelectionBatch:
     if top_k < 0:
         raise ValueError("top_k must be >= 0")
@@ -54,16 +69,45 @@ def select_daily_candidates(
             continue
         evaluated.append((candidate, result))
 
-    exploitation = sorted(
-        evaluated,
-        key=lambda item: (
-            item[1].submission_utility,
-            item[1].novelty_score,
-            item[1].stability_score,
-            str(item[0].get("created_at") or ""),
-        ),
-        reverse=True,
-    )
+    # When reserve_high_value=True, prioritize positive-utility, low-correlation (< 0.50)
+    # qualifying alphas in ascending utility order so top gems are saved for monetization
+    # without ever intentionally submitting pool-degrading alphas.
+    if reserve_high_value:
+        pool_safe = [item for item in evaluated if _is_pool_safe_for_reserve(item[0], item[1])]
+        pool_unsafe = [item for item in evaluated if not _is_pool_safe_for_reserve(item[0], item[1])]
+        pool_safe_sorted = sorted(
+            pool_safe,
+            key=lambda item: (
+                item[1].submission_utility,
+                -item[1].novelty_score,
+                -item[1].stability_score,
+                str(item[0].get("created_at") or ""),
+            ),
+            reverse=False,
+        )
+        # Non-pool-safe items are pushed strictly to the back in descending utility order
+        pool_unsafe_sorted = sorted(
+            pool_unsafe,
+            key=lambda item: (
+                item[1].submission_utility,
+                item[1].novelty_score,
+                item[1].stability_score,
+                str(item[0].get("created_at") or ""),
+            ),
+            reverse=True,
+        )
+        exploitation = pool_safe_sorted + pool_unsafe_sorted
+    else:
+        exploitation = sorted(
+            evaluated,
+            key=lambda item: (
+                item[1].submission_utility,
+                item[1].novelty_score,
+                item[1].stability_score,
+                str(item[0].get("created_at") or ""),
+            ),
+            reverse=True,
+        )
 
     exploration = sorted(
         evaluated,
@@ -81,7 +125,7 @@ def select_daily_candidates(
     for slot in range(top_k):
         use_exploration = should_use_exploration_slot(formal_submission_count + slot)
         source = exploration if use_exploration else exploitation
-        selection_type = "EXPLORE" if use_exploration else "EXPLOIT"
+        selection_type = "EXPLORE" if use_exploration else ("CHALLENGE_LOWEST_QUALIFYING" if reserve_high_value else "EXPLOIT")
         selected_item = None
 
         for candidate, utility_result in source:

@@ -8,7 +8,6 @@ crypto trading.
 """
 from __future__ import annotations
 
-import os
 import re
 from typing import Any
 
@@ -215,7 +214,8 @@ def evaluate_fastexpr_on_ohlcv(expression: str, df: pd.DataFrame) -> pd.Series:
         "hump": hump,
     }
     try:
-        raw = eval(expr_clean, env, {})  # noqa: S307 - strictly sandboxed AST env with empty builtins
+        from worldquant_brain.safe_expr_eval import safe_eval_expr
+        raw = safe_eval_expr(expr_clean, env)
         ser = raw if isinstance(raw, pd.Series) else pd.Series(raw, index=df.index, dtype=float)
         ser = pd.to_numeric(ser, errors="coerce").replace([np.inf, -np.inf], np.nan).fillna(0.0)
         # Standardize causally into [-1, 1] via rolling z-score tanh

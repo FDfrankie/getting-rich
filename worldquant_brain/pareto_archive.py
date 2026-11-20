@@ -1092,7 +1092,6 @@ class ParetoArchive:
 # ---------------------------------------------------------------------------
 # Shadow-mode SQLite Persistence Layer (011_pareto_archive.sql)
 # ---------------------------------------------------------------------------
-import contextlib
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1115,7 +1114,7 @@ class ParetoArchiveShadowStore:
         """Persist current archive entries idempotently into pareto_archive_entries and record a snapshot."""
         now = datetime.now(timezone.utc).isoformat()
         entries = list(archive.entries.values())
-        with contextlib.closing(self._connect()) as conn, conn:
+        with self._connect() as conn:
             for e in entries:
                 cand = e.candidate
                 vec = cand.objectives

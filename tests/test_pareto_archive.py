@@ -181,8 +181,8 @@ class TestParetoArchive(unittest.TestCase):
         arch = ParetoArchive(scope=ArchiveScope.COHORT, scope_key="USA:D1:TOP3000")
         arch.admit(_make_candidate("s1", _make_vec(official_quality=0.90, capacity=0.40)))
         arch.admit(_make_candidate("s2", _make_vec(official_quality=0.50, capacity=0.90)))
-        with tempfile.TemporaryDirectory() as td:
-            db_path = str(Path(td) / "test.db")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            db_path = Path(td) / "test.db"
             conn = sqlite3.connect(db_path)
             conn.executescript(m011)
             conn.close()

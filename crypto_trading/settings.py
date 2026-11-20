@@ -83,6 +83,14 @@ class Settings:
     def is_live(self) -> bool:
         return self.trading_mode == TradingMode.BITUNIX_LIVE
 
+    @property
+    def live_trading_unlocked(self) -> bool:
+        return (
+            self.is_live
+            and self.enable_live_trading == "I_UNDERSTAND_THE_RISK"
+            and self.live_operator_ack_version == self.EXPECTED_OPERATOR_ACK_VERSION
+        )
+
     def _validate(self) -> None:
         if self.trading_mode == TradingMode.BITUNIX_LIVE:
             if self.enable_live_trading != "I_UNDERSTAND_THE_RISK":

@@ -43,7 +43,7 @@ jobs:
           BRAIN_EMAIL: ${{ secrets.BRAIN_EMAIL }}
           BRAIN_PASSWORD: ${{ secrets.BRAIN_PASSWORD }}
           BRAIN_SIMULATION_ENABLED: "true"
-          BRAIN_AUTO_SUBMIT_ENABLED: "true"
+          BRAIN_AUTO_SUBMIT_ENABLED: "false"
           BRAIN_QUEUE_WORKERS: "2"
           BRAIN_HIGH_BAR_SHARPE: "1.80"
           BRAIN_DAILY_FLUSH_HOUR: "22"

@@ -52,6 +52,7 @@ cover/
 
 # Environments
 .env
+.env.*
 !.env.example
 .venv
 env/
@@ -81,8 +82,19 @@ Thumbs.db
 
 # Data & cache
 data_cache/
+*.pkl
+*.parquet
 reports/*.html
+reports/*.json
+reports/*.xml
 reports/*.txt
+worldquant_brain/verified_alphas.json
+worldquant_brain/*panel_cache*
+scripts/archive_zips/
+scripts/antigravity_*_bundle*.zip
+scripts/antigravity_*_bundle*.sha256
+scripts/antigravity_*.zip
+scripts/antigravity_*.sha256
 
 # Local workspace & patch backups
 .patch_backups/

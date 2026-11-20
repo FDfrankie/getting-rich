@@ -208,6 +208,7 @@ class OrderManager:
         amount: float,
         price: float | None = None,
         client_tag: str = "",
+        reduce_only: bool = False,
     ) -> dict[str, Any]:
         """
         執行安全冪等下單流程：
@@ -224,22 +225,27 @@ class OrderManager:
         cid = claim_res["client_order_id"]
         try:
             # 呼叫交易所或客戶端下單
+            import inspect
             if hasattr(client, "create_order"):
-                res = client.create_order(
-                    symbol=symbol,
-                    side=side,
-                    order_type=order_type,
-                    amount=amount,
-                    price=price,
-                )
+                fn = client.create_order
+                params = inspect.signature(fn).parameters
+                has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+                kwargs = {"symbol": symbol, "side": side, "order_type": order_type, "amount": amount, "price": price}
+                if has_varkw or "reduce_only" in params:
+                    kwargs["reduce_only"] = bool(reduce_only)
+                if has_varkw or "client_order_id" in params:
+                    kwargs["client_order_id"] = cid
+                res = fn(**kwargs)
             elif hasattr(client, "place_order"):
-                res = client.place_order(
-                    symbol=symbol,
-                    side=side,
-                    amount=amount,
-                    order_type=order_type,
-                    price=price,
-                )
+                fn = client.place_order
+                params = inspect.signature(fn).parameters
+                has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+                kwargs = {"symbol": symbol, "side": side, "amount": amount, "order_type": order_type, "price": price}
+                if has_varkw or "reduce_only" in params:
+                    kwargs["reduce_only"] = bool(reduce_only)
+                if has_varkw or "client_order_id" in params:
+                    kwargs["client_order_id"] = cid
+                res = fn(**kwargs)
             else:
                 raise AttributeError("Client does not have create_order or place_order method")
 

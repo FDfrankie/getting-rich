@@ -5,8 +5,10 @@ Complies with docs/BRAIN_WEB_API_ASYNC_FIX_SPEC.md.
 
 from __future__ import annotations
 
+import tempfile
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from worldquant_brain.brain_job_queue import (
@@ -32,6 +34,13 @@ class MockBrainClient:
 
 
 class TestBrainJobQueue(unittest.TestCase):
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self._db_path = str(Path(self._td.name) / "test_queue.db")
+
+    def tearDown(self):
+        self._td.cleanup()
+
     def test_immediate_202_non_blocking(self):
         """HTTP handler 不等待遠端輪詢（0 秒阻塞），非同步 202 立即返回"""
         mock_client = MockBrainClient(offline_mode=False)
@@ -47,7 +56,9 @@ class TestBrainJobQueue(unittest.TestCase):
         mock_get_resp.json.return_value = {"status": "RUNNING"}
         mock_client.session.get.return_value = mock_get_resp
 
-        queue = BrainJobQueue(mock_client, default_poll_interval=0.1)
+        queue = BrainJobQueue(mock_client, db_path=self._db_path, default_poll_interval=0.1)
+        # Warm up lazy validator import outside the non-blocking create_job latency check
+        from worldquant_brain.alpha_miner import validate_candidate_expression  # noqa: F401
 
         t0 = time.monotonic()
         job, is_new = queue.create_job("rank(close / delay(close, 5))")
@@ -85,7 +96,7 @@ class TestBrainJobQueue(unittest.TestCase):
 
         mock_client.session.get.side_effect = [poll_running, poll_complete]
 
-        queue = BrainJobQueue(mock_client, default_poll_interval=0.05)
+        queue = BrainJobQueue(mock_client, db_path=self._db_path, default_poll_interval=0.05)
         job, _ = queue.create_job("rank(volume * close)")
 
         # Wait up to 2 seconds for worker to complete
@@ -113,7 +124,7 @@ class TestBrainJobQueue(unittest.TestCase):
             }
         )
 
-        queue = BrainJobQueue(mock_client, default_poll_interval=0.05)
+        queue = BrainJobQueue(mock_client, db_path=self._db_path, default_poll_interval=0.05)
         job, _ = queue.create_job("ts_max(high, 20)")
 
         deadline = time.monotonic() + 1.0
@@ -128,7 +139,7 @@ class TestBrainJobQueue(unittest.TestCase):
         mock_client = MockBrainClient(offline_mode=False)
         mock_client.session.post.side_effect = ConnectionResetError("Connection reset by peer: secret_token=abc12345")
 
-        queue = BrainJobQueue(mock_client, default_poll_interval=0.05)
+        queue = BrainJobQueue(mock_client, db_path=self._db_path, default_poll_interval=0.05)
         job, _ = queue.create_job("rank(open / vwap)")
 
         deadline = time.monotonic() + 1.0

@@ -1157,12 +1157,47 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=STATIC_DIR, **kwargs)
 
+    def _allowed_cors_origin(self) -> str:
+        origin = (self.headers.get("Origin") or "").strip() if getattr(self, "headers", None) else ""
+        raw_allow = os.getenv(
+            "WEB_UI_ALLOWED_ORIGINS",
+            "http://127.0.0.1:8999,http://localhost:8999,http://127.0.0.1:8000,http://localhost:8000",
+        )
+        allowed = {o.strip() for o in raw_allow.split(",") if o.strip()}
+        if origin and origin in allowed:
+            return origin
+        return next(iter(allowed), "http://127.0.0.1:8999")
+
+    def _check_write_auth(self, path: str) -> bool:
+        protected = {
+            "/api/crypto/order",
+            "/api/crypto/close_all",
+            "/api/crypto/switch_mode",
+            "/api/crypto/bot_control",
+            "/api/brain/submit_direct",
+        }
+        if path not in protected:
+            return True
+        host = os.getenv("HOST", "127.0.0.1").strip()
+        auth_req_env = os.getenv("WEB_UI_AUTH_REQUIRED", "").strip().lower()
+        auth_required = (auth_req_env == "true") or (auth_req_env != "false" and host not in {"127.0.0.1", "localhost", "::1"})
+        if not auth_required:
+            return True
+        from web_ui.auth import Role, auth_manager
+        token = (self.headers.get("X-Session-Token") or "").strip() if getattr(self, "headers", None) else ""
+        csrf = (self.headers.get("X-CSRF-Token") or "").strip() if getattr(self, "headers", None) else ""
+        if not token or not auth_manager.check_permission(token, Role.OPERATOR) or not auth_manager.validate_csrf(token, csrf):
+            self._send_error_json("UNAUTHORIZED", "Operator session and valid CSRF token required", status=403)
+            return False
+        return True
+
     def _send_json_response(self, data: dict[str, Any], status: int = 200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", self._allowed_cors_origin())
+        self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Content-Length", str(len(body)))
@@ -1183,9 +1218,10 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Origin", self._allowed_cors_origin())
+        self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Session-Token, X-CSRF-Token")
         self.end_headers()
 
     def do_GET(self):
@@ -2035,6 +2071,8 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        if not self._check_write_auth(path):
+            return
         length = int(self.headers.get("Content-Length", 0))
         post_data = {}
         if length > 0:

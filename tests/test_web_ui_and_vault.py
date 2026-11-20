@@ -176,13 +176,22 @@ class TestWebUIAndServices(unittest.TestCase):
 
     def test_06_crypto_order_via_api(self):
         """測試透過 API 提交下單與平倉指令"""
+        from web_ui.auth import Role, auth_manager
+
         base_url = f"http://127.0.0.1:{self.test_port}"
+        token = auth_manager.create_session("test_operator", Role.OPERATOR)
+        sess = auth_manager.get_session(token) or {}
+        auth_headers = {
+            "Content-Type": "application/json",
+            "X-Session-Token": token,
+            "X-CSRF-Token": str(sess.get("csrf_token", "")),
+        }
 
         # 下單
         req = Request(
             f"{base_url}/api/crypto/order",
             data=json.dumps({"side": "BUY", "amount": 0.01, "symbol": "BTC/USDT"}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers=auth_headers,
         )
         with urlopen(req) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -192,7 +201,7 @@ class TestWebUIAndServices(unittest.TestCase):
         req_close = Request(
             f"{base_url}/api/crypto/close_all",
             data=b"{}",
-            headers={"Content-Type": "application/json"},
+            headers=auth_headers,
         )
         with urlopen(req_close) as resp:
             data = json.loads(resp.read().decode("utf-8"))

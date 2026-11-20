@@ -73,63 +73,170 @@ class RiskManager:
         self.max_leverage = RISK_PARAMS.get("max_leverage", 5)
         self.max_exposure_pct = RISK_PARAMS.get("max_exposure_pct", 1.5)  # 總持倉名義價值上限
         self.min_notional = 5.0
+        self.drawdown_reduce_limit = float(RISK_PARAMS.get("drawdown_reduce_pct", 0.05))
+        self.cooldown_hours = float(RISK_PARAMS.get("circuit_breaker_cooldown_hours", 24.0))
         self.is_halted = False
+        self.halted_at: datetime | None = None
+        self.defensive_mode = False
         self._halt_logged = False
         self._capital_anchored = False
         self.daily_pnl = 0.0
         self.db_path = db_path
 
-    def reanchor_capital(self, capital: float) -> None:
-        """Re-anchor initial, peak, and current capital when syncing persisted or exchange starting balance."""
+    def reanchor_capital(self, capital: float, *, defensive: bool = False) -> None:
+        """Re-anchor initial, peak, and current capital when syncing balance or recovering after cooldown."""
         if capital is not None and float(capital) > 0:
             c = float(capital)
             self.initial_capital = c
             self.peak_capital = c
             self.current_capital = c
             self.is_halted = False
+            self.halted_at = None
+            self.defensive_mode = bool(defensive)
             self._halt_logged = False
             self._capital_anchored = True
 
-    def update_capital(self, new_capital: float) -> bool:
-        """更新資金並檢查是否觸發回撤熔斷（首次注入非預設 10000 起始資金時自動錨定，且熔斷警報僅印出一次不刷屏）"""
+    def update_capital(self, new_capital: float, *, now: datetime | None = None) -> bool:
+        """更新資金並檢查分級回撤與自動冷卻復原（避免永久鎖死）"""
+        from datetime import timezone
+        curr_time = now or datetime.now(timezone.utc)
         if not self._capital_anchored and self.peak_capital == 10000.0 and 0 < new_capital < 9000.0:
             self.reanchor_capital(new_capital)
             return True
         self._capital_anchored = True
+
+        # Auto-recovery after circuit-breaker cooldown window expires
+        if self.is_halted and self.halted_at is not None and self.cooldown_hours > 0:
+            elapsed_h = (curr_time - self.halted_at).total_seconds() / 3600.0
+            if elapsed_h >= self.cooldown_hours and new_capital > 0:
+                self.reanchor_capital(new_capital, defensive=True)
+                return True
+
         self.current_capital = new_capital
-        self.peak_capital = max(self.peak_capital, new_capital)
+        if new_capital > self.peak_capital:
+            self.peak_capital = new_capital
+            self.defensive_mode = False
 
         drawdown = (self.peak_capital - self.current_capital) / max(self.peak_capital, 1e-9)
         if drawdown >= self.max_drawdown_limit:
             self.is_halted = True
+            if self.halted_at is None:
+                self.halted_at = curr_time
             if not self._halt_logged:
                 self._halt_logged = True
                 print(
-                    f"[🚨 警報] 帳戶累計回撤達到 {drawdown * 100:.2f}%，超過最大容忍限制 {self.max_drawdown_limit * 100}%！啟動交易熔斷保護！"
+                    f"[🚨 警報] 帳戶累計回撤達到 {drawdown * 100:.2f}%，超過上限 {self.max_drawdown_limit * 100:.1f}%！啟動交易熔斷保護（{self.cooldown_hours:.0f} 小時冷卻後將自動以當前資金重錨並減半倉位復原）。"
                 )
             return False
+
+        self.defensive_mode = drawdown >= self.drawdown_reduce_limit
         self._halt_logged = False
         return True
 
     def calculate_position_size(self, current_price: float, atr: float) -> dict[str, float]:
-        if self.is_halted:
-            return {"size": 0.0, "stop_loss": 0.0, "take_profit": 0.0}
-
         stop_distance = max(atr * RISK_PARAMS.get("atr_stop_multiplier", 2.0), current_price * 0.01)
-        risk_amount = self.current_capital * self.risk_per_trade
-        position_size = risk_amount / stop_distance
-
-        max_notional = self.current_capital * 0.5
-        if position_size * current_price > max_notional:
-            position_size = max_notional / current_price
-
-        return {
-            "size": round(position_size, 4),
+        levels = {
             "stop_loss_distance": round(stop_distance, 2),
             "stop_loss_long": round(current_price - stop_distance, 2),
             "stop_loss_short": round(current_price + stop_distance, 2),
             "take_profit_long": round(current_price + (stop_distance * 1.5), 2),
             "take_profit_short": round(current_price - (stop_distance * 1.5), 2),
+        }
+        if self.is_halted:
+            return {"size": 0.0, "stop_loss": 0.0, "take_profit": 0.0, **levels}
+
+        risk_mult = 0.5 if self.defensive_mode else 1.0
+        risk_amount = self.current_capital * self.risk_per_trade * risk_mult
+        position_size = risk_amount / stop_distance
+
+        max_notional = self.current_capital * (0.25 if self.defensive_mode else 0.50)
+        if position_size * current_price > max_notional:
+            position_size = max_notional / current_price
+
+        return {"size": round(position_size, 4), **levels}
+
+    def calculate_equity_aware_position_size(
+        self,
+        current_price: float,
+        atr: float,
+        *,
+        signal_strength: float = 1.0,
+        target_leverage: float = 2.0,
+        maintenance_margin_rate: float = 0.005,
+        liquidation_safety_factor: float = 3.0,
+        min_notional: float = 5.0,
+        step_size: float = 0.001,
+        max_capital_utilization: float = 0.90,
+        active_symbols_count: int = 1,
+    ) -> dict[str, Any]:
+        """Dynamic equity-aware sizer with safe isolated-margin leverage for small ($300) to large accounts.
+
+        Guarantees:
+          1. Effective leverage is bounded by `max_leverage` AND `liquidation_safety_factor` so the
+             isolated liquidation price is always at least 3x farther than the ATR stop-loss.
+          2. Maximizes safe capital utilization on live balance while respecting exchange `step_size`
+             and `min_notional` (including Bitunix/Binance Tier-1 isolated margin rules).
+        """
+        from decimal import Decimal, ROUND_DOWN
+
+        base = self.calculate_position_size(current_price, atr)
+        if self.is_halted or current_price <= 0 or self.current_capital <= 0:
+            return {**base, "size": 0.0, "notional": 0.0, "effective_leverage": 0.0, "margin_used": 0.0, "skip_reason": "HALTED_OR_INVALID_EQUITY"}
+
+        conviction = max(0.0, min(1.0, abs(float(signal_strength))))
+        if conviction <= 0.0:
+            return {**base, "size": 0.0, "notional": 0.0, "effective_leverage": 0.0, "margin_used": 0.0, "skip_reason": "ZERO_SIGNAL"}
+
+        # Compute liquidation-safe leverage cap from ATR stop distance (Binance/Bitunix isolated margin model)
+        stop_dist = float(base["stop_loss_distance"])
+        stop_pct = max(stop_dist / current_price, 0.01)
+        mmr = max(0.004, float(maintenance_margin_rate))
+        # Ensure (1 / lev) - mmr >= stop_pct * liquidation_safety_factor
+        max_safe_lev_by_stop = 1.0 / max(stop_pct * float(liquidation_safety_factor) + mmr, 0.05)
+        defensive_lev_cap = 1.5 if self.defensive_mode else float(self.max_leverage)
+        eff_leverage = max(1.0, min(float(target_leverage), defensive_lev_cap, max_safe_lev_by_stop))
+
+        # Per-symbol isolated margin budget -> leveraged notional
+        n_syms = max(1, int(active_symbols_count))
+        defensive_scale = 0.5 if self.defensive_mode else 1.0
+        margin_budget = (self.current_capital / n_syms) * float(max_capital_utilization) * conviction * defensive_scale
+        target_notional = margin_budget * eff_leverage
+        raw_qty = target_notional / current_price
+
+        if step_size > 0:
+            d_step = Decimal(str(step_size))
+            qty = float((Decimal(str(raw_qty)) / d_step).to_integral_value(rounding=ROUND_DOWN) * d_step)
+        else:
+            qty = round(raw_qty, 6)
+
+        realized_notional = qty * current_price
+        if qty <= 0 or realized_notional < float(min_notional):
+            return {
+                **base,
+                "size": 0.0,
+                "notional": 0.0,
+                "precheck_leverage": round(eff_leverage, 2),
+            "effective_leverage": round(eff_leverage, 2),
+            "liquidation_source": "PRECHECK_APPROXIMATION_ONLY",
+                "margin_used": 0.0,
+                "skip_reason": f"BELOW_MIN_NOTIONAL_OR_STEP(notional={realized_notional:.2f}<min={min_notional:.2f})",
+            }
+
+        margin_used = realized_notional / eff_leverage
+        liq_dist_pct = max(0.01, (1.0 / eff_leverage) - mmr)
+        return {
+            **base,
+            "size": qty,
+            "notional": round(realized_notional, 2),
+            "margin_used": round(margin_used, 2),
+            "precheck_leverage": round(eff_leverage, 2),
+            "effective_leverage": round(eff_leverage, 2),
+            "liquidation_source": "PRECHECK_APPROXIMATION_ONLY",
+            "est_liquidation_price_long": round(current_price * (1.0 - liq_dist_pct), 2),
+            "est_liquidation_price_short": round(current_price * (1.0 + liq_dist_pct), 2),
+            "capital_utilization_pct": round((margin_used / self.current_capital) * 100.0, 2),
+            "defensive_mode": self.defensive_mode,
+            "skip_reason": None,
         }
 
     def evaluate_order(
@@ -152,7 +259,7 @@ class RiskManager:
         # 1. TradingMode 檢查
         settings = get_settings()
         mode = ctx.get("trading_mode", settings.trading_mode)
-        if mode == TradingMode.BITUNIX_LIVE and not settings.live_trading_unlocked:
+        if mode == TradingMode.BITUNIX_LIVE and not getattr(settings, "live_trading_unlocked", settings.is_live):
             reasons.append("BITUNIX_LIVE is locked without user confirmation token")
 
         # 2. 回撤與每日虧損熔斷
@@ -310,3 +417,81 @@ class RiskManager:
     @property
     def is_trading_halted(self) -> bool:
         return bool(self.is_halted)
+
+    @staticmethod
+    def verify_exchange_liquidation_price(
+        *,
+        entry_price: float,
+        stop_loss_price: float,
+        side: str,
+        exchange_liq_price: float | None,
+        local_precheck_liq_price: float | None = None,
+        precheck_leverage: float | None = None,
+        exchange_confirmed_leverage: float | None = None,
+        mmr_tier_known: bool = True,
+        max_mismatch_pct: float = 0.05,
+        min_liq_to_stop_ratio: float = 2.0,
+    ) -> dict[str, Any]:
+        """Final fail-closed verification against actual exchange-reported liqPrice (Binance/Bitunix).
+
+        Local `(1/leverage) - MMR` is strictly a PRECHECK; orders are BLOCKED if MMR tier is
+        unknown, exchange liqPrice is missing, local vs exchange mismatch exceeds tolerance, or
+        liquidation buffer relative to stop-loss is insufficient.
+        """
+        ex_liq_val = float(exchange_liq_price) if exchange_liq_price is not None else None
+        local_liq_val = float(local_precheck_liq_price) if local_precheck_liq_price is not None else None
+        liq_diff = (
+            round(abs(ex_liq_val - local_liq_val), 6)
+            if (ex_liq_val is not None and local_liq_val is not None)
+            else None
+        )
+        audit_fields = {
+            "precheck_leverage": precheck_leverage,
+            "exchange_confirmed_leverage": exchange_confirmed_leverage,
+            "exchange_liquidation_price": ex_liq_val,
+            "local_liquidation_estimate": local_liq_val,
+            "liquidation_difference": liq_diff,
+        }
+
+        if not mmr_tier_known:
+            return {"allowed": False, "action": "BLOCK_ORDER", "reason": "UNKNOWN_MMR_TIER", **audit_fields}
+        if ex_liq_val is None or ex_liq_val <= 0:
+            return {"allowed": False, "action": "BLOCK_ORDER", "reason": "MISSING_EXCHANGE_LIQUIDATION_PRICE", **audit_fields}
+
+        ex_liq = ex_liq_val
+        entry = float(entry_price)
+        stop = float(stop_loss_price)
+
+        if local_liq_val is not None and local_liq_val > 0:
+            mismatch = abs(ex_liq - local_liq_val) / entry
+            if mismatch > float(max_mismatch_pct):
+                return {
+                    "allowed": False,
+                    "action": "BLOCK_ORDER",
+                    "reason": f"LIQUIDATION_MISMATCH({mismatch*100:.2f}%>{max_mismatch_pct*100:.2f}%)",
+                    **audit_fields,
+                }
+
+        s_up = side.upper()
+        if s_up in ("BUY", "LONG"):
+            stop_dist = entry - stop
+            liq_dist = entry - ex_liq
+        else:
+            stop_dist = stop - entry
+            liq_dist = ex_liq - entry
+
+        if stop_dist <= 0 or liq_dist <= 0 or liq_dist < stop_dist * float(min_liq_to_stop_ratio):
+            return {
+                "allowed": False,
+                "action": "BLOCK_ORDER",
+                "reason": f"INSUFFICIENT_LIQUIDATION_BUFFER(liq_dist={liq_dist:.4f}, stop_dist={stop_dist:.4f})",
+                **audit_fields,
+            }
+
+        return {
+            "allowed": True,
+            "action": "APPROVE",
+            "reason": "EXCHANGE_LIQUIDATION_CONFIRMED",
+            "liq_to_stop_ratio": round(liq_dist / stop_dist, 2),
+            **audit_fields,
+        }

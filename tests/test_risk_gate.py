@@ -71,11 +71,7 @@ def test_risk_gate_fail_closed_on_stale_data():
         context=ctx,
     )
     assert reduce_dec.allowed is True
-    assert (
-        reduce_dec.action == DecisionAction.REUCE_ONLY
-        if hasattr(DecisionAction, "REUCE_ONLY")
-        else DecisionAction.REDUCE_ONLY
-    )
+    assert reduce_dec.action == DecisionAction.REDUCE_ONLY
 
 
 def test_risk_gate_drawdown_circuit_breaker():

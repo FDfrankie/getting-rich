@@ -180,8 +180,8 @@ class TestEditMotif(unittest.TestCase):
         self.assertEqual(m.motif_type, EditMotifType.ADD_RANK)
         c = _buzz_context()
         m010 = (REPO_ROOT / "migrations" / "010_forbidden_edit_motifs.sql").read_text(encoding="utf-8")
-        with tempfile.TemporaryDirectory() as td:
-            db_path = str(Path(td) / "test.db")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            db_path = Path(td) / "test.db"
             conn = sqlite3.connect(db_path)
             conn.executescript(m010)
             conn.close()

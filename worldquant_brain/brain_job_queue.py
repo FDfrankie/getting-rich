@@ -138,8 +138,18 @@ class BrainSimulationJob:
         return res
 
 
+try:
+    from worldquant_brain.canonical_ast import parse_fastexpr as _parse_fastexpr
+except Exception:
+    _parse_fastexpr = None
+
+
 def compute_simulation_key(expression: str, settings: Mapping[str, Any] | None = None) -> str:
-    data = {"expression": expression.strip(), "settings": dict(settings or {})}
+    try:
+        canon_expr = (_parse_fastexpr(expression).canonical_expression if _parse_fastexpr else None) or expression.strip()
+    except Exception:
+        canon_expr = expression.strip()
+    data = {"expression": canon_expr, "settings": dict(settings or {})}
     raw = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -470,6 +480,13 @@ class BrainJobQueue:
 
     def _worker_loop(self) -> None:
         while self._running:
+            with self._lock:
+                wait_until = self._rate_limit_until
+            if wait_until > 0.0:
+                rem = wait_until - time.monotonic()
+                if rem > 0.0:
+                    time.sleep(min(rem, 0.25))
+                    continue
             job_to_run = None
             with self._lock:
                 if self._pending_queue:
@@ -733,16 +750,32 @@ class BrainJobQueue:
                         job.status = BrainJobStatus.COMPLETED if has_metrics else BrainJobStatus.FAILED
                     if has_metrics:
                         self.clear_rate_limit_429()
+                        with self._lock:
+                            job.metrics = {
+                                "sharpe": sharpe,
+                                "fitness": fitness,
+                                "turnover": turnover,
+                                "margin": margin,
+                                "checks_passed": checks_passed,
+                                "failed_checks": failed_check_names,
+                            }
                         self._store_simulation_cache(job)
-                        job.metrics = {
-                            "sharpe": sharpe,
-                            "fitness": fitness,
-                            "turnover": turnover,
-                            "margin": margin,
-                            "checks_passed": checks_passed,
-                            "failed_checks": failed_check_names,
-                        }
-                        if not has_metrics:
+                        self._persist_job(job)
+                        try:
+                            from worldquant_brain.shadow_writeback import record_simulation_shadow
+                            record_simulation_shadow(
+                                self.db_path,
+                                expression=job.expression,
+                                settings=job.settings,
+                                metrics=job.metrics,
+                                alpha_id=job.alpha_id,
+                                parent_expression=(job.settings or {}).get("parent_expression"),
+                                dataset_id=str((job.settings or {}).get("dataset_id") or ""),
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        with self._lock:
                             job.safe_error = "線上模擬完成但缺少有效 Sharpe 或 Fitness 指標"
                         self._persist_job(job)
                     if has_metrics and callable(getattr(self, "on_complete_callback", None)):

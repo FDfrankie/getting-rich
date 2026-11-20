@@ -750,8 +750,7 @@ class ForbiddenEditMotifShadowStore:
         now = datetime.now(timezone.utc).isoformat()
         m_id = motif.motif_id()
         c_id = context.motif_context_id(motif)
-        import contextlib
-        with contextlib.closing(self._connect()) as conn, conn:
+        with self._connect() as conn:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO research_edit_motifs (

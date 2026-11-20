@@ -124,7 +124,7 @@ class TestCanonicalASTConvergence(unittest.TestCase):
         m011_rb = (REPO_ROOT / "migrations" / "011_pareto_archive_rollback.sql").read_text(encoding="utf-8")
 
         with tempfile.TemporaryDirectory() as td:
-            db_path = str(Path(td) / "test.db")
+            db_path = Path(td) / "test.db"
             conn = sqlite3.connect(db_path)
             # Apply twice (idempotency)
             conn.executescript(m010)

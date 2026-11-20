@@ -96,6 +96,7 @@ class OrderExecutionService:
             amount=float(norm_qty),
             price=float(norm_price) if intent.order_type.upper() == "LIMIT" else None,
             client_tag=intent.client_tag,
+            reduce_only=bool(intent.reduce_only),
         )
 
     def emergency_flatten(self, client: Any, symbol: str | None = None) -> dict[str, Any]:
@@ -123,6 +124,7 @@ class OrderExecutionService:
                     amount=float(norm_q),
                     price=None,
                     client_tag=f"flatten_{sym}_{int(datetime.now(timezone.utc).timestamp() // 5)}",
+                    reduce_only=True,
                 )
                 if res.get("success"):
                     closed.append({"symbol": sym, "quantity": str(norm_q), "order_id": res.get("exchange_order_id")})
