@@ -25,6 +25,9 @@ from worldquant_brain.alpha_research_engines import (
     warm_start_structural_mutate,
 )
 from worldquant_brain.alpha_template_expander import generate_diverse_domain_candidate
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
+import logging
+_logger = logging.getLogger(__name__)
 
 
 def _shift_to_prime_windows(expr: str) -> str:
@@ -420,40 +423,9 @@ class ContinuousAlphaMiner:
                 turnover=result["turnover"],
                 category=result["category"],
             )
-            self.record_simulation_outcome(
-                expression=result["expression"],
-                settings=result.get("settings"),
-                metrics=result,
-                dataset_id=str(result.get("category") or ""),
-            )
             self.last_mined_alpha = result
             return result
         return None
-
-    def record_simulation_outcome(
-        self,
-        *,
-        expression: str,
-        settings: dict[str, Any] | None = None,
-        metrics: dict[str, Any] | None = None,
-        alpha_id: str | None = None,
-        parent_expression: str | None = None,
-        dataset_id: str = "",
-    ) -> dict[str, Any]:
-        """Record simulation outcome into Shadow Pareto Archive & Forbidden Edit Motif (never raises)."""
-        try:
-            from worldquant_brain.shadow_writeback import record_simulation_shadow
-            return record_simulation_shadow(
-                self._dedup_db_path(),
-                expression=expression,
-                settings=settings,
-                metrics=metrics,
-                alpha_id=alpha_id,
-                parent_expression=parent_expression,
-                dataset_id=dataset_id,
-            )
-        except Exception as exc:
-            return {"recorded_pareto": False, "recorded_motif": False, "degraded": True, "error": str(exc)}
 
 
     def _dedup_db_path(self) -> str:
@@ -461,9 +433,7 @@ class ContinuousAlphaMiner:
 
     def has_tried_expression(self, expression: str) -> bool:
         import hashlib, sqlite3
-        from worldquant_brain.canonical_ast import parse_fastexpr
-        canon = parse_fastexpr(expression).canonical_expression or expression.strip()
-        expr_hash = hashlib.sha256(canon.encode("utf-8")).hexdigest()
+        expr_hash = hashlib.sha256(expression.strip().encode("utf-8")).hexdigest()
         db_p = self._dedup_db_path()
         if not db_p or db_p == ":memory:" or not os.path.exists(db_p):
             return False
@@ -472,6 +442,7 @@ class ContinuousAlphaMiner:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS brain_tried_expressions (expr_hash TEXT PRIMARY KEY, expression TEXT NOT NULL, created_at TEXT NOT NULL)"
             )
+            ensure_schema_from_ddl(conn, 'CREATE TABLE IF NOT EXISTS brain_tried_expressions (expr_hash TEXT PRIMARY KEY, expression TEXT NOT NULL, created_at TEXT NOT NULL)')
             cur = conn.execute("SELECT 1 FROM brain_tried_expressions WHERE expr_hash = ?", (expr_hash,))
             return cur.fetchone() is not None
         finally:
@@ -480,9 +451,7 @@ class ContinuousAlphaMiner:
     def mark_expression_tried(self, expression: str) -> None:
         import hashlib, sqlite3
         from datetime import datetime, timezone
-        from worldquant_brain.canonical_ast import parse_fastexpr
-        canon = parse_fastexpr(expression).canonical_expression or expression.strip()
-        expr_hash = hashlib.sha256(canon.encode("utf-8")).hexdigest()
+        expr_hash = hashlib.sha256(expression.strip().encode("utf-8")).hexdigest()
         db_p = self._dedup_db_path()
         if not db_p or db_p == ":memory:":
             return
@@ -493,6 +462,7 @@ class ContinuousAlphaMiner:
                 conn.execute(
                     "CREATE TABLE IF NOT EXISTS brain_tried_expressions (expr_hash TEXT PRIMARY KEY, expression TEXT NOT NULL, created_at TEXT NOT NULL)"
                 )
+                ensure_schema_from_ddl(conn, 'CREATE TABLE IF NOT EXISTS brain_tried_expressions (expr_hash TEXT PRIMARY KEY, expression TEXT NOT NULL, created_at TEXT NOT NULL)')
                 conn.execute(
                     "INSERT OR IGNORE INTO brain_tried_expressions (expr_hash, expression, created_at) VALUES (?, ?, ?)",
                     (expr_hash, expression.strip(), datetime.now(timezone.utc).isoformat()),
@@ -516,8 +486,8 @@ class ContinuousAlphaMiner:
             if conn is not None:
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as _silent_exc:
+                    _logger.debug("worldquant_brain/alpha_miner.py:L487 suppressed exception: %s", _silent_exc)
 
     def generate_unique_candidate(
         self,
@@ -707,8 +677,8 @@ class ContinuousAlphaMiner:
                     self.mark_expression_tried(chosen["expression"])
                     chosen["local_quality_score"] = pool[0][0]
                     return chosen
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            _logger.debug("worldquant_brain/alpha_miner.py:L678 suppressed exception: %s", _silent_exc)
         best_score, best_cand = pool[0]
         self.mark_expression_tried(best_cand["expression"])
         best_cand["local_quality_score"] = best_score
@@ -817,7 +787,7 @@ class ContinuousAlphaMiner:
             })
             prime_expr = _shift_to_prime_windows(expr)
             if prime_expr != expr:
-                candidates.insert(2, {
+                candidates.append({
                     "name": "NearMiss_ParamVariantPrimeWindow",
                     "expression": prime_expr,
                     "settings": s_corr2,
@@ -907,8 +877,8 @@ class ContinuousAlphaMiner:
                 max_candidates=max_variants,
             )
             candidates.extend(mp_cands)
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            _logger.debug("worldquant_brain/alpha_miner.py:L878 suppressed exception: %s", _silent_exc)
 
         # 6. Single-Failure Bounded Parameter Binary Search (when len(failed) == 1)
         if len(failed) == 1:
@@ -922,11 +892,9 @@ class ContinuousAlphaMiner:
                     turnover=float(turnover) if turnover is not None else None,
                     max_candidates=max_variants,
                 )
-                insert_at = 3 if any("CORRELATION" in fc or "CORR" in fc for fc in failed) else 2
-                insert_at = min(insert_at, len(candidates))
-                candidates = candidates[:insert_at] + bs_cands + candidates[insert_at:]
-            except Exception:
-                pass
+                candidates = bs_cands + candidates
+            except Exception as _silent_exc:
+                _logger.debug("worldquant_brain/alpha_miner.py:L894 suppressed exception: %s", _silent_exc)
 
         try:
             from worldquant_brain.alpha_yield_booster import precision_repair_near_miss
@@ -934,8 +902,8 @@ class ContinuousAlphaMiner:
                 expr, base_settings, sharpe=float(sharpe), fitness=float(fitness),
                 turnover=float(turnover), margin=norm_margin, failed_checks=list(failed),
             ))
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            _logger.debug("worldquant_brain/alpha_miner.py:L903 suppressed exception: %s", _silent_exc)
 
         emitted: list[dict[str, Any]] = []
         for c in candidates:
@@ -957,8 +925,8 @@ class ContinuousAlphaMiner:
                 self._local_screener = LocalCrossSectionalScreener()
             if self._local_screener.has_panel():
                 selected = self._local_screener.screen_batch(raw_cands, top_k=top_k, allow_download=False)
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            _logger.debug("worldquant_brain/alpha_miner.py:L926 suppressed exception: %s", _silent_exc)
         for c in selected:
             self.mark_expression_tried(c["expression"])
         return selected

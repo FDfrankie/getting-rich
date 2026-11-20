@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
@@ -54,6 +55,7 @@ class BrainDailyScheduler:
                     error_message TEXT
                 )
             """)
+            ensure_schema_from_ddl(conn, '\n                CREATE TABLE IF NOT EXISTS brain_daily_runs (\n                    taipei_date TEXT PRIMARY KEY,\n                    run_id TEXT NOT NULL UNIQUE,\n                    scheduled_at TEXT NOT NULL,\n                    claimed_at TEXT NOT NULL,\n                    claimed_by TEXT NOT NULL,\n                    started_at TEXT,\n                    completed_at TEXT,\n                    status TEXT NOT NULL,\n                    candidates_considered INTEGER NOT NULL DEFAULT 0,\n                    candidates_submitted INTEGER NOT NULL DEFAULT 0,\n                    error_code TEXT,\n                    error_message TEXT\n                )\n            ')
 
     def next_flush_at(self, now: datetime | None = None) -> datetime:
         current = (now or datetime.now(TAIPEI)).astimezone(TAIPEI)

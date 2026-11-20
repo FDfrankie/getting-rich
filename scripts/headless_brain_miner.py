@@ -128,8 +128,14 @@ def run_headless_miner(
     infinite = float(duration_minutes) <= 0.0
     deadline = float("inf") if infinite else (time.monotonic() + max(0.05, float(duration_minutes)) * 60.0)
     auto_submit = os.getenv("BRAIN_AUTO_SUBMIT_ENABLED", "true").lower() == "true"
+    submit_immediately = os.getenv("BRAIN_SUBMIT_IMMEDIATELY", "false").lower() == "true"
     flush_hour = int(os.getenv("BRAIN_DAILY_FLUSH_HOUR", "22") or "22")
     max_daily = int(os.getenv("BRAIN_MAX_DAILY_SUBMISSIONS", "2") or "2")
+    print(
+        f"[MINER_CONFIG] vault_db={vault.db_path} auto_submit={auto_submit} "
+        f"submit_immediately={submit_immediately} flush_hour={flush_hour} max_daily={max_daily}"
+    )
+    _last_flush_wait_hour: dict[str, int | None] = {"hour": None}
 
     def _remove_from_app_list(alpha_id: str) -> None:
         for a in vault.list_alphas():
@@ -208,7 +214,16 @@ def run_headless_miner(
         if not auto_submit:
             return
         taipei_now = datetime.now(timezone(timedelta(hours=8)))
-        if taipei_now.hour < flush_hour or client.get_daily_submission_count() >= max_daily:
+        if client.get_daily_submission_count() >= max_daily:
+            return
+        if not submit_immediately and flush_hour >= 0 and taipei_now.hour < flush_hour:
+            if _last_flush_wait_hour["hour"] != taipei_now.hour:
+                _last_flush_wait_hour["hour"] = taipei_now.hour
+                print(
+                    f"[FLUSH_WAITING] Taipei time {taipei_now.strftime('%H:%M')} < "
+                    f"BRAIN_DAILY_FLUSH_HOUR={flush_hour}; staged alphas remain in candidate pool "
+                    f"(set BRAIN_SUBMIT_IMMEDIATELY=true or BRAIN_DAILY_FLUSH_HOUR=-1 to submit right away)"
+                )
             return
         flushed = client.flush_daily_candidates(max_daily_submissions=max_daily)
         for sr in (flushed or []):

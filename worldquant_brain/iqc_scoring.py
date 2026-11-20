@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import sqlite3
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
@@ -931,6 +932,7 @@ class IQCScoringRepository:
     def migrate(self) -> None:
         with self.connection() as con:
             con.executescript(IQC_SCHEMA_SQL)
+            ensure_schema_from_ddl(con, IQC_SCHEMA_SQL)
 
     def save_report_with_audit(self, report: IQCCandidateReport) -> str:
         self.migrate()

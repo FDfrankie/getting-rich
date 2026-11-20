@@ -590,6 +590,6 @@ def create_kaggle_taiwan_stock_ml_notebook(output_path: str):
 
 
 if __name__ == "__main__":
-    out_dir = r"G:\我的雲端硬碟\炒幣\kaggle_notebooks"
+    out_dir = os.getenv("KAGGLE_NOTEBOOKS_OUT_DIR") or os.path.dirname(os.path.abspath(__file__))
     create_kaggle_crypto_rl_notebook(os.path.join(out_dir, "kaggle_crypto_rl_trading.ipynb"))
     create_kaggle_taiwan_stock_ml_notebook(os.path.join(out_dir, "kaggle_taiwan_stock_ml_ranker.ipynb"))

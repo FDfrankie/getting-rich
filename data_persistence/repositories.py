@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -164,12 +165,22 @@ class SQLiteRepository:
         return event_id
 
 
+_repo_logger = logging.getLogger(__name__)
+
+
 class PostgresRepository(SQLiteRepository):
-    """Cloud PostgreSQL repository adapter using pg_try_advisory_lock when DATABASE_URL is configured."""
+    """PostgreSQL compatibility adapter. Currently persists to a local SQLite fallback until native psycopg driver is enabled."""
 
     def __init__(self, database_url: str | None = None, fallback_sqlite_path: str | Path | None = None) -> None:
         self.database_url = database_url or os.getenv("DATABASE_URL", "")
+        self.is_sqlite_fallback = True
         fallback = fallback_sqlite_path or (Path(__file__).resolve().parent / "postgres_compat.db")
+        if self.database_url:
+            _repo_logger.warning(
+                "PostgresRepository: DATABASE_URL is configured, but native PostgreSQL driver is not enabled; "
+                "falling back to local SQLite at %s",
+                fallback,
+            )
         super().__init__(fallback)
 
     def pg_advisory_lock_sql(self, namespace: str, key: str) -> tuple[str, int]:

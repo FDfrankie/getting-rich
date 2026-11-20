@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Any
 
 from data_persistence.gdrive_sync import _DB_LOCK, STATE_DB_PATH
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 
 
 class OrderState(str, Enum):
@@ -68,6 +69,7 @@ class OrderManager:
                     updated_at TEXT NOT NULL
                 )
             """)
+            ensure_schema_from_ddl(cur.connection, '\n                CREATE TABLE IF NOT EXISTS idempotent_orders (\n                    client_order_id TEXT PRIMARY KEY,\n                    idempotency_key TEXT UNIQUE NOT NULL,\n                    exchange_order_id TEXT,\n                    symbol TEXT NOT NULL,\n                    side TEXT NOT NULL,\n                    order_type TEXT NOT NULL,\n                    amount REAL NOT NULL,\n                    price REAL,\n                    state TEXT NOT NULL,\n                    error_message TEXT,\n                    created_at TEXT NOT NULL,\n                    updated_at TEXT NOT NULL\n                )\n            ')
             conn.commit()
             conn.close()
 

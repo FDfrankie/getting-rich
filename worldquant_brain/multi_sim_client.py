@@ -47,15 +47,15 @@ def _ensure_authenticated(client: Any, *, force_refresh: bool = False) -> bool:
             try:
                 setattr(client, "_multi_sim_last_auth_fail_ts", 0.0)
                 setattr(client, "_multi_sim_last_auth_ok_ts", now_after)
-            except Exception:
-                pass
+            except Exception as _silent_exc:
+                logger.debug("worldquant_brain/multi_sim_client.py:L50 suppressed exception: %s", _silent_exc)
             return True
 
         _LAST_AUTH_FAIL_TS = now_after
         try:
             setattr(client, "_multi_sim_last_auth_fail_ts", now_after)
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            logger.debug("worldquant_brain/multi_sim_client.py:L57 suppressed exception: %s", _silent_exc)
         return False
 
 DEFAULT_SIM_SETTINGS: dict[str, Any] = {
@@ -539,8 +539,8 @@ def simulate_multi_alpha(
             try:
                 setattr(client, "_multi_sim_forbidden", True)
                 setattr(client, "_multi_sim_forbidden_reason", "FEATURE_NOT_ENTITLED")
-            except Exception:
-                pass
+            except Exception as _silent_exc:
+                logger.debug("worldquant_brain/multi_sim_client.py:L542 suppressed exception: %s", _silent_exc)
         logger.warning(
             "Multi-sim POST returned HTTP %s without Location; falling back to single-alpha simulation for %d items",
             code,

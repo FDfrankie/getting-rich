@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from worldquant_brain.alpha_experiment_store import expression_hash, normalize_expression
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 
 PRIORITY = {
     "MANUAL_HIGH": 100,
@@ -58,6 +59,7 @@ class ManualPriorityQueue:
             CREATE INDEX IF NOT EXISTS ix_brain_priority_order
                 ON brain_priority_jobs(status, priority DESC, queued_at ASC);
             """)
+            ensure_schema_from_ddl(conn, "\n            CREATE TABLE IF NOT EXISTS brain_priority_jobs (\n                job_id TEXT PRIMARY KEY,\n                expression_hash TEXT NOT NULL,\n                normalized_expression TEXT NOT NULL,\n                expression TEXT NOT NULL,\n                settings_json TEXT NOT NULL DEFAULT '{}',\n                priority INTEGER NOT NULL,\n                source TEXT NOT NULL,\n                requested_by TEXT,\n                manual_note TEXT,\n                simulation_only INTEGER NOT NULL DEFAULT 1,\n                status TEXT NOT NULL DEFAULT 'PENDING',\n                claimed_by TEXT,\n                claimed_at TEXT,\n                queued_at TEXT NOT NULL,\n                completed_at TEXT\n            );\n            CREATE UNIQUE INDEX IF NOT EXISTS ux_brain_priority_active_expression\n                ON brain_priority_jobs(expression_hash)\n                WHERE status IN ('PENDING','CLAIMED','RUNNING','COMPLETED');\n            CREATE INDEX IF NOT EXISTS ix_brain_priority_order\n                ON brain_priority_jobs(status, priority DESC, queued_at ASC);\n            ")
 
     def enqueue(
         self,

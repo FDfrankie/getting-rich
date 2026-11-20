@@ -16,6 +16,8 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 import requests
+import logging
+_logger = logging.getLogger(__name__)
 
 TWSE_ISIN_URL = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2"
 TPEX_ISIN_URL = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4"
@@ -841,8 +843,8 @@ class TaiwanUniverseRegistry:
                 for sec in parse_twse_html(_fetch(url, timeout=int(timeout)), market=mkt):
                     if sec.industry:
                         isin_ind[sec.symbol] = sec.industry
-            except Exception:
-                pass
+            except Exception as _silent_exc:
+                _logger.debug("taiwan_stock/universe_registry.py:L844 suppressed exception: %s", _silent_exc)
 
         try:
             r = requests.get(self.TWSE_OPENAPI_URL, timeout=timeout)
@@ -877,8 +879,8 @@ class TaiwanUniverseRegistry:
                             (sym, code, name, ind, pop_rank, close_v, pct, vol_v, now),
                         )
                         twse_added += 1
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            _logger.debug("taiwan_stock/universe_registry.py:L880 suppressed exception: %s", _silent_exc)
 
         try:
             r2 = requests.get(self.TPEX_OPENAPI_URL, timeout=timeout)
@@ -913,8 +915,8 @@ class TaiwanUniverseRegistry:
                             (sym, code, name, ind, pop_rank, close_v, pct, vol_v, now),
                         )
                         tpex_added += 1
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            _logger.debug("taiwan_stock/universe_registry.py:L916 suppressed exception: %s", _silent_exc)
 
         val_synced = self.sync_official_valuations(timeout=timeout)
         with self._connect() as conn:
@@ -942,8 +944,8 @@ class TaiwanUniverseRegistry:
                             (pe, dy, pb, code),
                         )
                         updated += 1
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            _logger.debug("taiwan_stock/universe_registry.py:L945 suppressed exception: %s", _silent_exc)
 
         # 2. TPEx tpex_mainboard_peratio_analysis
         try:
@@ -963,8 +965,8 @@ class TaiwanUniverseRegistry:
                             (pe, dy, pb, code),
                         )
                         updated += 1
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            _logger.debug("taiwan_stock/universe_registry.py:L966 suppressed exception: %s", _silent_exc)
 
         # 3. TWSE & TPEx Monthly Revenue YoY (t187ap05_L / mopsfin_t187ap05_O)
         for rev_url in (self.TWSE_REV_URL, self.TPEX_REV_URL):
@@ -978,8 +980,8 @@ class TaiwanUniverseRegistry:
                             yoy = _safe_float(item.get("營業收入-去年同月增減(%)") or item.get("YoY"))
                             if code and yoy is not None:
                                 conn.execute("UPDATE taiwan_symbols SET revenue_yoy=? WHERE code=?", (yoy, code))
-            except Exception:
-                pass
+            except Exception as _silent_exc:
+                _logger.debug("taiwan_stock/universe_registry.py:L981 suppressed exception: %s", _silent_exc)
         return updated
 
     def list_industries(self) -> list[dict[str, Any]]:
@@ -1765,7 +1767,7 @@ def build_yuanta_style_quote_panel(df: pd.DataFrame, symbol: str, meta: dict[str
         "volume_lots": int(float(v.iloc[-1]) / 1000.0),
         "order_book": {
             "quote_mode": "SNAPSHOT",
-            "is_simulated_from_historical": False,
+            "is_simulated_from_historical": True,
             "depth_levels": 0,
             "note": "EXTERNAL_REALTIME_L2_NOT_CONNECTED_SHOWING_DELAYED_PRICE_REFERENCE_ONLY",
             "bids": bids,

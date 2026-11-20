@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 
 
 def _norm_cdf(x: float) -> float:
@@ -110,6 +111,7 @@ class TrialRegistry:
                         created_at TEXT NOT NULL
                     )"""
                 )
+                ensure_schema_from_ddl(conn, 'CREATE TABLE IF NOT EXISTS alpha_trial_registry (\n                        trial_id TEXT PRIMARY KEY,\n                        parent_trial_id TEXT,\n                        blueprint_id TEXT,\n                        expression_hash TEXT NOT NULL,\n                        settings_hash TEXT NOT NULL,\n                        objective TEXT NOT NULL,\n                        sharpe REAL,\n                        fitness REAL,\n                        turnover REAL,\n                        accepted INTEGER NOT NULL DEFAULT 0,\n                        metrics_json TEXT,\n                        created_at TEXT NOT NULL\n                    )')
         finally:
             conn.close()
 

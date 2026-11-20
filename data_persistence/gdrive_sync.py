@@ -3,8 +3,9 @@ import os
 import shutil
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data_persistence")
@@ -57,6 +58,7 @@ class LocalPersistenceService:
                         message TEXT NOT NULL
                     )
                 """)
+                ensure_schema_from_ddl(cur.connection, '\n                    CREATE TABLE IF NOT EXISTS bot_logs (\n                        id INTEGER PRIMARY KEY AUTOINCREMENT,\n                        timestamp TEXT NOT NULL,\n                        message TEXT NOT NULL\n                    )\n                ')
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS bot_state (
                         key TEXT PRIMARY KEY,
@@ -64,6 +66,7 @@ class LocalPersistenceService:
                         updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
                     )
                 """)
+                ensure_schema_from_ddl(cur.connection, "\n                    CREATE TABLE IF NOT EXISTS bot_state (\n                        key TEXT PRIMARY KEY,\n                        value TEXT NOT NULL,\n                        updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))\n                    )\n                ")
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS post_mortems (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,6 +80,7 @@ class LocalPersistenceService:
                         created_at TEXT NOT NULL
                     )
                 """)
+                ensure_schema_from_ddl(cur.connection, '\n                    CREATE TABLE IF NOT EXISTS post_mortems (\n                        id INTEGER PRIMARY KEY AUTOINCREMENT,\n                        date TEXT NOT NULL,\n                        symbol TEXT NOT NULL,\n                        entry_price REAL,\n                        exit_price REAL,\n                        loss_amount REAL,\n                        loss_pct REAL,\n                        cause_analysis TEXT NOT NULL,\n                        created_at TEXT NOT NULL\n                    )\n                ')
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS orders (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,6 +97,7 @@ class LocalPersistenceService:
                         timestamp TEXT NOT NULL
                     )
                 """)
+                ensure_schema_from_ddl(cur.connection, '\n                    CREATE TABLE IF NOT EXISTS orders (\n                        id INTEGER PRIMARY KEY AUTOINCREMENT,\n                        exchange_order_id TEXT,\n                        symbol TEXT NOT NULL,\n                        side TEXT NOT NULL,\n                        order_type TEXT NOT NULL,\n                        price REAL NOT NULL,\n                        amount REAL NOT NULL,\n                        cost REAL,\n                        fee REAL,\n                        status TEXT NOT NULL,\n                        reason TEXT,\n                        timestamp TEXT NOT NULL\n                    )\n                ')
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS positions (
                         symbol TEXT PRIMARY KEY,
@@ -104,6 +109,7 @@ class LocalPersistenceService:
                         updated_at TEXT NOT NULL
                     )
                 """)
+                ensure_schema_from_ddl(cur.connection, '\n                    CREATE TABLE IF NOT EXISTS positions (\n                        symbol TEXT PRIMARY KEY,\n                        side TEXT NOT NULL,\n                        contracts REAL NOT NULL,\n                        entry_price REAL NOT NULL,\n                        unrealized_pnl REAL,\n                        leverage INTEGER DEFAULT 1,\n                        updated_at TEXT NOT NULL\n                    )\n                ')
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS trade_logs (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -118,6 +124,7 @@ class LocalPersistenceService:
                         timestamp TEXT NOT NULL
                     )
                 """)
+                ensure_schema_from_ddl(cur.connection, '\n                    CREATE TABLE IF NOT EXISTS trade_logs (\n                        id INTEGER PRIMARY KEY AUTOINCREMENT,\n                        symbol TEXT NOT NULL,\n                        action TEXT NOT NULL,\n                        side TEXT NOT NULL,\n                        price REAL NOT NULL,\n                        amount REAL NOT NULL,\n                        pnl REAL,\n                        pnl_pct REAL,\n                        reason TEXT,\n                        timestamp TEXT NOT NULL\n                    )\n                ')
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS account_equity (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -127,6 +134,7 @@ class LocalPersistenceService:
                         timestamp TEXT NOT NULL
                     )
                 """)
+                ensure_schema_from_ddl(cur.connection, '\n                    CREATE TABLE IF NOT EXISTS account_equity (\n                        id INTEGER PRIMARY KEY AUTOINCREMENT,\n                        total_equity REAL NOT NULL,\n                        balance_usdt REAL NOT NULL,\n                        unrealized_pnl REAL NOT NULL,\n                        timestamp TEXT NOT NULL\n                    )\n                ')
                 conn.commit()
                 conn.close()
             except Exception as e:
@@ -135,7 +143,7 @@ class LocalPersistenceService:
     def save_state(self, key: str, value: Any):
         try:
             val_str = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             conn = self.get_connection()
             cur = conn.cursor()
             cur.execute(
@@ -165,7 +173,7 @@ class LocalPersistenceService:
 
     def add_log(self, message: str):
         try:
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             conn = self.get_connection()
             cur = conn.cursor()
             cur.execute(
@@ -201,8 +209,8 @@ class LocalPersistenceService:
         cause_analysis: str,
     ):
         try:
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            today_str = datetime.now().strftime("%Y-%m-%d")
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             conn = self.get_connection()
             cur = conn.cursor()
             cur.execute(
@@ -270,7 +278,7 @@ class LocalPersistenceService:
         reason: str | None = None,
     ):
         try:
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             conn = self.get_connection()
             cur = conn.cursor()
             cur.execute(
@@ -307,7 +315,7 @@ class LocalPersistenceService:
         leverage: int = 1,
     ):
         try:
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             conn = self.get_connection()
             cur = conn.cursor()
             if contracts <= 0:
@@ -379,7 +387,7 @@ class LocalPersistenceService:
         reason: str | None = None,
     ):
         try:
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             conn = self.get_connection()
             cur = conn.cursor()
             cur.execute(
@@ -427,7 +435,7 @@ class LocalPersistenceService:
 
     def record_equity(self, total_equity: float, balance_usdt: float, unrealized_pnl: float = 0.0):
         try:
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
             conn = self.get_connection()
             cur = conn.cursor()
             cur.execute(
@@ -514,7 +522,7 @@ class LocalPersistenceService:
             conn.close()
 
             payload = {
-                "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "exported_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
                 "state": state_dict,
                 "recent_logs": logs,
                 "recent_post_mortems": self.get_recent_post_mortems(10),
@@ -529,7 +537,7 @@ class LocalPersistenceService:
     def create_rolling_backup(self):
         try:
             if os.path.exists(self.db_path):
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
                 backup_file = os.path.join(BACKUP_DIR, f"state_backup_{ts}.db")
                 try:
                     src_conn = sqlite3.connect(self.db_path)
@@ -585,7 +593,7 @@ class LocalPersistenceService:
                 return {
                     "status": "SUCCESS",
                     "mode": "REMOTE_API",
-                    "synced_at": datetime.now().isoformat(),
+                    "synced_at": datetime.now(timezone.utc).isoformat(),
                 }
             except Exception as e:
                 return {
@@ -599,7 +607,7 @@ class LocalPersistenceService:
                 "status": "SUCCESS",
                 "mode": "LOCAL_PERSISTENCE",
                 "snapshot": snapshot_file,
-                "synced_at": datetime.now().isoformat(),
+                "synced_at": datetime.now(timezone.utc).isoformat(),
             }
 
 

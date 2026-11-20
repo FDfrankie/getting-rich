@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import requests
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 
 logger = logging.getLogger("BrainClient")
 if not logger.handlers:
@@ -174,18 +175,6 @@ class BrainClient:
             "request": dict(payload),
         }
 
-    def simulate_alpha(
-        self,
-        expression: str,
-        settings: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        payload = {
-            "type": "REGULAR",
-            "settings": dict(settings or {}),
-            "regular": expression,
-        }
-        return self.submit_and_poll_simulation(payload)
-
     def submit_and_poll_simulation(
         self,
         payload: Mapping[str, Any],
@@ -266,8 +255,8 @@ class BrainClient:
             body_dict = {}
             try:
                 body_dict = response.json() if response.content else {}
-            except Exception:
-                pass
+            except Exception as _silent_exc:
+                logger.debug("worldquant_brain/brain_client.py:L258 suppressed exception: %s", _silent_exc)
             loc = body_dict.get("location") or body_dict.get("id")
             if loc:
                 location = loc if str(loc).startswith("http") else f"{self.BASE_URL}/simulations/{loc}"
@@ -424,6 +413,7 @@ class BrainClient:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS brain_daily_submissions (alpha_id TEXT PRIMARY KEY, submitted_date TEXT NOT NULL, created_at TEXT NOT NULL)"
             )
+            ensure_schema_from_ddl(conn, 'CREATE TABLE IF NOT EXISTS brain_daily_submissions (alpha_id TEXT PRIMARY KEY, submitted_date TEXT NOT NULL, created_at TEXT NOT NULL)')
             cur = conn.execute("SELECT COUNT(*) FROM brain_daily_submissions WHERE submitted_date = ?", (day,))
             return int(cur.fetchone()[0])
         finally:
@@ -442,6 +432,7 @@ class BrainClient:
                 conn.execute(
                     "CREATE TABLE IF NOT EXISTS brain_daily_submissions (alpha_id TEXT PRIMARY KEY, submitted_date TEXT NOT NULL, created_at TEXT NOT NULL)"
                 )
+                ensure_schema_from_ddl(conn, 'CREATE TABLE IF NOT EXISTS brain_daily_submissions (alpha_id TEXT PRIMARY KEY, submitted_date TEXT NOT NULL, created_at TEXT NOT NULL)')
                 conn.execute(
                     "INSERT OR IGNORE INTO brain_daily_submissions (alpha_id, submitted_date, created_at) VALUES (?, ?, ?)",
                     (str(alpha_id), day, now_iso),
@@ -449,6 +440,7 @@ class BrainClient:
                 conn.execute(
                     "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)"
                 )
+                ensure_schema_from_ddl(conn, "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)")
                 conn.execute("UPDATE brain_candidate_pool SET status = 'SUBMITTED' WHERE alpha_id = ?", (str(alpha_id),))
         finally:
             conn.close()
@@ -487,6 +479,7 @@ class BrainClient:
                 conn.execute(
                     "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)"
                 )
+                ensure_schema_from_ddl(conn, "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)")
                 self.ensure_novelty_survey_tables(conn)
                 from worldquant_brain.alpha_novelty import find_duplicate
                 dup_chk = find_duplicate(expression, [])
@@ -528,6 +521,7 @@ class BrainClient:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)"
             )
+            ensure_schema_from_ddl(conn, "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)")
             all_pending = conn.execute(
                 "SELECT alpha_id, expression, score, sharpe FROM brain_candidate_pool WHERE candidate_date <= ? AND status = 'PENDING' ORDER BY score DESC, sharpe DESC",
                 (day,),
@@ -568,8 +562,8 @@ class BrainClient:
                     c2.execute("UPDATE brain_candidate_pool SET status = ? WHERE alpha_id = ?", (new_status, aid))
                     c2.commit()
                     c2.close()
-                except Exception:
-                    pass
+                except Exception as _silent_exc:
+                    logger.debug("worldquant_brain/brain_client.py:L565 suppressed exception: %s", _silent_exc)
         return results
 
     def fetch_self_correlation(self, alpha_id: str, max_polls: int = 5) -> dict[str, Any]:
@@ -619,8 +613,8 @@ class BrainClient:
                         time.sleep(1.0)
                 else:
                     break
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            logger.debug("worldquant_brain/brain_client.py:L616 suppressed exception: %s", _silent_exc)
 
         # 2. Poll /alphas/{alpha_id}/check (official submission check endpoint with SELF_CORRELATION / PROD_CORRELATION)
         try:
@@ -660,8 +654,8 @@ class BrainClient:
                         time.sleep(1.0)
                 else:
                     break
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            logger.debug("worldquant_brain/brain_client.py:L657 suppressed exception: %s", _silent_exc)
 
         # 3. Fallback to /alphas/{alpha_id} IS-checks
         chk = self.verify_alpha_for_submission(alpha_id)
@@ -719,8 +713,8 @@ class BrainClient:
                     time.sleep(1.0)
                 else:
                     break
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            logger.debug("worldquant_brain/brain_client.py:L716 suppressed exception: %s", _silent_exc)
 
         if not isinstance(getattr(resp, "status_code", None), int) or resp.status_code != 200 or not getattr(resp, "content", None):
             if check_reasons:
@@ -870,8 +864,8 @@ class BrainClient:
                         rst = str(rdata.get("status") or "").upper()
                         if rst in ("UNSUBMITTED", "REJECTED", "FAIL", "FAILED"):
                             return False, rst, rdata
-            except Exception:
-                pass
+            except Exception as _silent_exc:
+                logger.debug("worldquant_brain/brain_client.py:L867 suppressed exception: %s", _silent_exc)
             return True, "", {}
 
         location = resp.headers.get("Location") or resp.headers.get("location")
@@ -1071,6 +1065,7 @@ class BrainClient:
             )
             """
         )
+        ensure_schema_from_ddl(conn, '\n            CREATE TABLE IF NOT EXISTS public_expression_denylist (\n                exact_hash TEXT PRIMARY KEY,\n                normalized_hash TEXT NOT NULL,\n                structural_hash TEXT NOT NULL,\n                expression TEXT NOT NULL,\n                source_title TEXT,\n                source_url TEXT,\n                license TEXT,\n                fields_json TEXT,\n                operators_json TEXT,\n                family TEXT,\n                imported_at TEXT NOT NULL\n            )\n            ')
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS alpha_fingerprints (
@@ -1085,6 +1080,7 @@ class BrainClient:
             )
             """
         )
+        ensure_schema_from_ddl(conn, '\n            CREATE TABLE IF NOT EXISTS alpha_fingerprints (\n                alpha_id TEXT PRIMARY KEY,\n                exact_hash TEXT NOT NULL,\n                normalized_hash TEXT NOT NULL,\n                structural_hash TEXT NOT NULL,\n                fields_json TEXT,\n                operators_json TEXT,\n                family TEXT,\n                created_at TEXT NOT NULL\n            )\n            ')
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS field_catalog (
@@ -1107,6 +1103,7 @@ class BrainClient:
             )
             """
         )
+        ensure_schema_from_ddl(conn, '\n            CREATE TABLE IF NOT EXISTS field_catalog (\n                field_id TEXT PRIMARY KEY,\n                dataset_id TEXT,\n                category TEXT,\n                field_type TEXT,\n                description TEXT,\n                region TEXT,\n                universe TEXT,\n                delay INTEGER,\n                coverage REAL,\n                alpha_count INTEGER,\n                user_count INTEGER,\n                update_frequency TEXT,\n                availability TEXT,\n                metadata_hash TEXT NOT NULL,\n                last_probed_at TEXT,\n                vector_reducer_required INTEGER NOT NULL DEFAULT 0\n            )\n            ')
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS field_probe_cache (
@@ -1120,6 +1117,7 @@ class BrainClient:
             )
             """
         )
+        ensure_schema_from_ddl(conn, '\n            CREATE TABLE IF NOT EXISTS field_probe_cache (\n                field_id TEXT PRIMARY KEY,\n                metadata_hash TEXT NOT NULL,\n                long_count INTEGER,\n                short_count INTEGER,\n                turnover REAL,\n                nan_ratio REAL,\n                probed_at TEXT NOT NULL\n            )\n            ')
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS simulation_queue_decisions (
@@ -1133,6 +1131,7 @@ class BrainClient:
             )
             """
         )
+        ensure_schema_from_ddl(conn, '\n            CREATE TABLE IF NOT EXISTS simulation_queue_decisions (\n                decision_id TEXT PRIMARY KEY,\n                candidate_id TEXT NOT NULL,\n                blueprint_family TEXT,\n                admitted INTEGER NOT NULL,\n                reason TEXT NOT NULL,\n                priority_score REAL,\n                created_at TEXT NOT NULL\n            )\n            ')
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS correlation_prechecks (
@@ -1146,11 +1145,12 @@ class BrainClient:
             )
             """
         )
+        ensure_schema_from_ddl(conn, '\n            CREATE TABLE IF NOT EXISTS correlation_prechecks (\n                precheck_id TEXT PRIMARY KEY,\n                candidate_id TEXT NOT NULL,\n                local_corr REAL NOT NULL,\n                shares_raw_fields INTEGER NOT NULL DEFAULT 0,\n                decision TEXT NOT NULL,\n                allowed_for_brain INTEGER NOT NULL,\n                created_at TEXT NOT NULL\n            )\n            ')
         try:
             from worldquant_brain.alpha_novelty import seed_public_denylist
             seed_public_denylist(conn)
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            logger.debug("worldquant_brain/brain_client.py:L1152 suppressed exception: %s", _silent_exc)
 
     def fetch_data_fields(
         self,

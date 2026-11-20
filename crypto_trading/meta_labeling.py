@@ -18,6 +18,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 import numpy as np
 import pandas as pd
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 
 
 def compute_triple_barrier_labels(
@@ -404,6 +405,7 @@ class ResearchTrialRegistry:
                 )
                 """
             )
+            ensure_schema_from_ddl(conn, '\n                CREATE TABLE IF NOT EXISTS research_trials (\n                    trial_id TEXT PRIMARY KEY,\n                    parent_trial_id TEXT,\n                    config_hash TEXT NOT NULL,\n                    data_hash TEXT NOT NULL,\n                    universe_hash TEXT NOT NULL,\n                    started_at TEXT NOT NULL,\n                    oos_metrics_json TEXT NOT NULL,\n                    accepted INTEGER NOT NULL DEFAULT 0\n                )\n                ')
 
     def record_trial(
         self,

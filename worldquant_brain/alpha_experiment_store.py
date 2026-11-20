@@ -8,6 +8,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 
 
 def utc_now() -> str:
@@ -87,6 +88,7 @@ class AlphaExperimentStore:
                 last_seen_at TEXT NOT NULL
             );
             """)
+            ensure_schema_from_ddl(conn, "\n            CREATE TABLE IF NOT EXISTS alpha_experiments (\n                experiment_id TEXT PRIMARY KEY,\n                expression_hash TEXT NOT NULL,\n                normalized_expression TEXT NOT NULL,\n                source TEXT NOT NULL,\n                priority INTEGER NOT NULL DEFAULT 20,\n                operator_features_json TEXT NOT NULL DEFAULT '{}',\n                data_fields_json TEXT NOT NULL DEFAULT '[]',\n                settings_json TEXT NOT NULL DEFAULT '{}',\n                simulation_status TEXT NOT NULL,\n                brain_simulation_id TEXT,\n                brain_alpha_id TEXT,\n                sharpe REAL,\n                fitness REAL,\n                turnover REAL,\n                margin REAL,\n                drawdown REAL,\n                self_correlation REAL,\n                production_correlation REAL,\n                is_check_status TEXT,\n                failure_code TEXT,\n                safe_error TEXT,\n                simulation_latency_seconds REAL,\n                created_at TEXT NOT NULL,\n                completed_at TEXT\n            );\n            CREATE INDEX IF NOT EXISTS ix_alpha_experiments_hash\n                ON alpha_experiments(expression_hash);\n            CREATE INDEX IF NOT EXISTS ix_alpha_experiments_completed\n                ON alpha_experiments(completed_at);\n            CREATE TABLE IF NOT EXISTS alpha_experience_memory (\n                pattern_hash TEXT PRIMARY KEY,\n                pattern_type TEXT NOT NULL,\n                feature_json TEXT NOT NULL,\n                success_count INTEGER NOT NULL DEFAULT 0,\n                failure_count INTEGER NOT NULL DEFAULT 0,\n                mean_sharpe REAL,\n                mean_fitness REAL,\n                mean_margin REAL,\n                last_failure_code TEXT,\n                first_seen_at TEXT NOT NULL,\n                last_seen_at TEXT NOT NULL\n            );\n            ")
 
     def start_experiment(
         self,

@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from zoneinfo import ZoneInfo
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 DEFAULT_DOCUMENTED_DAILY_CAP = 2000.0
@@ -148,6 +149,7 @@ class ScoreTracker:
                 batch_date TEXT NOT NULL
             );
             """)
+            ensure_schema_from_ddl(conn, '\n            CREATE TABLE IF NOT EXISTS brain_score_snapshots (\n                snapshot_id TEXT PRIMARY KEY,\n                observed_at TEXT NOT NULL,\n                taipei_date TEXT NOT NULL,\n                total_score REAL,\n                daily_score REAL,\n                daily_cap REAL,\n                rank_value INTEGER,\n                submission_days_60d INTEGER,\n                uniqueness REAL,\n                is_score REAL,\n                source TEXT NOT NULL,\n                cap_evidence TEXT NOT NULL,\n                raw_payload_json TEXT NOT NULL\n            );\n            CREATE INDEX IF NOT EXISTS ix_brain_score_date\n                ON brain_score_snapshots(taipei_date, observed_at);\n            CREATE TABLE IF NOT EXISTS brain_submission_score_attribution (\n                attribution_id TEXT PRIMARY KEY,\n                brain_alpha_id TEXT NOT NULL,\n                submitted_at TEXT NOT NULL,\n                score_before REAL,\n                score_after REAL,\n                score_delta REAL,\n                score_observed_at TEXT,\n                attribution_status TEXT NOT NULL,\n                batch_date TEXT NOT NULL\n            );\n            ')
 
     def record(self, snapshot: ScoreSnapshot) -> ScoreSnapshot:
         with self.connect() as conn:

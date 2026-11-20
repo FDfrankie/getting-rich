@@ -19,6 +19,7 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Sequence
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 
 
 DEFAULT_DOMAINS: tuple[str, ...] = (
@@ -209,6 +210,7 @@ class DomainBanditAllocator:
                 )
                 """
             )
+            ensure_schema_from_ddl(conn, '\n                CREATE TABLE IF NOT EXISTS brain_domain_bandit (\n                    id INTEGER PRIMARY KEY AUTOINCREMENT,\n                    domain TEXT NOT NULL,\n                    reward REAL NOT NULL,\n                    sharpe REAL,\n                    passed INTEGER NOT NULL DEFAULT 0,\n                    created_at TEXT NOT NULL\n                )\n                ')
 
     def record_outcome(
         self,

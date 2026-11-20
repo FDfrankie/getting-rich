@@ -138,18 +138,8 @@ class BrainSimulationJob:
         return res
 
 
-try:
-    from worldquant_brain.canonical_ast import parse_fastexpr as _parse_fastexpr
-except Exception:
-    _parse_fastexpr = None
-
-
 def compute_simulation_key(expression: str, settings: Mapping[str, Any] | None = None) -> str:
-    try:
-        canon_expr = (_parse_fastexpr(expression).canonical_expression if _parse_fastexpr else None) or expression.strip()
-    except Exception:
-        canon_expr = expression.strip()
-    data = {"expression": canon_expr, "settings": dict(settings or {})}
+    data = {"expression": expression.strip(), "settings": dict(settings or {})}
     raw = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -337,23 +327,23 @@ class BrainJobQueue:
                             dt = datetime.fromisoformat(str(job.created_at).replace("Z", "+00:00"))
                             if (datetime.now(timezone.utc) - dt).total_seconds() > 7200:
                                 is_stale = True
-                        except Exception:
-                            pass
+                        except Exception as _silent_exc:
+                            logger.debug("worldquant_brain/brain_job_queue.py:L330 suppressed exception: %s", _silent_exc)
                     if is_stale:
                         job.status = BrainJobStatus.FAILED
                         job.safe_error = "EXPIRED_ZOMBIE_JOB_ON_RESTART"
                         try:
                             conn.execute("UPDATE brain_jobs SET status = ?, safe_error = ? WHERE job_id = ?", (job.status.value, job.safe_error, job.job_id))
                             conn.commit()
-                        except Exception:
-                            pass
+                        except Exception as _silent_exc:
+                            logger.debug("worldquant_brain/brain_job_queue.py:L338 suppressed exception: %s", _silent_exc)
                     else:
                         self._pending_queue.append(job.job_id)
                 self._jobs[job.job_id] = job
                 if job.status not in (BrainJobStatus.FAILED, BrainJobStatus.TIMEOUT, BrainJobStatus.AUTH_FAILED):
                     self._key_to_job_id[job.simulation_key] = job.job_id
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            logger.debug("worldquant_brain/brain_job_queue.py:L345 suppressed exception: %s", _silent_exc)
         finally:
             conn.close()
 
@@ -561,8 +551,8 @@ class BrainJobQueue:
                     ),
                 )
             execute_with_sqlite_retry(self.db_path, _op)
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            logger.debug("worldquant_brain/brain_job_queue.py:L554 suppressed exception: %s", _silent_exc)
 
     def register_rate_limit_429(self, retry_after: float | None = None, *, sleep_now: bool = False) -> float:
         with self._lock:
@@ -668,8 +658,8 @@ class BrainJobQueue:
                 body_json = {}
                 try:
                     body_json = resp.json() if resp.content else {}
-                except Exception:
-                    pass
+                except Exception as _silent_exc:
+                    logger.debug("worldquant_brain/brain_job_queue.py:L661 suppressed exception: %s", _silent_exc)
                 loc = body_json.get("location") or body_json.get("id")
                 if loc:
                     location = loc if str(loc).startswith("http") else f"{self.brain_client.BASE_URL}/simulations/{loc}"
@@ -735,8 +725,8 @@ class BrainJobQueue:
                                                 if isinstance(chk, dict) and str(chk.get("result") or "").upper() in ("FAIL", "FAILED", "ERROR"):
                                                     checks_passed = False
                                                     failed_check_names.append(str(chk.get("name") or "CHECK"))
-                        except Exception:
-                            pass
+                        except Exception as _silent_exc:
+                            logger.debug("worldquant_brain/brain_job_queue.py:L728 suppressed exception: %s", _silent_exc)
 
                     sharpe = self.brain_client._number(metrics_source, "sharpe")
                     fitness = self.brain_client._number(metrics_source, "fitness")
@@ -761,19 +751,6 @@ class BrainJobQueue:
                             }
                         self._store_simulation_cache(job)
                         self._persist_job(job)
-                        try:
-                            from worldquant_brain.shadow_writeback import record_simulation_shadow
-                            record_simulation_shadow(
-                                self.db_path,
-                                expression=job.expression,
-                                settings=job.settings,
-                                metrics=job.metrics,
-                                alpha_id=job.alpha_id,
-                                parent_expression=(job.settings or {}).get("parent_expression"),
-                                dataset_id=str((job.settings or {}).get("dataset_id") or ""),
-                            )
-                        except Exception:
-                            pass
                     else:
                         with self._lock:
                             job.safe_error = "線上模擬完成但缺少有效 Sharpe 或 Fitness 指標"
@@ -781,8 +758,8 @@ class BrainJobQueue:
                     if has_metrics and callable(getattr(self, "on_complete_callback", None)):
                         try:
                             self.on_complete_callback(job)
-                        except Exception:
-                            pass
+                        except Exception as _silent_exc:
+                            logger.debug("worldquant_brain/brain_job_queue.py:L761 suppressed exception: %s", _silent_exc)
                     return
 
                 if state in {"ERROR", "FAILED", "CANCELLED", "CANCELED"}:
@@ -803,7 +780,7 @@ class BrainJobQueue:
             if callable(getattr(self, "on_fail_callback", None)):
                 try:
                     self.on_fail_callback(job)
-                except Exception:
-                    pass
+                except Exception as _silent_exc:
+                    logger.debug("worldquant_brain/brain_job_queue.py:L783 suppressed exception: %s", _silent_exc)
             with self._lock:
                 job.status = BrainJobStatus.FAILED

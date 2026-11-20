@@ -11,14 +11,14 @@ for _stream in (sys.stdout, sys.stderr):
     if _stream is not None and hasattr(_stream, "reconfigure"):
         try:
             _stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            _logger.debug("web_ui/server.py:L14 suppressed exception: %s", _silent_exc)
 
 try:
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
-except Exception:
-    pass
+except Exception as _silent_exc:
+    _logger.debug("web_ui/server.py:L20 suppressed exception: %s", _silent_exc)
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import numpy as np
@@ -78,6 +78,9 @@ except ImportError:
     RLAlphaStrategy = None
 
 from taiwan_stock.universe_registry import DEFAULT_POPULAR_WATCHLIST, MARKET_INDICES, POPULAR_WATCHLIST_IS_FULL_UNIVERSE, TaiwanUniverseRegistry, build_yuanta_style_quote_panel
+import logging
+_logger = logging.getLogger(__name__)
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 from observability.telemetry import build_platform_observability_report
 from worldquant_brain.candidate_utility import evaluate_candidate
 from worldquant_brain.alpha_miner import ContinuousAlphaMiner
@@ -222,6 +225,7 @@ class QuantAppContext:
                     message TEXT NOT NULL
                 )
             """)
+            ensure_schema_from_ddl(cur.connection, '\n                CREATE TABLE IF NOT EXISTS bot_logs (\n                    id INTEGER PRIMARY KEY AUTOINCREMENT,\n                    timestamp TEXT NOT NULL,\n                    message TEXT NOT NULL\n                )\n            ')
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS bot_state (
                     key TEXT PRIMARY KEY,
@@ -229,6 +233,7 @@ class QuantAppContext:
                     updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
                 )
             """)
+            ensure_schema_from_ddl(cur.connection, "\n                CREATE TABLE IF NOT EXISTS bot_state (\n                    key TEXT PRIMARY KEY,\n                    value TEXT NOT NULL,\n                    updated_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))\n                )\n            ")
             conn.commit()
             conn.close()
         except Exception as e:
@@ -461,8 +466,8 @@ class QuantAppContext:
             )
             conn.commit()
             conn.close()
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            _logger.debug("web_ui/server.py:L467 suppressed exception: %s", _silent_exc)
 
     def switch_bot_strategy(self, strat_name: str):
         self.bot_strategy_name = strat_name
@@ -516,8 +521,8 @@ class QuantAppContext:
                 entity_type="brain_job", entity_id=job.job_id,
                 details={"source": getattr(job, "source", "AUTO_MINING"), "priority": getattr(job, "priority", 20)},
             )
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            _logger.debug("web_ui/server.py:L522 suppressed exception: %s", _silent_exc)
 
     def _release_sim_budget(self, job) -> None:
         try:
@@ -529,8 +534,8 @@ class QuantAppContext:
                 self.sim_budget.release(cid, dom)
                 if expr:
                     self.sim_budget.release(expr[:40], dom)
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            _logger.debug("web_ui/server.py:L535 suppressed exception: %s", _silent_exc)
 
     def _on_brain_job_failed(self, job):
         """當 WorldQuant BRAIN 模擬失敗時，記錄至經驗庫並從 Vault 清單移除不佔版面"""
@@ -546,8 +551,8 @@ class QuantAppContext:
                     metrics={"status": "FAILED"},
                     accepted=False,
                 )
-            except Exception:
-                pass
+            except Exception as _silent_exc:
+                _logger.debug("web_ui/server.py:L552 suppressed exception: %s", _silent_exc)
         try:
             self.alpha_experiments.complete_experiment(
                 job.job_id,
@@ -558,15 +563,15 @@ class QuantAppContext:
                     "simulation_id": getattr(job, "alpha_id", None),
                 },
             )
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            _logger.debug("web_ui/server.py:L564 suppressed exception: %s", _silent_exc)
         try:
             vid = getattr(job, "vault_id", None)
             if vid is not None:
                 self.alpha_vault.delete_alpha(int(vid))
                 self.add_log(f"🗑️ [BRAIN 模擬失敗移除] 已移除無效因子 ID={vid} ({job.safe_error})")
-        except Exception:
-            pass
+        except Exception as _silent_exc:
+            _logger.debug("web_ui/server.py:L571 suppressed exception: %s", _silent_exc)
 
     def _enqueue_near_miss_refinements(
         self,
@@ -670,8 +675,8 @@ class QuantAppContext:
                         "is_check_status": "PASS" if checks_passed else "FAIL",
                     },
                 )
-            except Exception:
-                pass
+            except Exception as _silent_exc:
+                _logger.debug("web_ui/server.py:L676 suppressed exception: %s", _silent_exc)
             if getattr(self, "evidence_repo", None) is not None:
                 try:
                     import hashlib as _hl
@@ -709,8 +714,8 @@ class QuantAppContext:
                         margin=float(margin) if margin is not None else None,
                         submit_ready=bool(checks_passed),
                     ))
-                except Exception:
-                    pass
+                except Exception as _silent_exc:
+                    _logger.debug("web_ui/server.py:L715 suppressed exception: %s", _silent_exc)
             self.alpha_miner.total_accepted += 1
             if getattr(self, "trial_registry", None) is not None:
                 try:
@@ -729,8 +734,8 @@ class QuantAppContext:
                         },
                         accepted=True,
                     )
-                except Exception:
-                    pass
+                except Exception as _silent_exc:
+                    _logger.debug("web_ui/server.py:L735 suppressed exception: %s", _silent_exc)
             # Only direct manual auto_submit jobs submit immediately; background mined alphas enter the daily pool so only the highest-profitability top 2 are submitted per day.
             should_try_submit = bool(getattr(job, "auto_submit", False)) and not bool(getattr(job, "simulation_only", True))
 
@@ -785,8 +790,8 @@ class QuantAppContext:
                             ),
                             raw_response=corr_info,
                         )
-                    except Exception:
-                        pass
+                    except Exception as _silent_exc:
+                        _logger.debug("web_ui/server.py:L791 suppressed exception: %s", _silent_exc)
                 try:
                     self.alpha_miner.record_domain_feedback(
                         getattr(job, "domain", "FUNDAMENTAL_CF_EV"),
@@ -797,8 +802,8 @@ class QuantAppContext:
                         fitness=float(fitness),
                         margin=float(margin) if margin is not None else None,
                     )
-                except Exception:
-                    pass
+                except Exception as _silent_exc:
+                    _logger.debug("web_ui/server.py:L803 suppressed exception: %s", _silent_exc)
                 if not corr_passed:
                     self.add_log(f"⚠️ [BRAIN 自相關超標] Alpha {alpha_id} (Self-Corr={self_corr_val}) 未過相關性門檻，自動啟動去相關 Near-Miss 微調並從清單移除")
                     self._enqueue_near_miss_refinements(
@@ -874,8 +879,8 @@ class QuantAppContext:
                                 if is_child_new:
                                     child_job.domain = dom_tag
                                     self.add_log(f"🧬 [Elite Offspring 繁衍] {alpha_id} (Sharpe={sharpe}) -> Job {child_job.job_id}")
-                    except Exception:
-                        pass
+                    except Exception as _silent_exc:
+                        _logger.debug("web_ui/server.py:L880 suppressed exception: %s", _silent_exc)
                 self.add_log(f"💾 [BRAIN 模擬成功保留] Alpha {alpha_id} (Sharpe={sharpe}, Fitness={fitness}) 已留存於清單")
         except Exception as exc:
             self.add_log(f"⚠️ [BRAIN 模擬完成處理例外] {exc}")
@@ -993,8 +998,8 @@ class QuantAppContext:
                             reg = self.taiwan_screener.registry
                             if hasattr(reg, "count_active_equities") and reg.count_active_equities() < 1000 and hasattr(reg, "sync_official_universe"):
                                 threading.Thread(target=reg.sync_official_universe, daemon=True).start()
-                    except Exception:
-                        pass
+                    except Exception as _silent_exc:
+                        _logger.debug("web_ui/server.py:L999 suppressed exception: %s", _silent_exc)
                 self.heartbeats["gdrive_sync"] = time.time()
 
                 if self.bot_running:
@@ -1015,8 +1020,8 @@ class QuantAppContext:
                                 _mbot.exchange_adapter = self.active_bot.exchange_adapter
                                 try:
                                     _mbot.step()
-                                except Exception:
-                                    pass
+                                except Exception as _silent_exc:
+                                    _logger.debug("web_ui/server.py:L1021 suppressed exception: %s", _silent_exc)
 
                     # 取得目前報價
                     if self.execution_mode == "BITUNIX_LIVE":
@@ -1739,16 +1744,16 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             if not APP_STATE.last_taiwan_report:
                 try:
                     APP_STATE.last_taiwan_report = APP_STATE.report_gen.generate(cached_market_info=market_info)
-                except Exception:
-                    pass
+                except Exception as _silent_exc:
+                    _logger.debug("web_ui/server.py:L1745 suppressed exception: %s", _silent_exc)
 
             if not APP_STATE.last_taiwan_html:
                 try:
                     APP_STATE.last_taiwan_html = APP_STATE.report_gen.generate_html_report(
                         cached_market_info=market_info
                     )
-                except Exception:
-                    pass
+                except Exception as _silent_exc:
+                    _logger.debug("web_ui/server.py:L1753 suppressed exception: %s", _silent_exc)
 
             return self._send_json_response(
                 {
@@ -1941,8 +1946,8 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
                                         "text": f"{side_upper} @ {ord_item['price']:.1f}",
                                     }
                                 )
-                        except Exception:
-                            pass
+                        except Exception as _silent_exc:
+                            _logger.debug("web_ui/server.py:L1947 suppressed exception: %s", _silent_exc)
 
                 trade_lines = {}
                 if bot.position > 0 and (bot.symbol == symbol or not is_taiwan):
@@ -2158,8 +2163,8 @@ class AppAPIHandler(SimpleHTTPRequestHandler):
             if leverage and APP_STATE.execution_mode == "BINANCE_TESTNET" and getattr(APP_STATE.testnet_client, "exchange", None):
                 try:
                     APP_STATE.testnet_client.exchange.fapiPrivatePostLeverage({"symbol": symbol.replace("/", ""), "leverage": int(leverage)})
-                except Exception:
-                    pass
+                except Exception as _silent_exc:
+                    _logger.debug("web_ui/server.py:L2164 suppressed exception: %s", _silent_exc)
 
             if APP_STATE.execution_mode == "BITUNIX_LIVE":
                 res = APP_STATE.bitunix_client.create_order(

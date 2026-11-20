@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import sqlite3
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -212,6 +213,7 @@ class EvidenceRepository:
     def migrate(self) -> None:
         with self.connection() as con:
             con.executescript(SCHEMA_SQL)
+            ensure_schema_from_ddl(con, SCHEMA_SQL)
 
     def create_experiment(self, context: ExperimentContext) -> bool:
         now = utc_now()

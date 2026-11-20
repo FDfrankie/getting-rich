@@ -26,6 +26,7 @@ from worldquant_brain.alpha_repository import AlphaRepository
 from worldquant_brain.daily_candidate_selector import SelectionBatch, select_daily_candidates
 from worldquant_brain.pre_submission_gate import GateVerdict, evaluate_pre_submission
 from worldquant_brain.score_tracker import ScoreTracker
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 
 logger = logging.getLogger("BrainAutoSubmit")
 
@@ -361,6 +362,7 @@ class SubmitAllAvailablePolicy:
                 UNIQUE(alpha_id, outcome) ON CONFLICT IGNORE
             );
             """)
+            ensure_schema_from_ddl(conn, '\n            CREATE TABLE IF NOT EXISTS brain_adaptive_submission_runs (\n                run_id TEXT PRIMARY KEY,\n                started_at TEXT NOT NULL,\n                completed_at TEXT,\n                candidates_seen INTEGER NOT NULL DEFAULT 0,\n                attempted INTEGER NOT NULL DEFAULT 0,\n                submitted INTEGER NOT NULL DEFAULT 0,\n                failed INTEGER NOT NULL DEFAULT 0,\n                stopped_reason TEXT\n            );\n            CREATE TABLE IF NOT EXISTS brain_adaptive_submission_events (\n                event_id INTEGER PRIMARY KEY AUTOINCREMENT,\n                run_id TEXT NOT NULL,\n                alpha_id TEXT NOT NULL,\n                attempted_at TEXT NOT NULL,\n                outcome TEXT NOT NULL,\n                safe_error TEXT,\n                UNIQUE(alpha_id, outcome) ON CONFLICT IGNORE\n            );\n            ')
 
     def decide(self, alpha_id: str) -> PolicyDecision:
         if not self.enabled:

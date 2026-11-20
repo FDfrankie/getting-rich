@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 import uuid
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -244,6 +245,7 @@ class CorrelationEvidenceRepository:
     def migrate(self) -> None:
         with self.connection() as con:
             con.executescript(CORRELATION_SCHEMA_SQL)
+            ensure_schema_from_ddl(con, CORRELATION_SCHEMA_SQL)
 
     def save_evidence(
         self,

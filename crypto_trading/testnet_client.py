@@ -8,6 +8,10 @@ try:
     import ccxt
 except ImportError:
     ccxt = None
+import logging
+
+_logger = logging.getLogger(__name__)
+
 from crypto_trading.config import (
     BINANCE_TESTNET_API_KEY,
     BINANCE_TESTNET_API_SECRET,
@@ -48,17 +52,7 @@ class BinanceTestnetClient:
 
         # Mock 模式內部模擬帳本 (當無真實網路或金鑰異常時提供防護)
         self._mock_balance = {"USDT": 15000.0, "USDC": 15000.0, "BTC": 0.05, "ETH": 0.8}
-        self._mock_positions = [
-            {
-                "symbol": "BTC/USDC:USDC",
-                "side": "LONG",
-                "contracts": 0.05,
-                "entry_price": 68250.0,
-                "unrealized_pnl": +112.5,
-                "leverage": 5,
-                "fee_rate": 0.0,
-            }
-        ]
+        self._mock_positions = []
         self._mock_orders = []
 
     def _init_exchange(self):
@@ -132,8 +126,8 @@ class BinanceTestnetClient:
                             "settlement": self.settlement,
                             "zero_fee_usdc": self.settlement == "USDC",
                         }
-                except Exception:
-                    pass
+                except Exception as _silent_exc:
+                    _logger.debug("crypto_trading/testnet_client.py:L125 suppressed exception: %s", _silent_exc)
 
                 try:
                     ticker = self.exchange.fetch_ticker(target_symbol)
@@ -149,10 +143,10 @@ class BinanceTestnetClient:
                         "settlement": self.settlement,
                         "zero_fee_usdc": self.settlement == "USDC",
                     }
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except Exception as _silent_exc:
+                    _logger.debug("crypto_trading/testnet_client.py:L142 suppressed exception: %s", _silent_exc)
+        except Exception as _silent_exc:
+            _logger.debug("crypto_trading/testnet_client.py:L144 suppressed exception: %s", _silent_exc)
 
         if not self.mock_mode and self.is_connected:
             return {"symbol": target_symbol, "last": None, "error": "TICKER_UNAVAILABLE", "timestamp": None, "settlement": self.settlement}
@@ -312,10 +306,18 @@ class BinanceTestnetClient:
                         if passed
                         else f"USDC盤口價差過大 ({spread_pct:.3f}% > {max_spread_pct}%) 或深度不足，防禦拒絕市價委託",
                     }
-            except Exception:
-                pass
+            except Exception as exc:
+                return {
+                    "passed": False,
+                    "symbol": target_symbol,
+                    "spread_pct": None,
+                    "bid_depth_top5": 0.0,
+                    "ask_depth_top5": 0.0,
+                    "max_spread_pct": max_spread_pct,
+                    "reason": f"ORDERBOOK_FETCH_FAILED:{type(exc).__name__}",
+                }
 
-        # 模擬/沙盒深度守護回報
+        # 離線模擬/沙盒深度守護回報
         ticker = self.fetch_ticker(target_symbol)
         best_bid = ticker.get("bid", ticker["last"] * 0.9999)
         best_ask = ticker.get("ask", ticker["last"] * 1.0001)
@@ -511,6 +513,12 @@ class BinanceTestnetClient:
                     count += 1
             except Exception as e:
                 print(f"[!] 幣安合約測試網一鍵平倉異常: {e}")
+                return {
+                    "success": False,
+                    "closed_count": count,
+                    "error": str(e),
+                    "message": f"[幣安合約測試網] 一鍵平倉失敗: {e}",
+                }
 
         return {
             "success": True,

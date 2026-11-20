@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from data_persistence.gdrive_sync import _DB_LOCK, STATE_DB_PATH
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 
 
 class ManualPositionController:
@@ -37,6 +38,7 @@ class ManualPositionController:
                     updated_at TEXT NOT NULL
                 )
             """)
+            ensure_schema_from_ddl(cur.connection, '\n                CREATE TABLE IF NOT EXISTS manual_overrides (\n                    symbol TEXT PRIMARY KEY,\n                    is_locked INTEGER NOT NULL DEFAULT 1,\n                    lock_reason TEXT,\n                    locked_at TEXT NOT NULL,\n                    ttl_seconds INTEGER NOT NULL DEFAULT 3600,\n                    stop_loss_price REAL,\n                    take_profit_price REAL,\n                    updated_at TEXT NOT NULL\n                )\n            ')
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS manual_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,6 +50,7 @@ class ManualPositionController:
                     timestamp TEXT NOT NULL
                 )
             """)
+            ensure_schema_from_ddl(cur.connection, '\n                CREATE TABLE IF NOT EXISTS manual_events (\n                    id INTEGER PRIMARY KEY AUTOINCREMENT,\n                    symbol TEXT NOT NULL,\n                    action TEXT NOT NULL,\n                    amount REAL,\n                    price REAL,\n                    metadata TEXT,\n                    timestamp TEXT NOT NULL\n                )\n            ')
             conn.commit()
             conn.close()
 

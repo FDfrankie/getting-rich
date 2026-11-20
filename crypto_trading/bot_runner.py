@@ -82,7 +82,7 @@ class CryptoTradingBot:
         self.last_order_info = {}
 
     def log(self, msg: str):
-        line = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+        line = f"[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
         self.trade_logs.append(line)
         if len(self.trade_logs) > 1000:
             self.trade_logs = self.trade_logs[-500:]
@@ -409,8 +409,10 @@ class CryptoTradingBot:
     def step(self):
         """單次決策迴圈步進 (整合高階趨勢濾網 Hierarchical Regime Filter)"""
         # 1. 分離高低時框資料，各取至少 100 根已收盤 K 線
-        df_exec = self.loader.fetch_ohlcv(limit=250, timeframe=getattr(self, "exec_timeframe", "5m"))
-        df_high = self.loader.fetch_ohlcv(limit=100, timeframe="1h")
+        from crypto_trading.settings import TradingMode, get_settings
+        _allow_syn = get_settings().trading_mode == TradingMode.LOCAL_PAPER
+        df_exec = self.loader.fetch_ohlcv(limit=250, timeframe=getattr(self, "exec_timeframe", "5m"), allow_synthetic=_allow_syn)
+        df_high = self.loader.fetch_ohlcv(limit=100, timeframe="1h", allow_synthetic=_allow_syn)
 
         df_strat = self.strategy.generate_signals(df_exec)
         curr = df_strat.iloc[-1]

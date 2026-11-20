@@ -2,7 +2,7 @@ import hashlib
 import json
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -161,7 +161,7 @@ class AlphaVault:
             norm_turnover = turnover / 100.0
         else:
             norm_turnover = turnover
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
         with self._get_connection() as conn:
             cursor = conn.cursor()

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from data_persistence.gdrive_sync import _DB_LOCK, BACKUP_DIR, STATE_DB_PATH
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 
 
 class DatabaseMigrationManager:
@@ -69,10 +70,18 @@ class DatabaseMigrationManager:
         conn.commit()
 
     def get_applied_versions(self, conn: sqlite3.Connection) -> list[int]:
+        """Return integer migration versions safely even if string versions from migrations.py exist."""
         self.init_migration_table(conn)
         cur = conn.cursor()
-        cur.execute("SELECT version FROM schema_migrations ORDER BY version ASC")
-        return [row[0] for row in cur.fetchall()]
+        cur.execute("SELECT version FROM schema_migrations")
+        versions: list[int] = []
+        for (raw_ver,) in cur.fetchall():
+            try:
+                versions.append(int(raw_ver))
+            except (TypeError, ValueError):
+                # Ignore non-integer version tags written by data_persistence/migrations.py
+                continue
+        return sorted(set(versions))
 
     def run_migrations(self) -> dict[str, Any]:
         """

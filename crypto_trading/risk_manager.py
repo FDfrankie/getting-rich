@@ -1,6 +1,6 @@
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -149,7 +149,7 @@ class RiskManager:
         risk_amount = self.current_capital * self.risk_per_trade * risk_mult
         position_size = risk_amount / stop_distance
 
-        max_notional = self.current_capital * (0.25 if self.defensive_mode else 0.50)
+        max_notional = self.current_capital * (0.45 if self.defensive_mode else 0.85)
         if position_size * current_price > max_notional:
             position_size = max_notional / current_price
 
@@ -320,7 +320,7 @@ class RiskManager:
                 test_cur.execute("CREATE TABLE IF NOT EXISTS _db_write_probe (ts TEXT)")
                 test_cur.execute(
                     "INSERT INTO _db_write_probe VALUES (?)",
-                    (datetime.utcnow().isoformat(),),
+                    (datetime.now(timezone.utc).isoformat(),),
                 )
                 test_conn.commit()
                 test_conn.close()
