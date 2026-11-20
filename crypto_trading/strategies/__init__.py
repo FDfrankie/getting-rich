@@ -28,3 +28,4 @@ __all__ = [
 ]
 
 from crypto_trading.strategies.perp_carry_basis_strategy import PerpCarryBasisStrategy
+from crypto_trading.strategies.conditional_prob_rl_strategy import ConditionalProbRLStrategy
