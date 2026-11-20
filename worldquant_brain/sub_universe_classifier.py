@@ -170,3 +170,68 @@ def classify_sub_universe_failure(
         allowed_repairs=ALLOWED_REPAIRS_BY_ROOT_CAUSE[rc],
         disallowed_blind_edits=("WINDOW_RESIZE", "PRIME_WINDOW", "ADD_RANK", "CHANGE_DECAY"),
     )
+
+
+def compute_sub_universe_sharpe_floor(
+    alpha_sharpe: float,
+    *,
+    alpha_universe_size: int = 3000,
+    sub_universe_size: int = 1000,
+) -> float:
+    """Compute WorldQuant BRAIN / IQC minimum required sub-universe Sharpe.
+
+    Source: WorldQuant BRAIN / IQC Sub-Universe Check Guidelines
+    (0.75 * sqrt(sub_universe_size / alpha_universe_size) * alpha_sharpe).
+    """
+    import math
+
+    if alpha_universe_size <= 0 or sub_universe_size <= 0:
+        raise ValueError("Universe sizes must be positive")
+    return round(0.75 * math.sqrt(float(sub_universe_size) / float(alpha_universe_size)) * float(alpha_sharpe), 4)
+
+
+def diagnose_turnover_and_cost_stress(
+    *,
+    sharpe: float,
+    fitness: float,
+    turnover: float,
+    margin: float | None = None,
+    delay: int = 1,
+) -> dict[str, Any]:
+    """Diagnose turnover, fitness floor (0.125), and cost-stress margin resilience.
+
+    Sources:
+    - WorldQuant BRAIN Fitness & Turnover Guidelines (1% < turnover < 70%, 0.125 floor)
+    - QuantML-Research / wq-alpha-research (https://github.com/QuantML-Research/wq-alpha-research)
+    """
+    to = float(turnover)
+    sh = float(sharpe)
+    fit = float(fitness)
+    norm_margin = (float(margin) / 10000.0) if (margin is not None and float(margin) > 0.5) else (float(margin) if margin is not None else None)
+    min_sharpe = 2.00 if int(delay) == 0 else 1.25
+
+    issues: list[str] = []
+    repairs: list[str] = []
+    if to <= 0.01:
+        issues.append("TURNOVER_TOO_LOW")
+        repairs.extend(["DECREASE_DECAY", "SHORTEN_TS_WINDOW"])
+    elif to >= 0.70:
+        issues.append("TURNOVER_ABOVE_70PCT_LIMIT")
+        repairs.extend(["ADD_HUMP", "INCREASE_DECAY", "ADD_TS_MEAN_SMOOTHING"])
+    elif to > 0.25 and fit < 1.0 and sh >= min_sharpe:
+        issues.append("HIGH_TURNOVER_FITNESS_DRAG")
+        repairs.extend(["ADD_HUMP", "INCREASE_DECAY"])
+
+    if norm_margin is not None and norm_margin < 0.0010:
+        issues.append("LOW_MARGIN_COST_STRESS_RISK")
+        for r in ("ADD_HUMP", "REDUCE_TRUNCATION", "INCREASE_DECAY"):
+            if r not in repairs:
+                repairs.append(r)
+
+    return {
+        "healthy": len(issues) == 0 and sh >= min_sharpe and fit >= 1.0,
+        "issues": issues,
+        "recommended_repairs": repairs,
+        "normalized_margin": norm_margin,
+        "at_fitness_sweet_spot": 0.01 < to <= 0.15,
+    }
