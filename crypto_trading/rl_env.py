@@ -73,6 +73,11 @@ class CryptoTradingEnv:
         self.returns_history = []
         self.bars_in_position = 0
         self.bars_since_rebalance = self.rebalance_cooldown
+        self._dsr_eta: float = 0.01
+        self._dsr_a: float = 0.0
+        self._dsr_b: float = 0.0
+        self._prev_drawdown: float = 0.0
+        self.impact_coeff: float = 0.0003
 
     def reset(self) -> np.ndarray:
         self.current_step = 0
@@ -83,6 +88,11 @@ class CryptoTradingEnv:
         self.returns_history = []
         self.bars_in_position = 0
         self.bars_since_rebalance = self.rebalance_cooldown
+        self._dsr_eta: float = 0.01
+        self._dsr_a: float = 0.0
+        self._dsr_b: float = 0.0
+        self._prev_drawdown: float = 0.0
+        self.impact_coeff: float = 0.0003
         return self._get_observation()
 
     def _get_observation(self) -> np.ndarray:
@@ -121,27 +131,28 @@ class CryptoTradingEnv:
         # 1. Price change return
         price_ret = (next_price - current_price) / current_price
 
-        # 2. Portfolio return before transaction cost
-        gross_return = self.position * price_ret
-
-        # 3. Transaction friction cost (commission + slippage)
+        # 2. Transaction friction + nonlinear market impact cost (Almgren-Chriss proxy)
         position_delta = abs(action - self.position)
-        trading_cost = position_delta * (self.fee_rate + self.slippage)
-        funding_cost = abs(self.position) * self.funding_rate_per_bar
+        linear_cost = position_delta * (self.fee_rate + self.slippage)
+        impact_cost = self.impact_coeff * (position_delta ** 1.5)
+        trading_cost = linear_cost + impact_cost
+        funding_cost = abs(action) * self.funding_rate_per_bar
         cost = trading_cost + funding_cost
 
-        # 4. Net period return
+        # 3. Causal portfolio return on executed target position
+        gross_return = action * price_ret
         net_return = gross_return - cost
         self.returns_history.append(net_return)
 
-        # 5. Update portfolio equity & balance
+        # 4. Update portfolio equity, balance & incremental drawdown
         self.balance = self.balance * (1.0 + net_return)
         self.peak_equity = max(self.peak_equity, self.balance)
-
         drawdown = (self.peak_equity - self.balance) / (self.peak_equity + 1e-9)
+        delta_dd = max(0.0, drawdown - self._prev_drawdown)
+        self._prev_drawdown = drawdown
 
-        # 6. Reward formulation
-        reward = self._calculate_reward(net_return, drawdown, position_delta)
+        # 5. Reward formulation (online DSR + incremental drawdown penalty)
+        reward = self._calculate_reward(net_return, delta_dd, position_delta)
 
         # Update position
         if action != self.position:
@@ -177,26 +188,19 @@ class CryptoTradingEnv:
         obs = self._get_observation() if not done else np.zeros(self.state_dim, dtype=np.float32)
         return obs, float(reward), done, info
 
-    def _calculate_reward(self, net_return: float, drawdown: float, delta_pos: float) -> float:
-        """
-        Reward function designed for real alpha:
-        1. Differential Sharpe: Incentivizes high returns with low volatility.
-        2. Downside quadratic penalty: Penalizes large drawdowns heavily.
-        3. Turnover penalty: Discourages excessive high-frequency churning.
-        """
-        # Base reward = net return scaled to percentage
-        base_reward = net_return * 100.0
+    def _calculate_reward(self, net_return: float, delta_dd: float, delta_pos: float) -> float:
+        """Online Differential Sharpe Ratio (Moody & Saffell) + incremental drawdown & turnover penalty."""
+        if self.reward_type == "sharpe_differential":
+            dA = net_return - self._dsr_a
+            dB = (net_return ** 2) - self._dsr_b
+            denom = max(self._dsr_b - (self._dsr_a ** 2), 1e-8) ** 1.5
+            dsr = (self._dsr_b * dA - 0.5 * self._dsr_a * dB) / denom if self.current_step > 5 else net_return * 100.0
+            self._dsr_a += self._dsr_eta * dA
+            self._dsr_b += self._dsr_eta * dB
+            base_reward = float(np.clip(dsr, -10.0, 10.0))
+        else:
+            base_reward = net_return * 100.0
 
-        # Downside risk penalty
-        downside_penalty = 0.0
-        if net_return < 0:
-            downside_penalty = 2.0 * (net_return**2) * 100.0
-
-        # Drawdown penalty
-        dd_penalty = self.drawdown_penalty_rate * (drawdown**2)
-
-        # Turnover friction penalty
+        dd_penalty = self.drawdown_penalty_rate * delta_dd * 100.0
         turnover_penalty = self.turnover_penalty_rate * delta_pos
-
-        reward = base_reward - downside_penalty - dd_penalty - turnover_penalty
-        return float(reward)
+        return float(base_reward - dd_penalty - turnover_penalty)

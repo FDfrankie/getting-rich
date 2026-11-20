@@ -74,46 +74,73 @@ def execute_with_sqlite_retry(
     raise RuntimeError("execute_with_sqlite_retry exhausted without result")
 
 
+_CLOUD_SYNC_TOKENS = ("google drive", "我的雲端硬碟", "googledrive", "google", "onedrive", "dropbox")
+
+
+def _is_cloud_synced_path(db_path: str) -> bool:
+    low = os.path.abspath(db_path).lower()
+    return any(tok in low for tok in _CLOUD_SYNC_TOKENS)
+
+
+def _configure_connection(
+    conn: sqlite3.Connection,
+    db_path: str,
+    timeout: float,
+    journal_mode: str | None = None,
+) -> None:
+    is_cloud = bool(db_path and db_path != ":memory:" and _is_cloud_synced_path(db_path))
+    mode = (journal_mode or os.getenv("SQLITE_JOURNAL_MODE", "")).strip().upper()
+    if not mode:
+        mode = "DELETE" if is_cloud else "WAL"
+    pragmas = [
+        f"PRAGMA busy_timeout = {int(timeout * 1000)}",
+        "PRAGMA synchronous = NORMAL",
+        "PRAGMA cache_size = -64000",
+        "PRAGMA temp_store = MEMORY",
+        "PRAGMA journal_size_limit = 67108864",
+        f"PRAGMA mmap_size = {0 if is_cloud else 134217728}",
+    ]
+    if db_path != ":memory:" and mode in {"DELETE", "WAL", "TRUNCATE", "PERSIST", "MEMORY", "OFF"}:
+        pragmas.insert(1, f"PRAGMA journal_mode = {mode}")
+    for sql in pragmas:
+        try:
+            conn.execute(sql)
+        except sqlite3.OperationalError as _exc:
+            _logger.debug("sqlite pragma skipped (%s): %s", sql, _exc)
+
+
 @contextmanager
 def managed_connection(
     db_path: str,
     *,
     timeout: float = 15.0,
     journal_mode: str | None = None,
+    immediate_write: bool = False,
 ) -> Iterator[sqlite3.Connection]:
-    """Safe SQLite connection contextmanager that always closes the FD and configures busy_timeout."""
+    """Safe SQLite connection with guaranteed close(), performance PRAGMAs, and optional BEGIN IMMEDIATE."""
     if db_path and db_path != ":memory:":
         parent = os.path.dirname(os.path.abspath(db_path))
         if parent:
             os.makedirs(parent, exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=timeout)
+    conn = sqlite3.connect(db_path, timeout=timeout, isolation_level=None)
     try:
-        try:
-            conn.execute(f"PRAGMA busy_timeout = {int(timeout * 1000)}")
-            conn.execute("PRAGMA synchronous = NORMAL")
-            mode = (journal_mode or os.getenv("SQLITE_JOURNAL_MODE", "")).strip().upper()
-            if not mode:
-                lower_path = str(db_path or "").lower()
-                is_cloud = any(tok in lower_path for tok in ("google", "雲端硬碟", "onedrive", "dropbox"))
-                mode = "DELETE" if is_cloud else "WAL"
-            if db_path != ":memory:" and mode in {"DELETE", "WAL", "TRUNCATE", "PERSIST", "MEMORY", "OFF"}:
-                conn.execute(f"PRAGMA journal_mode = {mode}")
-        except sqlite3.OperationalError:
-            pass
+        _configure_connection(conn, db_path, timeout, journal_mode=journal_mode)
+        conn.execute("BEGIN IMMEDIATE" if immediate_write else "BEGIN")
         yield conn
-        conn.commit()
+        if conn.in_transaction:
+            conn.execute("COMMIT")
     except Exception:
-        try:
-            conn.rollback()
-        except Exception as _exc:
-            _logger.debug("sqlite_resilience suppressed exception: %s", _exc)
+        if conn.in_transaction:
+            try:
+                conn.execute("ROLLBACK")
+            except Exception as _exc:
+                _logger.debug("sqlite_resilience rollback exception: %s", _exc)
         raise
     finally:
         try:
             conn.close()
         except Exception as _exc:
-            _logger.debug("sqlite_resilience suppressed exception: %s", _exc)
-
+            _logger.debug("sqlite_resilience close exception: %s", _exc)
 
 _DDL_TABLE_RE = re.compile(
     r'CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+["`\[]?([A-Za-z_][A-Za-z0-9_]*)["`\]]?\s*\(',

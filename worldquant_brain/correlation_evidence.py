@@ -327,3 +327,37 @@ class CorrelationEvidenceRepository:
                     (candidate_alpha_id, limit),
                 ).fetchall()
         return [dict(r) for r in rows]
+
+
+def compute_daily_pnl_correlation(cum_pnl_a: list[float], cum_pnl_b: list[float]) -> float | None:
+    """Compute Pearson correlation on DAILY PnL changes (np.diff), never on cumulative PnL curves."""
+    import numpy as np
+
+    n = min(len(cum_pnl_a), len(cum_pnl_b))
+    if n < 20:
+        return None
+    a = np.asarray(cum_pnl_a[-n:], dtype=np.float64)
+    b = np.asarray(cum_pnl_b[-n:], dtype=np.float64)
+    da = np.diff(a)
+    db = np.diff(b)
+    mask = np.isfinite(da) & np.isfinite(db)
+    da, db = da[mask], db[mask]
+    if len(da) < 15 or np.std(da) < 1e-12 or np.std(db) < 1e-12:
+        return None
+    corr = float(np.corrcoef(da, db)[0, 1])
+    return corr if np.isfinite(corr) else None
+
+
+def diagnose_fitness_bottleneck(sharpe: float, annual_return: float, turnover: float) -> dict[str, Any]:
+    """Diagnose BRAIN Fitness = Sharpe * sqrt(|ret| / max(turnover, 0.125)) and recommend next lever."""
+    denom = max(float(turnover), 0.125)
+    fitness = float(sharpe) * ((abs(float(annual_return)) / denom) ** 0.5)
+    if fitness >= 1.0 and sharpe >= 1.25:
+        lever = "READY_FOR_CORR_CHECK"
+    elif sharpe >= 1.25 and turnover > 0.35:
+        lever = "INCREASE_DECAY_OR_MIX_FUNDAMENTAL"
+    elif sharpe < 1.25 and turnover < 0.08:
+        lever = "SHORTEN_LOOKBACK_OR_SWITCH_DATA_FIELD"
+    else:
+        lever = "SWITCH_ECONOMIC_LOGIC_OR_NEUTRALIZATION"
+    return {"computed_fitness": round(fitness, 4), "recommended_lever": lever}

@@ -6,7 +6,10 @@ import os
 from collections.abc import Mapping
 from typing import Any
 
-import joblib
+try:
+    import joblib
+except ImportError:
+    joblib = None  # type: ignore[assignment]
 import numpy as np
 import pandas as pd
 
@@ -79,6 +82,10 @@ class TaiwanStockMLRanker:
         rsv = 100.0 * (c - low9).div((high9 - low9).replace(0.0, np.nan))
         out["k_9"] = rsv.ewm(alpha=1 / 3, adjust=False).mean()
         out["d_9"] = out["k_9"].ewm(alpha=1 / 3, adjust=False).mean()
+        daily_ret = c.pct_change(1)
+        pos_days_20 = (daily_ret > 0).rolling(20, min_periods=20).mean()
+        neg_days_20 = (daily_ret < 0).rolling(20, min_periods=20).mean()
+        out["fip_20d"] = np.sign(out["mom_20d"]).fillna(0.0) * (pos_days_20 - neg_days_20)
         out[self.TARGET_COLUMN] = c.shift(-forward_period).div(c).sub(1.0)
         return out.replace([np.inf, -np.inf], np.nan)
 
@@ -96,6 +103,12 @@ class TaiwanStockMLRanker:
         combined = pd.concat(panels, axis=0, sort=False)
         # 關鍵：跨股票合併後，依日期索引進行全域穩定排序。
         combined = combined.sort_index(kind="mergesort")
+        for col in ("mom_20d", "hist_vol_20", "vol_surge", "fip_20d"):
+            if col in combined.columns:
+                combined[f"cs_rank_{col}"] = combined.groupby(level=0)[col].rank(pct=True)
+        if self.TARGET_COLUMN in combined.columns:
+            cs_med = combined.groupby(level=0)[self.TARGET_COLUMN].transform("median")
+            combined[self.TARGET_COLUMN] = combined[self.TARGET_COLUMN] - cs_med
         excluded = {
             "Open",
             "High",

@@ -49,13 +49,16 @@ class PerpCarryBasisStrategy(BaseStrategy):
         vwap24 = (tp * vol).rolling(24, min_periods=4).sum() / vol.rolling(24, min_periods=4).sum().replace(0, np.nan)
         basis_bps = ((close - vwap24) / vwap24.replace(0, np.nan) * 10000.0).fillna(0.0)
 
-        # If live/historical funding_rate column exists, use it (in bps); otherwise estimate synthetic perpetual funding from premium + clamp
-        if "funding_rate" in out.columns:
-            funding_bps = pd.to_numeric(out["funding_rate"], errors="coerce").fillna(0.0) * 10000.0
+        # Real funding_rate when present; otherwise Binance clamped funding proxy (He et al., arXiv:2212.06888v7)
+        # Phi(p) = clamp(iota - p, -gamma, +gamma) + p, with iota = 1.0 bps, gamma = 5.0 bps
+        used_proxy = "funding_rate" not in out.columns
+        if not used_proxy:
+            funding_bps = pd.to_numeric(out["funding_rate"], errors="coerce").fillna(1.0) * 10000.0
         else:
-            # Standard perpetual interest clamp (1 bps base + clamped premium index)
-            prem = basis_bps.ewm(span=8, adjust=False).mean() * 0.15
-            funding_bps = (1.0 + prem.clip(-15.0, 15.0)).fillna(1.0)
+            prem_bps = basis_bps.ewm(span=8, adjust=False).mean()
+            iota_bps, gamma_bps = 1.0, 5.0
+            funding_bps = (np.clip(iota_bps - prem_bps, -gamma_bps, gamma_bps) + prem_bps).clip(-75.0, 75.0).fillna(1.0)
+        out["funding_is_proxy"] = used_proxy
 
         ret_1 = close.pct_change(1).fillna(0.0)
         ret_6 = close.pct_change(6).fillna(0.0)
@@ -87,9 +90,15 @@ class PerpCarryBasisStrategy(BaseStrategy):
     def generate_signals(self, df: pd.DataFrame) -> pd.DataFrame:
         out = self.estimate_funding_and_basis(df, crowded_funding_bps=self.crowded_funding_bps)
         alpha = out["perp_carry_alpha"]
-        rmean = alpha.expanding(min_periods=20).mean()
-        rstd = alpha.expanding(min_periods=20).std(ddof=1).fillna(1.0) + 1e-8
+        win = min(168, max(24, len(out) // 3))
+        rmean = alpha.rolling(win, min_periods=20).mean()
+        rstd = alpha.rolling(win, min_periods=20).std(ddof=1).fillna(1.0) + 1e-8
         z = ((alpha - rmean) / rstd).fillna(0.0).to_numpy()
+        min_edge_bps = float(getattr(self, "min_edge_bps", 10.0))
+        edge_ok_arr = (
+            (out["basis_bps"].abs() >= min_edge_bps)
+            | ((out["funding_bps_8h"] - 1.0).abs() >= self.crowded_funding_bps)
+        ).to_numpy()
 
         n = len(out)
         signals = np.zeros(n, dtype=float)
@@ -97,6 +106,9 @@ class PerpCarryBasisStrategy(BaseStrategy):
         held = 0
         for i, val in enumerate(z):
             if cur == 0.0:
+                if not edge_ok_arr[i]:
+                    signals[i] = cur
+                    continue
                 if val > self.entry_z:
                     cur = 1.0
                     held = 1
