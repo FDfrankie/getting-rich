@@ -62,7 +62,7 @@ class AlphaResearchFactoryService:
                     blueprint_id, version, blueprint_hash, family, title,
                     rationale, falsifiable_claim, blueprint_json, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(blueprint_hash) DO NOTHING
+                ON CONFLICT DO NOTHING
                 """,
                 (
                     blueprint.blueprint_id,

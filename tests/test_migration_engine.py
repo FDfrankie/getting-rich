@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import scripts.apply_full_audit_bundle_v5 as mig
+import scripts.archive.apply_full_audit_bundle_v5 as mig
 
 
 class TestMigrationEngine(unittest.TestCase):

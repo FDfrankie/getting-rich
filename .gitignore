@@ -96,6 +96,9 @@ stage0_*.txt
 stage0_*.json
 .ruff_cache/
 scripts/*.zip
+*.zip
+*.log
+*.paused
 data_persistence/*.log
 data_persistence/watchdog.paused
 taiwan_stock/reports/morning_report_*.md

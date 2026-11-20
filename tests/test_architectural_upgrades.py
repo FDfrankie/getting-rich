@@ -78,6 +78,8 @@ class TestArchitecturalUpgrades(unittest.TestCase):
     def test_exchange_reconciliation(self):
         """驗證交易所狀態機與部位同調 (Idempotency & Reconciliation)"""
         client = BinanceTestnetClient(settlement="USDC")
+        client.mock_mode = True
+        client.is_connected = False
         # 模擬本地部位 0.05，若遠端為 0.05 則一致
         client._mock_positions = [{"symbol": "BTC/USDC:USDC", "side": "LONG", "contracts": 0.05}]
         res_sync = client.reconcile_with_exchange(local_position=0.05, symbol="BTC/USDC")

@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from worldquant_brain.alpha_miner import validate_candidate_expression
 from worldquant_brain.multi_sim_client import DEFAULT_SIM_SETTINGS
 
 STAGE1_PROBES: tuple[tuple[str, str], ...] = (
@@ -499,6 +500,9 @@ class TwoStageAlphaFunnel:
                     if len(out) >= batch_size:
                         return out
                     expr = _format_probe(template, field)
+                    ok_expr, _ = validate_candidate_expression(expr)
+                    if not ok_expr:
+                        continue
                     sett = dict(self.base_settings)
                     sh = _sim_hash(expr, sett)
                     if self._is_tried(conn, sh):

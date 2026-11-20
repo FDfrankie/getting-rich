@@ -281,3 +281,59 @@ def parse_brain_simulation_result(
         metrics_source="WORLDQUANT_BRAIN" if success else "UNKNOWN",
         warnings=tuple(warnings),
     )
+
+
+def parsed_to_alpha_metrics(
+    parsed: ParsedBrainSimulation,
+    *,
+    expression: str,
+    settings: Mapping[str, Any] | None = None,
+):
+    from worldquant_brain.alpha_quality import AlphaMetrics
+
+    settings_dict = dict(settings or {})
+    delay = int(settings_dict.get("delay", 1))
+    if delay not in (0, 1):
+        raise ValueError(f"Unsupported BRAIN delay: {delay}")
+    return AlphaMetrics(
+        alpha_id=parsed.alpha_id or parsed.simulation_id or "UNKNOWN",
+        expression=expression,
+        delay=delay,
+        sharpe=parsed.sharpe,
+        fitness=parsed.fitness,
+        returns=parsed.returns,
+        turnover=parsed.turnover,
+        margin=parsed.margin,
+        drawdown=parsed.drawdown,
+        self_correlation=parsed.self_correlation,
+        production_correlation=parsed.production_correlation,
+        max_instrument_weight=parsed.max_instrument_weight,
+        sub_universe_passed=parsed.sub_universe_passed,
+        weight_test_passed=parsed.weight_test_passed,
+        ranked_sharpe_passed=parsed.ranked_sharpe_passed,
+        bias_test_passed=parsed.bias_test_passed,
+        long_count=parsed.long_count,
+        short_count=parsed.short_count,
+        official_simulation_id=parsed.simulation_id,
+        metrics_source=parsed.metrics_source,
+        region=settings_dict.get("region"),
+        universe=settings_dict.get("universe"),
+        neutralization=settings_dict.get("neutralization"),
+        decay=settings_dict.get("decay"),
+        truncation=settings_dict.get("truncation"),
+    )
+
+
+def parse_and_evaluate_brain_result(
+    payload: Mapping[str, Any],
+    *,
+    expression: str,
+    settings: Mapping[str, Any] | None = None,
+    location: str | None = None,
+) -> dict[str, Any]:
+    from worldquant_brain.alpha_quality import evaluate_alpha
+
+    parsed = parse_brain_simulation_result(payload, location=location)
+    metrics = parsed_to_alpha_metrics(parsed, expression=expression, settings=settings)
+    report = evaluate_alpha(metrics)
+    return {"parsed": parsed.to_dict(), "metrics": metrics, "quality_report": report.to_dict()}

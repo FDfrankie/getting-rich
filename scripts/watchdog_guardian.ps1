@@ -32,6 +32,11 @@ function Write-WatchdogLog {
     $ts = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     $line = "[$ts] $Message"
     try {
+        if ((Test-Path $LogPath) -and ((Get-Item $LogPath).Length -gt 5242880)) {
+            $rotPath = "$LogPath.1"
+            if (Test-Path $rotPath) { Remove-Item -Force $rotPath -ErrorAction SilentlyContinue }
+            Move-Item -Force $LogPath $rotPath -ErrorAction SilentlyContinue
+        }
         Add-Content -Path $LogPath -Value $line -Encoding UTF8
     } catch {
         # Best-effort logging

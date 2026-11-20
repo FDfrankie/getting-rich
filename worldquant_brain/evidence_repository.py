@@ -645,3 +645,27 @@ CREATE TABLE IF NOT EXISTS research_policy_decisions (
 CREATE INDEX IF NOT EXISTS idx_evidence_lookup ON research_fix_evidence(hypothesis_family,data_domain,failure_gate,effectiveness_score DESC);
 CREATE INDEX IF NOT EXISTS idx_experiment_context ON alpha_research_experiments(hypothesis_family,data_domain,experiment_status);
 """
+
+
+def build_evidence_context(
+    *,
+    before: Any,
+    after: Any,
+    policy: Any,
+    action: str | None,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    from dataclasses import asdict
+    from worldquant_brain.optimization_policy import policy_snapshot
+
+    snapshot = policy_snapshot(after, policy)
+    return {
+        "optimization_objective": policy.objective.value,
+        "before_metrics": asdict(before) if before else None,
+        "after_metrics": asdict(after),
+        "turnover_efficiency": snapshot["turnover_efficiency"],
+        "diagnoses": snapshot["diagnoses"],
+        "selected_action": action,
+        "recommended_actions": snapshot["actions"],
+        "extra": dict(extra or {}),
+    }

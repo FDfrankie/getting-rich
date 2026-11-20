@@ -117,3 +117,43 @@ def reset_settings(new_settings: Settings | None = None) -> Settings:
     global _DEFAULT_SETTINGS
     _DEFAULT_SETTINGS = new_settings
     return get_settings()
+
+
+# Legacy / static configuration constants (consolidated from crypto_trading.config)
+EXCHANGE_NAME = "binance"
+API_KEY = os.getenv("CRYPTO_API_KEY", "")
+API_SECRET = os.getenv("CRYPTO_API_SECRET", "")
+
+BINANCE_TESTNET_API_KEY = os.getenv("BINANCE_TESTNET_API_KEY", "")
+BINANCE_TESTNET_API_SECRET = os.getenv("BINANCE_TESTNET_API_SECRET", "")
+
+BITUNIX_API_KEY = os.getenv("BITUNIX_API_KEY", "")
+BITUNIX_API_SECRET = os.getenv("BITUNIX_API_SECRET", "")
+
+DEFAULT_SYMBOL = "BTC/USDT"
+DEFAULT_SETTLEMENT_CURRENCY = "USDC"
+DEFAULT_TIMEFRAME = "1h"
+
+PAPER_TRADING = True
+INITIAL_BALANCE_USDT = 10000.0
+
+RISK_PARAMS = {
+    "max_risk_per_trade_pct": 0.02,
+    "max_drawdown_stop_pct": 0.08,
+    "atr_stop_multiplier": 2.0,
+    "atr_take_profit_multiplier": 3.0,
+    "max_open_positions": 3,
+    "slippage_bps": 5,
+    "taker_fee_pct": 0.0005,
+}
+
+STRATEGY_PARAMS = {
+    "bollinger_window": 20,
+    "bollinger_std": 2.0,
+    "zscore_entry_threshold": 2.0,
+    "zscore_exit_threshold": 0.5,
+    "rsi_period": 14,
+    "fast_ema": 12,
+    "slow_ema": 26,
+    "signal_ema": 9,
+}

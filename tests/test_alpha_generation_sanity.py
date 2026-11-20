@@ -42,7 +42,7 @@ class TestAlphaGenerationSanity(unittest.TestCase):
         fq = fundamental_quality_blueprint()
         self.assertIn("cashflow_op", fq.parameter_space["cf_field"])
         self.assertNotIn("operating_cashflow", fq.parameter_space["cf_field"])
-        self.assertEqual(len(builtin_blueprints()), 2)
+        self.assertGreaterEqual(len(builtin_blueprints()), 5)
 
     def test_deduplicate_by_structure_collapses_decay_clones(self) -> None:
         clones = [

@@ -192,7 +192,11 @@ DEFAULT_BRAIN_FIELD_CATALOG: dict[str, DataFieldSpec] = {
     "ebitda": DataFieldSpec("ebitda", "FUNDAMENTAL", "FUNDAMENTAL", "MATRIX", "PRIMARY", minimum_coverage=0.75),
     "est_eps": DataFieldSpec("est_eps", "ANALYST", "ANALYST", "MATRIX", "PRIMARY", minimum_coverage=0.45, maximum_staleness_days=20),
     "target_price": DataFieldSpec("target_price", "ANALYST", "ANALYST", "MATRIX", "CONFIRMATORY", minimum_coverage=0.45),
+    "est_eps_revision": DataFieldSpec("est_eps_revision", "ANALYST", "ANALYST", "MATRIX", "PRIMARY", minimum_coverage=0.35, maximum_staleness_days=20),
+    "est_eps_dispersion": DataFieldSpec("est_eps_dispersion", "ANALYST", "ANALYST", "MATRIX", "CONFIRMATORY", minimum_coverage=0.30, maximum_staleness_days=20),
+    "analyst_coverage": DataFieldSpec("analyst_coverage", "ANALYST", "ANALYST", "MATRIX", "CONDITION", minimum_coverage=0.40),
     "scl12_buzz": DataFieldSpec("scl12_buzz", "SENTIMENT", "SENTIMENT", "MATRIX", "PRIMARY", minimum_coverage=0.35),
+    "scl12_sentiment": DataFieldSpec("scl12_sentiment", "SENTIMENT", "SENTIMENT", "MATRIX", "PRIMARY", minimum_coverage=0.35),
     "opt6_slopeavg1m": DataFieldSpec("opt6_slopeavg1m", "OPTIONS", "OPTIONS", "MATRIX", "PRIMARY", minimum_coverage=0.40),
     "opt6_fcstr2imp": DataFieldSpec("opt6_fcstr2imp", "OPTIONS", "OPTIONS", "MATRIX", "CONDITION", minimum_coverage=0.40),
 }
@@ -218,8 +222,82 @@ def fundamental_quality_blueprint() -> AlphaBlueprint:
     )
 
 
+def sentiment_attention_blueprint() -> AlphaBlueprint:
+    return AlphaBlueprint(
+        blueprint_id="SENTIMENT_ATTENTION_001",
+        version=1,
+        family=AlphaFamily.SENTIMENT,
+        title="Causal-backfilled sentiment surprise with peer neutralization",
+        economic_rationale="Sparse sentiment shocks propagate with delay; causal backfill avoids lookahead while peer neutralization isolates stock-specific attention shifts.",
+        falsifiable_claim="Beats raw un-neutralized sentiment on sub-universe Sharpe without relying on blind rank() wrapping.",
+        primary_fields=(DataFieldSpec("{sent_field}", "SENTIMENT", "SENTIMENT", role="PRIMARY", minimum_coverage=0.35),),
+        transforms=(
+            TransformSpec("ts_backfill", {"window": 5}, "Causal forward-fill for sparse sentiment"),
+            TransformSpec("ts_zscore", {"window": "{window}"}, "Normalize sentiment surprise"),
+            TransformSpec("group_neutralize", {"group": "{group}"}, "Peer neutralization"),
+            TransformSpec("hump", {"hump": 0.01}, "Control micro-turnover"),
+        ),
+        expression_template="hump(group_neutralize(winsorize(ts_zscore(ts_backfill({sent_field}, 5), {window}), std=4), {group}), hump=0.01)",
+        parameter_space={"sent_field": ("scl12_sentiment", "scl12_buzz"), "window": (13, 23), "group": ("subindustry", "industry")},
+        expected_failure_modes=("LOW_COVERAGE", "LOW_SUB_UNIVERSE_SHARPE", "HIGH_TURNOVER"),
+        tags=("sentiment", "causal-backfill", "no-blind-rank"),
+    )
+
+
+def options_skew_blueprint() -> AlphaBlueprint:
+    return AlphaBlueprint(
+        blueprint_id="OPTIONS_SKEW_001",
+        version=1,
+        family=AlphaFamily.OPTIONS,
+        title="Options implied volatility term-structure / skew shift",
+        economic_rationale="Changes in 1-month implied volatility slope reflect informed hedging demand in options markets that leads equity price discovery.",
+        falsifiable_claim="Rolling z-score of implied volatility slope remains positive under 1.5x cost stress and passes subindustry neutralization.",
+        primary_fields=(DataFieldSpec("{opt_field}", "OPTIONS", "OPTIONS", role="PRIMARY", minimum_coverage=0.40),),
+        transforms=(
+            TransformSpec("ts_backfill", {"window": 5}, "Causal backfill"),
+            TransformSpec("ts_zscore", {"window": "{window}"}, "Normalize skew regime"),
+            TransformSpec("group_neutralize", {"group": "{group}"}, "Industry neutralization"),
+            TransformSpec("hump", {"hump": 0.01}, "Turnover control"),
+        ),
+        expression_template="hump(group_neutralize(winsorize(rank(ts_zscore(ts_backfill({opt_field}, 5), {window})), std=4), {group}), hump=0.01)",
+        parameter_space={"opt_field": ("opt6_slopeavg1m", "opt6_fcstr2imp"), "window": (19, 41), "group": ("industry", "subindustry")},
+        expected_failure_modes=("LOW_COVERAGE", "HIGH_TURNOVER", "LOW_MARGIN"),
+        tags=("options", "informed-flow", "cost-stress-aware"),
+    )
+
+
+def liquidity_adjusted_reversion_blueprint() -> AlphaBlueprint:
+    return AlphaBlueprint(
+        blueprint_id="LIQUIDITY_REVERSION_001",
+        version=1,
+        family=AlphaFamily.MEAN_REVERSION,
+        title="VWAP-close liquidity-damped short-term reversion",
+        economic_rationale="Intraday/short-horizon dislocations between close and VWAP revert once temporary liquidity imbalances clear; hump() suppresses churn.",
+        falsifiable_claim="Outperforms raw -returns reversion on Fitness and Margin under 1.5x/2.0x transaction cost stress.",
+        primary_fields=(
+            DataFieldSpec("close", "PV1", "PRICE_VOLUME", role="PRIMARY", minimum_coverage=0.95),
+            DataFieldSpec("vwap", "PV1", "PRICE_VOLUME", role="CONFIRMATORY", minimum_coverage=0.95),
+        ),
+        transforms=(
+            TransformSpec("ts_decay_linear", {"window": "{decay_win}"}, "Smooth daily dislocation"),
+            TransformSpec("group_neutralize", {"group": "{group}"}, "Subindustry neutrality"),
+            TransformSpec("hump", {"hump": 0.015}, "Suppress excess rebalancing"),
+        ),
+        expression_template="hump(group_neutralize(winsorize(rank(-1 * ts_decay_linear((close - vwap) / (vwap + 0.001), {decay_win})), std=4), {group}), hump=0.015)",
+        parameter_space={"decay_win": (3, 5, 7), "group": ("subindustry", "industry")},
+        expected_failure_modes=("HIGH_TURNOVER", "LOW_MARGIN", "CROWDED_SIGNAL"),
+        tags=("price-volume", "mean-reversion", "cost-stress-aware"),
+    )
+
+
 def builtin_blueprints() -> list[AlphaBlueprint]:
-    return [analyst_revision_blueprint(), fundamental_quality_blueprint()]
+    return [
+        analyst_revision_blueprint(),
+        fundamental_quality_blueprint(),
+        sentiment_attention_blueprint(),
+        options_skew_blueprint(),
+        liquidity_adjusted_reversion_blueprint(),
+    ]
 
 
 def validate_blueprint_fields_against_catalog(
@@ -278,7 +356,7 @@ def generate_controlled_candidates(
     values_list = [blueprint.parameter_space[k] for k in keys]
     blocked = blocked_signatures or set()
     candidates: list[dict[str, Any]] = []
-    structural_keys = {"revision_field", "dispersion_field", "coverage_field", "cf_field", "debt_field", "group"}
+    structural_keys = {"revision_field", "dispersion_field", "coverage_field", "cf_field", "debt_field", "sent_field", "opt_field", "group"}
 
     seen_structural: set[tuple[Any, ...]] = set()
     for combo in itertools.product(*values_list):
