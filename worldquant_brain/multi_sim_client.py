@@ -470,6 +470,17 @@ def simulate_multi_alpha(
             for it in items
         ]
 
+    # Session-level circuit breaker: if Multi-Sim POST already returned HTTP 403
+    # for this client, skip the wasted batch POST and route directly to single-alpha simulation.
+    if getattr(client, "_multi_sim_forbidden", False) and len(items) > 1:
+        return _simulate_single_fallback(
+            client,
+            items,
+            max_wait_seconds=max_wait_seconds,
+            poll_interval=poll_interval,
+            item_delay_seconds=fallback_item_delay,
+        )
+
     # Single-item fallback uses regular single simulation
     if len(items) == 1:
         it = items[0]
@@ -524,6 +535,11 @@ def simulate_multi_alpha(
         ]
 
     if code in (400, 403) or (code in (200, 201, 202) and not location):
+        if code == 403:
+            try:
+                setattr(client, "_multi_sim_forbidden", True)
+            except Exception:
+                pass
         logger.warning(
             "Multi-sim POST returned HTTP %s without Location; falling back to single-alpha simulation for %d items",
             code,

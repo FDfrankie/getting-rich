@@ -139,12 +139,7 @@ class BrainSimulationJob:
 
 
 def compute_simulation_key(expression: str, settings: Mapping[str, Any] | None = None) -> str:
-    try:
-        from worldquant_brain.canonical_ast import parse_fastexpr
-        canon_expr = parse_fastexpr(expression).canonical_expression or expression.strip()
-    except Exception:
-        canon_expr = expression.strip()
-    data = {"expression": canon_expr, "settings": dict(settings or {})}
+    data = {"expression": expression.strip(), "settings": dict(settings or {})}
     raw = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -398,7 +393,33 @@ class BrainJobQueue:
                 self._key_to_job_id[key] = job_id
                 return job, False
 
+        try:
+            from worldquant_brain.alpha_miner import validate_candidate_expression
+            ok_expr, bad_reason = validate_candidate_expression(expression)
+        except Exception:
+            ok_expr, bad_reason = True, "OK"
+
         with self._lock:
+            if not ok_expr:
+                job_id = f"rej_{key[:16]}_{int(time.time())}"
+                bad_job = BrainSimulationJob(
+                    job_id=job_id,
+                    simulation_key=key,
+                    expression=expression,
+                    settings=dict(settings or {}),
+                )
+                bad_job.status = BrainJobStatus.FAILED
+                bad_job.safe_error = f"PRE_QUEUE_REJECTED:{bad_reason}"
+                bad_job.priority = int(priority)
+                bad_job.source = str(source or "AUTO_MINING")
+                bad_job.requested_by = requested_by
+                bad_job.manual_note = manual_note
+                bad_job.simulation_only = bool(simulation_only)
+                bad_job.queued_at = datetime.now(timezone.utc).isoformat()
+                self._jobs[job_id] = bad_job
+                self._key_to_job_id[key] = job_id
+                self._persist_job(bad_job)
+                return bad_job, False
 
             job_id = f"job_{key[:16]}_{int(time.time())}"
             job = BrainSimulationJob(
@@ -712,6 +733,7 @@ class BrainJobQueue:
                         job.status = BrainJobStatus.COMPLETED if has_metrics else BrainJobStatus.FAILED
                     if has_metrics:
                         self.clear_rate_limit_429()
+                        self._store_simulation_cache(job)
                         job.metrics = {
                             "sharpe": sharpe,
                             "fitness": fitness,
@@ -720,23 +742,8 @@ class BrainJobQueue:
                             "checks_passed": checks_passed,
                             "failed_checks": failed_check_names,
                         }
-                        self._store_simulation_cache(job)
-                        self._persist_job(job)
-                        try:
-                            from worldquant_brain.shadow_writeback import record_simulation_shadow
-                            record_simulation_shadow(
-                                self.db_path,
-                                expression=job.expression,
-                                settings=job.settings,
-                                metrics=job.metrics,
-                                alpha_id=job.alpha_id,
-                                parent_expression=(job.settings or {}).get("parent_expression"),
-                                dataset_id=str((job.settings or {}).get("dataset_id") or ""),
-                            )
-                        except Exception:
-                            pass
-                    else:
-                        job.safe_error = "線上模擬完成但缺少有效 Sharpe 或 Fitness 指標"
+                        if not has_metrics:
+                            job.safe_error = "線上模擬完成但缺少有效 Sharpe 或 Fitness 指標"
                         self._persist_job(job)
                     if has_metrics and callable(getattr(self, "on_complete_callback", None)):
                         try:

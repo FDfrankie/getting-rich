@@ -175,13 +175,16 @@ def classify_verdict(
         return "REJECTED", ";".join(reasons)
     if abs(sh) < eff_nm_sharpe:
         return "REJECTED", ";".join(reasons)
-    min_nm_fit = 0.50 if abs(sh) >= eff_min_sharpe else 0.55
+    # When Sharpe is strongly negative (e.g. -1.48), BRAIN Fitness and Margin may also be negative;
+    # evaluate their sign-flipped magnitude when negative so Stage-2 negation (-1 * expr) can rescue them.
     eff_fit = abs(fit) if (sh < 0 and fit < 0) else fit
+    eff_margin = abs(norm_margin) if (sh < 0 and norm_margin is not None and norm_margin < 0) else norm_margin
+    min_nm_fit = 0.50 if abs(sh) >= eff_min_sharpe else 0.55
     if eff_fit < min_nm_fit:
         return "REJECTED", ";".join(reasons)
     if not (0.005 < to < 0.95):
         return "REJECTED", ";".join(reasons)
-    if norm_margin is not None and norm_margin < 0.0002 and abs(sh) < eff_min_sharpe:
+    if eff_margin is not None and eff_margin < 0.0002 and abs(sh) < eff_min_sharpe:
         return "REJECTED", ";".join(reasons)
 
     return "NEAR_MISS", ";".join(reasons)

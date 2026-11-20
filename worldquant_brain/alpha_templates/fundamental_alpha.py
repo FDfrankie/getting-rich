@@ -11,7 +11,7 @@ FUNDAMENTAL_ALPHAS = [
     {
         "id": "FUND_ALPHA_01",
         "name": "高資本回報率與穩健現金流 (Cash Flow ROIC Quality)",
-        "expression": "group_neutralize(rank(operating_cashflow / (assets - liabilities + 0.001)), sector)",
+        "expression": "group_neutralize(rank(cashflow_op / (assets - liabilities + 0.001)), sector)",
         "intuition": "優質公司的營業現金流相對於淨資產比例顯著高於同行業平均，具備定價權與長期超額收益。",
         "expected_sharpe": "> 1.5",
         "typical_turnover": "5% ~ 15%",

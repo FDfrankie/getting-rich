@@ -19,7 +19,7 @@ SENTIMENT_ALPHAS = [
     {
         "id": "SENT_ALPHA_02",
         "name": "EPS 預期上修動能 (EPS Consensus Revision Momentum)",
-        "expression": "ts_decay_linear(rank(eps_consensus_mean - ts_delay(eps_consensus_mean, 20)), 5)",
+        "expression": "ts_decay_linear(rank(est_eps - ts_delay(est_eps, 20)), 5)",
         "intuition": "當多家投行分析師在近一個月內連續上修 EPS 預期，往往暗示公司訂單超預期或有重大基本面拐點。",
         "expected_sharpe": "> 1.6",
         "typical_turnover": "12% ~ 22%",
