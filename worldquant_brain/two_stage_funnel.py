@@ -289,6 +289,9 @@ class TwoStageAlphaFunnel:
                 cols = {r["name"] for r in conn.execute("PRAGMA table_info(funnel_reference_db)").fetchall()}
                 if "skeleton" not in cols:
                     conn.execute("ALTER TABLE funnel_reference_db ADD COLUMN skeleton TEXT NOT NULL DEFAULT ''")
+                ds_cols = {r["name"] for r in conn.execute("PRAGMA table_info(funnel_dataset_stats)").fetchall()}
+                if "submit_failed_count" not in ds_cols:
+                    conn.execute("ALTER TABLE funnel_dataset_stats ADD COLUMN submit_failed_count INTEGER NOT NULL DEFAULT 0")
             finally:
                 conn.commit()
 
