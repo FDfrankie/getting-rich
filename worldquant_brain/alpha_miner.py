@@ -53,6 +53,58 @@ def extract_expression_skeleton(expression: str) -> str:
 
     return parse_fastexpr(expression).structural_expression
 
+KNOWN_INVALID_BRAIN_FIELDS: frozenset[str] = frozenset({
+    "opt6_slopeavg1m",
+    "opt6_fcstr2imp",
+    "operating_cashflow",
+    "eps_consensus_mean",
+})
+
+
+def validate_candidate_expression(expression: str, extra_invalid_fields: set[str] | frozenset[str] = frozenset()) -> tuple[bool, str]:
+    """Reject mathematically degenerate or known-invalid BRAIN expressions before wasting simulation quota."""
+    import re
+    expr = str(expression or "").strip()
+    if not expr:
+        return False, "EMPTY_EXPRESSION"
+
+    low = expr.lower()
+    blocked = set(KNOWN_INVALID_BRAIN_FIELDS) | {f.lower() for f in extra_invalid_fields}
+    tokens = set(re.findall(r"\b[a-z_][a-z0-9_]*\b", low))
+    bad_fields = sorted(tokens & blocked)
+    if bad_fields:
+        return False, f"INVALID_FIELD:{bad_fields[0]}"
+
+    # Reject degenerate ts_corr(X, X, W) or ts_corr(..., 1/2/3)
+    for m in re.finditer(r"ts_corr\(\s*([^,()]+)\s*,\s*([^,()]+)\s*,\s*(\d+)\s*\)", low):
+        a, b, w = m.group(1).strip(), m.group(2).strip(), int(m.group(3))
+        if a == b:
+            return False, f"DEGENERATE_SELF_CORR:{a}"
+        if w < 5:
+            return False, f"DEGENERATE_CORR_WINDOW:{w}"
+
+    # Reject ts_std_dev(..., 1) or ts_regression(..., 1)
+    for m in re.finditer(r"ts_(?:std_dev|zscore|regression)\([^()]*,\s*(\d+)\s*(?:,|\))", low):
+        if int(m.group(1)) < 3:
+            return False, f"DEGENERATE_STAT_WINDOW:{m.group(1)}"
+
+    return True, "OK"
+
+
+def deduplicate_by_structure(items: list[Any], key_fn=None) -> list[Any]:
+    """Collapse structural clones (e.g. repeated outer ts_decay_linear wrappers) to 1 representative."""
+    from worldquant_brain.canonical_ast import parse_fastexpr
+    seen: set[str] = set()
+    out: list[Any] = []
+    for item in items:
+        expr = key_fn(item) if key_fn else str(item)
+        sh = parse_fastexpr(expr).structural_hash
+        if sh not in seen:
+            seen.add(sh)
+            out.append(item)
+    return out
+
+
 class ContinuousAlphaMiner:
     """
     24/7 不間斷自動 Alpha 因子挖掘與進化引擎 (Continuous Alpha Miner)
@@ -232,17 +284,24 @@ class ContinuousAlphaMiner:
 
         pattern = random.choice([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
         if pattern == 1:
-            expr = f"-1 * {op_name}(ts_corr({field_a}, {field_b}, {window}), {window})"
-            name = f"Auto_{field_a}_{field_b}_Reversal_{window}"
+            corr_b_choices = [b for b in ("volume", "vwap", "returns") if b != field_a]
+            corr_b = random.choice(corr_b_choices)
+            corr_w = max(5, int(window))
+            expr = f"group_neutralize(-1 * {op_name}(ts_corr({field_a}, {corr_b}, {corr_w}), {corr_w}), {grp})"
+            name = f"Auto_{field_a}_{corr_b}_Reversal_{corr_w}"
         elif pattern == 2:
-            expr = f"rank({op_name}({field_a}, {window})) - rank(ts_decay_linear({field_b}, {window}))"
-            name = f"Auto_MultiField_Spread_{field_a}_{window}"
+            price_fields = [f for f in ("close", "open", "high", "low", "vwap") if f != field_a]
+            spread_b = random.choice(price_fields) if field_a in ("close", "open", "high", "low", "vwap") else field_b
+            if spread_b == field_a:
+                spread_b = "vwap" if field_a != "vwap" else "close"
+            expr = f"hump(group_neutralize(rank({op_name}({field_a}, {window})) - rank(ts_decay_linear({spread_b}, {window})), {grp}), hump=0.01)"
+            name = f"Auto_MultiField_Spread_{field_a}_{spread_b}_{window}"
         elif pattern == 3:
             expr = f"group_neutralize(rank(ts_delta({field_a}, {window})) / (ts_std_dev({field_a}, 20) + 1e-4), {grp})"
             name = f"Auto_Normalized_Momentum_{field_a}_{window}"
         elif pattern == 4:
-            expr = f"signed_power(ts_rank({field_a}, {window}) - 0.5, 2) * -1"
-            name = f"Auto_Nonlinear_MeanRevert_{field_a}_{window}"
+            expr = f"group_neutralize(signed_power(ts_rank({field_a}, {max(5, int(window))}) - 0.5, 2) * -1, {grp})"
+            name = f"Auto_Nonlinear_MeanRevert_{field_a}_{max(5, int(window))}"
         elif pattern == 5:
             expr = f"group_neutralize(rank({f1} / (abs({f2}) + 0.001)), {grp})"
             name = f"Auto_Fundamental_Quality_{f1}_{grp}"
@@ -266,7 +325,7 @@ class ContinuousAlphaMiner:
             name = f"Alpha101_VolPriceDivergence_{grp}_{window}"
         elif pattern == 10:
             # Alpha#6 / Alpha#54-style VWAP-close mean reversion damped by ts_decay_linear
-            expr = f"ts_decay_linear(-1 * ts_corr(open, volume, {window}) * rank((close - vwap) / (vwap + 0.0001)), 5)"
+            expr = f"ts_decay_linear(-1 * ts_corr(open, volume, {max(5, int(window))}) * rank((close - vwap) / (vwap + 0.0001)), 5)"
             name = f"Alpha101_VwapReversion_{window}"
         elif pattern == 11:
             # Official BRAIN: Fundamental Operating Earnings & Asset Turnover with winsorize
@@ -361,40 +420,9 @@ class ContinuousAlphaMiner:
                 turnover=result["turnover"],
                 category=result["category"],
             )
-            self.record_simulation_outcome(
-                expression=result["expression"],
-                settings=result.get("settings"),
-                metrics=result,
-                dataset_id=str(result.get("category") or ""),
-            )
             self.last_mined_alpha = result
             return result
         return None
-
-    def record_simulation_outcome(
-        self,
-        *,
-        expression: str,
-        settings: dict[str, Any] | None = None,
-        metrics: dict[str, Any] | None = None,
-        alpha_id: str | None = None,
-        parent_expression: str | None = None,
-        dataset_id: str = "",
-    ) -> dict[str, Any]:
-        """Record simulation outcome into Shadow Pareto Archive & Forbidden Edit Motif (never raises)."""
-        try:
-            from worldquant_brain.shadow_writeback import record_simulation_shadow
-            return record_simulation_shadow(
-                self._dedup_db_path(),
-                expression=expression,
-                settings=settings,
-                metrics=metrics,
-                alpha_id=alpha_id,
-                parent_expression=parent_expression,
-                dataset_id=dataset_id,
-            )
-        except Exception as exc:
-            return {"recorded_pareto": False, "recorded_motif": False, "degraded": True, "error": str(exc)}
 
 
     def _dedup_db_path(self) -> str:
@@ -402,9 +430,7 @@ class ContinuousAlphaMiner:
 
     def has_tried_expression(self, expression: str) -> bool:
         import hashlib, sqlite3
-        from worldquant_brain.canonical_ast import parse_fastexpr
-        canon = parse_fastexpr(expression).canonical_expression or expression.strip()
-        expr_hash = hashlib.sha256(canon.encode("utf-8")).hexdigest()
+        expr_hash = hashlib.sha256(expression.strip().encode("utf-8")).hexdigest()
         db_p = self._dedup_db_path()
         if not db_p or db_p == ":memory:" or not os.path.exists(db_p):
             return False
@@ -421,9 +447,7 @@ class ContinuousAlphaMiner:
     def mark_expression_tried(self, expression: str) -> None:
         import hashlib, sqlite3
         from datetime import datetime, timezone
-        from worldquant_brain.canonical_ast import parse_fastexpr
-        canon = parse_fastexpr(expression).canonical_expression or expression.strip()
-        expr_hash = hashlib.sha256(canon.encode("utf-8")).hexdigest()
+        expr_hash = hashlib.sha256(expression.strip().encode("utf-8")).hexdigest()
         db_p = self._dedup_db_path()
         if not db_p or db_p == ":memory:":
             return
@@ -469,11 +493,11 @@ class ContinuousAlphaMiner:
         mcts_branch: tuple[str, str, str] | None = None,
     ) -> dict[str, str]:
         """Generate a structurally diverse, high-pass-rate FASTEXPR expression (eliminates nested ts_decay_linear clones)."""
-        verified = [
+        verified = deduplicate_by_structure([
             a for a in self.vault.list_alphas()
             if a.get("status") in ("BRAIN_COMPLETE", "VERIFIED", "TEMPLATE_SEED")
             and "ts_decay_linear(" not in str(a.get("expression") or "").lower()
-        ]
+        ], key_fn=lambda a: str(a.get("expression") or ""))
         for attempt in range(max_attempts):
             r = random.random()
             if domain is not None:
@@ -494,6 +518,9 @@ class ContinuousAlphaMiner:
             else:
                 cand = self.generate_candidate_expression()
 
+            ok_expr, _ = validate_candidate_expression(cand["expression"])
+            if not ok_expr:
+                continue
             skel = extract_expression_skeleton(cand["expression"])
             if not find_duplicate(cand["expression"], []).blocked and not self.has_tried_expression(cand["expression"]) and self._count_recent_skeleton(skel) < 3:
                 if mark_tried:
@@ -605,12 +632,12 @@ class ContinuousAlphaMiner:
                 cand = self.generate_unique_candidate(mark_tried=False, domain=dom, mcts_branch=branch)
                 cand["mcts_branch"] = branch
             elif i in (1, 2) and (elite_exprs or existing_exprs):
-                seeds = elite_exprs or existing_exprs
+                seeds = deduplicate_by_structure(elite_exprs or existing_exprs)
                 cand = None
                 for _ in range(5):
                     seed = random.choice(seeds)
                     ws_expr = warm_start_structural_mutate(seed)
-                    if ws_expr and not self.has_tried_expression(ws_expr) and not find_duplicate(ws_expr, []).blocked:
+                    if ws_expr and validate_candidate_expression(ws_expr)[0] and not self.has_tried_expression(ws_expr) and not find_duplicate(ws_expr, []).blocked:
                         cand = {"name": "WarmStart_GP_Swap", "expression": ws_expr, "domain": "WARM_START_GP"}
                         break
                 if cand is None:
@@ -755,7 +782,7 @@ class ContinuousAlphaMiner:
             })
             prime_expr = _shift_to_prime_windows(expr)
             if prime_expr != expr:
-                candidates.insert(2, {
+                candidates.append({
                     "name": "NearMiss_ParamVariantPrimeWindow",
                     "expression": prime_expr,
                     "settings": s_corr2,
