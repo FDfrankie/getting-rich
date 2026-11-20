@@ -5,9 +5,12 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from worldquant_brain.alpha_miner import ContinuousAlphaMiner
-from worldquant_brain.brain_job_queue import compute_simulation_key
+from worldquant_brain.alpha_repository import AlphaRepository
+from worldquant_brain.alpha_vault import AlphaVault
+from worldquant_brain.brain_job_queue import BrainJobQueue, BrainJobStatus, BrainSimulationJob, compute_simulation_key
 from worldquant_brain.brain_scheduler import BrainDailyScheduler
 from worldquant_brain.shadow_writeback import record_simulation_shadow
 
@@ -93,6 +96,95 @@ class TestShadowWritebackWiring(unittest.TestCase):
             try:
                 p_cnt = conn.execute("SELECT COUNT(*) FROM pareto_archive_entries").fetchone()[0]
                 self.assertEqual(p_cnt, 1)
+            finally:
+                conn.close()
+
+    def test_record_simulation_shadow_ignores_nan_metrics(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            db_path = Path(td) / "nan_test.db"
+            res = record_simulation_shadow(
+                db_path,
+                expression="rank(close)",
+                metrics={"sharpe": float("nan"), "fitness": 1.0, "turnover": float("nan")},
+            )
+            self.assertFalse(res["degraded"])
+            self.assertTrue(res["recorded_pareto"])
+            conn = sqlite3.connect(str(db_path))
+            try:
+                row = conn.execute("SELECT official_quality, cost_efficiency FROM pareto_archive_entries").fetchone()
+                self.assertIsNone(row[0])
+                self.assertIsNone(row[1])
+            finally:
+                conn.close()
+
+    def test_alpha_vault_and_repository_use_canonical_expression_hash(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            vault = AlphaVault(str(Path(td) / "vault.db"))
+            h1 = vault._canonical_expression_hash("rank( ts_delta( close , 5 ) )")
+            h2 = vault._canonical_expression_hash("rank(ts_delta(close,5))")
+            self.assertEqual(h1, h2)
+
+            repo = AlphaRepository(Path(td) / "repo.db")
+            r1 = repo.save_candidate({"alpha_id": "a1", "expression": "rank( ts_delta( close , 5 ) )"})
+            r2 = repo.save_candidate({"alpha_id": "a2", "expression": "rank(ts_delta(close,5))"})
+            self.assertEqual(r1["expression_hash"], r2["expression_hash"])
+
+    def test_brain_job_queue_execute_job_records_shadow_and_cache(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+            db_path = Path(td) / "queue_test.db"
+            mock_client = MagicMock()
+            mock_client.offline_mode = False
+            mock_client.authenticated = True
+            mock_client.BASE_URL = "https://api.worldquantbrain.com"
+            mock_client.timeout = 5.0
+            mock_client._number.side_effect = lambda src, key: src.get(key)
+
+            post_resp = MagicMock()
+            post_resp.status_code = 201
+            post_resp.headers = {"Location": "https://api.worldquantbrain.com/simulations/sim_123"}
+
+            poll_resp = MagicMock()
+            poll_resp.status_code = 200
+            poll_resp.headers = {}
+            poll_resp.json.return_value = {"status": "COMPLETE", "alpha": "alpha_999"}
+
+            alpha_resp = MagicMock()
+            alpha_resp.status_code = 200
+            alpha_resp.json.return_value = {
+                "id": "alpha_999",
+                "is": {
+                    "sharpe": 1.55,
+                    "fitness": 1.25,
+                    "turnover": 0.14,
+                    "margin": 0.0018,
+                    "checks": [{"name": "LOW_SUB_UNIVERSE_SHARPE", "result": "PASS"}],
+                },
+            }
+            mock_client.session.post.return_value = post_resp
+            mock_client.session.get.side_effect = [poll_resp, alpha_resp]
+
+            queue = BrainJobQueue(brain_client=mock_client, db_path=db_path, autostart=False)
+            settings = {"region": "USA", "delay": 1, "universe": "TOP3000"}
+            expr = "rank(ts_delta(close, 5))"
+            job = BrainSimulationJob(
+                job_id="job_1",
+                simulation_key=compute_simulation_key(expr, settings),
+                expression=expr,
+                settings=settings,
+            )
+            queue._persist_job(job)
+            queue._execute_job(job)
+
+            self.assertEqual(job.status, BrainJobStatus.COMPLETED)
+            self.assertEqual(job.alpha_id, "alpha_999")
+            self.assertAlmostEqual(job.metrics["sharpe"], 1.55)
+
+            conn = sqlite3.connect(str(db_path))
+            try:
+                cache_cnt = conn.execute("SELECT COUNT(*) FROM brain_simulation_cache").fetchone()[0]
+                pareto_cnt = conn.execute("SELECT COUNT(*) FROM pareto_archive_entries").fetchone()[0]
+                self.assertEqual(cache_cnt, 1)
+                self.assertEqual(pareto_cnt, 1)
             finally:
                 conn.close()
 

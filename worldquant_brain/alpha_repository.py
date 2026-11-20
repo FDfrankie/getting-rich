@@ -26,8 +26,14 @@ class AlphaRepository:
     def save_candidate(self, alpha: Mapping[str, Any]) -> dict[str, Any]:
         expr = str(alpha.get("expression") or "").strip()
         payload = dict(alpha)
-        payload["expression_hash"] = hashlib.sha256(expr.encode("utf-8")).hexdigest()
-        payload["ast_family_hash"] = compute_ast_family_hash(expr)
+        try:
+            from worldquant_brain.canonical_ast import parse_fastexpr
+            fp = parse_fastexpr(expr)
+            payload["expression_hash"] = fp.exact_hash or hashlib.sha256(expr.encode("utf-8")).hexdigest()
+            payload["ast_family_hash"] = fp.ast_family_hash
+        except Exception:
+            payload["expression_hash"] = hashlib.sha256(expr.encode("utf-8")).hexdigest()
+            payload["ast_family_hash"] = compute_ast_family_hash(expr)
         return self.store.upsert_alpha(payload)
 
     def transition_state(

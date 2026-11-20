@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import math
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -111,14 +112,19 @@ def record_simulation_shadow(
         checks_passed = bool(met.get("checks_passed", False))
         failed_checks = [str(c).upper() for c in (met.get("failed_checks") or []) if c]
 
-        # Build ParetoObjectiveVector (shadow-only; missing metrics remain UNKNOWN)
-        if sharpe is not None and fitness is not None:
+        # Build ParetoObjectiveVector (shadow-only; missing or non-finite metrics remain UNKNOWN)
+        if (
+            sharpe is not None
+            and fitness is not None
+            and math.isfinite(float(sharpe))
+            and math.isfinite(float(fitness))
+        ):
             oq_score = max(0.0, min(1.0, (float(sharpe) / 3.0) * 0.6 + (float(fitness) / 2.0) * 0.4))
             oq = ObjectiveValue.known(oq_score, evidence_source="WORLDQUANT_BRAIN", calculated_at=now)
         else:
             oq = ObjectiveValue.unknown()
 
-        if turnover is not None:
+        if turnover is not None and math.isfinite(float(turnover)):
             to_val = float(turnover)
             ce_score = max(0.0, min(1.0, 1.0 - abs(to_val - 0.125) / 0.70))
             ce = ObjectiveValue.known(ce_score, evidence_source="WORLDQUANT_BRAIN", calculated_at=now)

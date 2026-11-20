@@ -86,9 +86,18 @@ class AlphaVault:
             # Backfill expression_hash idempotently for existing rows
             rows_no_hash = cursor.execute("SELECT id, expression FROM alphas WHERE expression_hash IS NULL OR expression_hash = ''").fetchall()
             for r in rows_no_hash:
-                h = hashlib.sha256(str(r["expression"]).strip().encode("utf-8")).hexdigest()
+                h = self._canonical_expression_hash(str(r["expression"]))
                 cursor.execute("UPDATE alphas SET expression_hash = ? WHERE id = ?", (h, r["id"]))
             conn.commit()
+
+    @staticmethod
+    def _canonical_expression_hash(expression: str) -> str:
+        try:
+            from worldquant_brain.canonical_ast import parse_fastexpr
+            canon = parse_fastexpr(expression).canonical_expression or str(expression or "").strip()
+        except Exception:
+            canon = str(expression or "").strip()
+        return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
     @staticmethod
     def passes_qualification(sharpe: float, fitness: float, turnover: float) -> bool:
@@ -157,7 +166,7 @@ class AlphaVault:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             expr_clean = expression.strip()
-            expr_hash = hashlib.sha256(expr_clean.encode("utf-8")).hexdigest()
+            expr_hash = self._canonical_expression_hash(expr_clean)
             try:
                 from worldquant_brain.alpha_miner import extract_expression_skeleton
                 new_skel = extract_expression_skeleton(expr_clean)
