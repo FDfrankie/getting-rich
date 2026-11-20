@@ -197,8 +197,9 @@ DEFAULT_BRAIN_FIELD_CATALOG: dict[str, DataFieldSpec] = {
     "analyst_coverage": DataFieldSpec("analyst_coverage", "ANALYST", "ANALYST", "MATRIX", "CONDITION", minimum_coverage=0.40),
     "scl12_buzz": DataFieldSpec("scl12_buzz", "SENTIMENT", "SENTIMENT", "MATRIX", "PRIMARY", minimum_coverage=0.35),
     "scl12_sentiment": DataFieldSpec("scl12_sentiment", "SENTIMENT", "SENTIMENT", "MATRIX", "PRIMARY", minimum_coverage=0.35),
-    "opt6_slopeavg1m": DataFieldSpec("opt6_slopeavg1m", "OPTIONS", "OPTIONS", "MATRIX", "PRIMARY", minimum_coverage=0.40),
-    "opt6_fcstr2imp": DataFieldSpec("opt6_fcstr2imp", "OPTIONS", "OPTIONS", "MATRIX", "CONDITION", minimum_coverage=0.40),
+    "implied_volatility_call_60": DataFieldSpec("implied_volatility_call_60", "OPTIONS", "OPTIONS", "MATRIX", "PRIMARY", minimum_coverage=0.40),
+    "implied_volatility_put_60": DataFieldSpec("implied_volatility_put_60", "OPTIONS", "OPTIONS", "MATRIX", "CONDITION", minimum_coverage=0.40),
+    "implied_volatility_mean_60": DataFieldSpec("implied_volatility_mean_60", "OPTIONS", "OPTIONS", "MATRIX", "PRIMARY", minimum_coverage=0.40),
 }
 
 
@@ -260,7 +261,7 @@ def options_skew_blueprint() -> AlphaBlueprint:
             TransformSpec("hump", {"hump": 0.01}, "Turnover control"),
         ),
         expression_template="hump(group_neutralize(winsorize(rank(ts_zscore(ts_backfill({opt_field}, 5), {window})), std=4), {group}), hump=0.01)",
-        parameter_space={"opt_field": ("opt6_slopeavg1m", "opt6_fcstr2imp"), "window": (19, 41), "group": ("industry", "subindustry")},
+        parameter_space={"opt_field": ("implied_volatility_call_60", "implied_volatility_put_60", "implied_volatility_mean_60"), "window": (19, 41), "group": ("industry", "subindustry")},
         expected_failure_modes=("LOW_COVERAGE", "HIGH_TURNOVER", "LOW_MARGIN"),
         tags=("options", "informed-flow", "cost-stress-aware"),
     )

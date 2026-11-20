@@ -66,6 +66,8 @@ class TestArchitecturalUpgrades(unittest.TestCase):
     def test_usdc_liquidity_guard(self):
         """驗證 USDC 流動性守護：價差過大時拒絕市價單"""
         client = BinanceTestnetClient(settlement="USDC")
+        client.mock_mode = True
+        client.is_connected = False
         # 測試常態檢查
         guard = client.check_liquidity_guard("BTC/USDT", max_spread_pct=0.15)
         self.assertIn("passed", guard)

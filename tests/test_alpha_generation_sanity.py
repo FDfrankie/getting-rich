@@ -39,10 +39,19 @@ class TestAlphaGenerationSanity(unittest.TestCase):
             self.assertTrue(ok, f"Bad generated expr {cand['expression']}: {reason}")
 
     def test_default_blueprints_replaced_invalid_fields(self) -> None:
+        from worldquant_brain.alpha_blueprint import DEFAULT_BRAIN_FIELD_CATALOG, generate_controlled_candidates
+
         fq = fundamental_quality_blueprint()
         self.assertIn("cashflow_op", fq.parameter_space["cf_field"])
         self.assertNotIn("operating_cashflow", fq.parameter_space["cf_field"])
-        self.assertGreaterEqual(len(builtin_blueprints()), 5)
+        bps = builtin_blueprints()
+        self.assertGreaterEqual(len(bps), 5)
+        for bp in bps:
+            cands = generate_controlled_candidates(bp, catalog=DEFAULT_BRAIN_FIELD_CATALOG)
+            self.assertGreater(len(cands), 0, msg=f"{bp.blueprint_id} generated 0 candidates")
+            for c in cands:
+                ok, reason = validate_candidate_expression(c["expression"])
+                self.assertTrue(ok, f"Blueprint {bp.blueprint_id} generated invalid expr {c['expression']}: {reason}")
 
     def test_deduplicate_by_structure_collapses_decay_clones(self) -> None:
         clones = [
