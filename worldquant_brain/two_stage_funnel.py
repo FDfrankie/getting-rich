@@ -212,7 +212,12 @@ def classify_verdict(
     min_fitness: float = 1.00,
     min_turnover: float = 0.01,
     max_turnover: float = 0.70,
-    near_miss_sharpe: float = 0.90,
+    near_miss_sharpe: float = 1.15,
+    near_miss_min_fitness: float | None = None,
+    near_miss_min_turnover: float | None = None,
+    near_miss_max_turnover: float | None = None,
+    near_miss_min_margin: float | None = None,
+    near_miss_max_failed_checks: int | None = None,
 ) -> tuple[str, str]:
     """Multi-factor delay-aware classification into (PASSED | NEAR_MISS | REJECTED, reason)."""
     sharpe = result.get("sharpe")
@@ -228,7 +233,7 @@ def classify_verdict(
         return "REJECTED", str(result.get("error") or "MISSING_METRICS")
 
     eff_min_sharpe = 2.00 if delay == 0 else float(min_sharpe)
-    eff_nm_sharpe = max(float(near_miss_sharpe), 1.45) if delay == 0 else float(near_miss_sharpe)
+    eff_nm_sharpe = max(float(near_miss_sharpe), 1.80) if delay == 0 else float(near_miss_sharpe)
 
     sh = float(sharpe)
     fit = float(fitness)
@@ -254,10 +259,15 @@ def classify_verdict(
     if not reasons:
         return "PASSED", "QUALIFIED"
 
-    # Multi-factor NEAR_MISS eligibility (must be genuinely rescuable)
+    # Multi-factor NEAR_MISS eligibility (P14 tight gate: only genuinely rescuable seeds enter Stage 2)
+    max_fc = int(
+        os.getenv("BRAIN_NEAR_MISS_MAX_FAILED_CHECKS", "2") or "2"
+        if near_miss_max_failed_checks is None
+        else near_miss_max_failed_checks
+    )
     if any(bad in chk for chk in failed_checks for bad in NON_RESCUABLE_CHECKS):
         return "REJECTED", ";".join(reasons)
-    if len(failed_checks) >= 4:
+    if len(failed_checks) > max_fc:
         return "REJECTED", ";".join(reasons)
     if abs(sh) < eff_nm_sharpe:
         return "REJECTED", ";".join(reasons)
@@ -265,12 +275,33 @@ def classify_verdict(
     # evaluate their sign-flipped magnitude so Stage-2 negation (-1 * expr) can rescue them.
     eff_fit = -fit if sh < 0 else fit
     eff_margin = (-norm_margin if (norm_margin is not None and sh < 0) else norm_margin)
-    min_nm_fit = 0.50 if abs(sh) >= eff_min_sharpe else 0.55
+    base_nm_fit = float(
+        os.getenv("BRAIN_NEAR_MISS_MIN_FITNESS", "0.88") or "0.88"
+        if near_miss_min_fitness is None
+        else near_miss_min_fitness
+    )
+    min_nm_fit = max(0.82, base_nm_fit - 0.06) if abs(sh) >= eff_min_sharpe else base_nm_fit
     if eff_fit < min_nm_fit:
         return "REJECTED", ";".join(reasons)
-    if not (0.005 < to < 0.95):
+    nm_min_to = float(
+        os.getenv("BRAIN_NEAR_MISS_MIN_TO", "0.008") or "0.008"
+        if near_miss_min_turnover is None
+        else near_miss_min_turnover
+    )
+    nm_max_to = float(
+        os.getenv("BRAIN_NEAR_MISS_MAX_TO", "0.78") or "0.78"
+        if near_miss_max_turnover is None
+        else near_miss_max_turnover
+    )
+    if not (nm_min_to <= to <= nm_max_to):
         return "REJECTED", ";".join(reasons)
-    if eff_margin is not None and eff_margin < 0.0002 and abs(sh) < eff_min_sharpe:
+    base_nm_margin = float(
+        os.getenv("BRAIN_NEAR_MISS_MIN_MARGIN", "0.0007") or "0.0007"
+        if near_miss_min_margin is None
+        else near_miss_min_margin
+    )
+    eff_nm_margin = min(base_nm_margin, 0.0005) if abs(sh) >= eff_min_sharpe else base_nm_margin
+    if eff_margin is not None and eff_margin < eff_nm_margin:
         return "REJECTED", ";".join(reasons)
 
     return "NEAR_MISS", ";".join(reasons)
@@ -290,12 +321,12 @@ class TwoStageAlphaFunnel:
         stage1_to_stage2_ratio: int | None = None,
     ) -> None:
         self.db_path = str(db_path)
-        default_thresh = float(os.getenv("BRAIN_SEED_SHARPE_THRESHOLD", "1.05") or "1.05")
+        default_thresh = float(os.getenv("BRAIN_SEED_SHARPE_THRESHOLD", "1.15") or "1.15")
         self.seed_sharpe_threshold = float(default_thresh if seed_sharpe_threshold is None else seed_sharpe_threshold)
         self.max_stage2_variants_per_seed = max(
             1,
             int(
-                os.getenv("BRAIN_MAX_STAGE2_VARIANTS", "5") or "5"
+                os.getenv("BRAIN_MAX_STAGE2_VARIANTS", "4") or "4"
                 if max_stage2_variants_per_seed is None
                 else max_stage2_variants_per_seed
             ),
@@ -303,7 +334,7 @@ class TwoStageAlphaFunnel:
         self.stage1_to_stage2_ratio = max(
             0,
             int(
-                os.getenv("BRAIN_STAGE1_PER_STAGE2", "2") or "2"
+                os.getenv("BRAIN_STAGE1_PER_STAGE2", "3") or "3"
                 if stage1_to_stage2_ratio is None
                 else stage1_to_stage2_ratio
             ),

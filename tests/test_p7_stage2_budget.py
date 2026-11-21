@@ -12,9 +12,9 @@ class TestP7Stage2Budget(unittest.TestCase):
     def test_default_seed_sharpe_threshold_raised_to_1_05(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             funnel = TwoStageAlphaFunnel(str(Path(td) / "vault.db"))
-            self.assertAlmostEqual(funnel.seed_sharpe_threshold, 1.05, places=4)
-            self.assertEqual(funnel.max_stage2_variants_per_seed, 5)
-            self.assertEqual(funnel.stage1_to_stage2_ratio, 2)
+            self.assertAlmostEqual(funnel.seed_sharpe_threshold, 1.15, places=4)
+            self.assertEqual(funnel.max_stage2_variants_per_seed, 4)
+            self.assertEqual(funnel.stage1_to_stage2_ratio, 3)
 
     def test_stage2_caps_variants_per_seed_and_prioritizes_higher_sharpe(self) -> None:
         with tempfile.TemporaryDirectory() as td:

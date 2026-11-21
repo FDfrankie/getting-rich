@@ -94,10 +94,19 @@ def sync_vault_snapshot_to_drive(
     # Build lightweight atomic JSON snapshot of candidate pool & pending alphas
     counts: dict[str, int] = {}
     pending_alphas: list[dict[str, Any]] = []
+    historical_tried_total = 0
+    historical_ref_counts: dict[str, int] = {}
     try:
         conn = sqlite3.connect(str(src), timeout=5.0)
         try:
             tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if "funnel_tried" in tables:
+                historical_tried_total = int(conn.execute("SELECT COUNT(*) FROM funnel_tried").fetchone()[0] or 0)
+            elif "brain_tried_expressions" in tables:
+                historical_tried_total = int(conn.execute("SELECT COUNT(*) FROM brain_tried_expressions").fetchone()[0] or 0)
+            if "funnel_reference_db" in tables:
+                for oc, cnt in conn.execute("SELECT outcome, COUNT(*) FROM funnel_reference_db GROUP BY outcome").fetchall():
+                    historical_ref_counts[str(oc)] = int(cnt)
             if "brain_candidate_pool" in tables:
                 for st, cnt in conn.execute(
                     "SELECT status, COUNT(*) FROM brain_candidate_pool GROUP BY status"
@@ -131,6 +140,8 @@ def sync_vault_snapshot_to_drive(
         "source_db": str(src),
         "pending_count": len(pending_alphas),
         "candidate_pool_counts": counts,
+        "historical_tried_total": historical_tried_total,
+        "historical_reference_counts": historical_ref_counts,
         "pending_alphas": pending_alphas,
         "miner_stats": dict(miner_stats or {}),
     }
@@ -154,7 +165,7 @@ def run_headless_miner(
     num_workers: int = 2,
     batch_size: int = 5,
     datasets: Sequence[str] | None = None,
-    seed_sharpe_threshold: float = 0.90,
+    seed_sharpe_threshold: float = 1.15,
     brain_client: BrainClient | None = None,
     vault_db_path: str | Path | None = None,
 ) -> dict[str, int]:
@@ -455,7 +466,7 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=int(os.getenv("BRAIN_MULTI_SIM_WORKERS", _default_workers)))
     parser.add_argument("--batch-size", type=int, default=int(os.getenv("BRAIN_MULTI_SIM_BATCH_SIZE", _default_batch)))
     parser.add_argument("--datasets", type=str, default="")
-    parser.add_argument("--seed-sharpe", type=float, default=float(os.getenv("BRAIN_SEED_SHARPE_THRESHOLD", "1.05") or "1.05"))
+    parser.add_argument("--seed-sharpe", type=float, default=float(os.getenv("BRAIN_SEED_SHARPE_THRESHOLD", "1.15") or "1.15"))
     args = parser.parse_args()
     ds_list = [d.strip() for d in args.datasets.split(",") if d.strip()] or None
     run_headless_miner(
