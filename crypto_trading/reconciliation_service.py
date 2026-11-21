@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
+from crypto_trading.order_execution_service import is_exchange_risk_event_order
 from crypto_trading.order_manager import OrderManager, OrderState
 
 
@@ -34,6 +35,7 @@ class ReconciliationService:
             "discrepancy_count": int(self.reconciliation_report.get("discrepancy_count", 0)),
             "completed_at": self.last_reconciled_time,
             "unknown_order_count": int(self.reconciliation_report.get("unknown_order_count", 0)),
+            "exchange_risk_event_count": int(self.reconciliation_report.get("exchange_risk_event_count", 0)),
         }
 
     def is_ready_for_trading(self) -> bool:
@@ -110,6 +112,23 @@ class ReconciliationService:
                 else:
                     discrepancies.append(f"In-flight order {lo.get('client_order_id')} not confirmed by exchange")
 
+        # 2b. 偵測交易所強制平倉 / ADL / 結算風險事件單 (Binance autoclose-/adl_autoclose)
+        exchange_risk_events: list[dict[str, Any]] = []
+        for ro in (remote_orders or []):
+            cid = str(ro.get("clientOrderId") or ro.get("client_order_id") or "")
+            if is_exchange_risk_event_order(cid):
+                sym_ev = _normalize_recon_symbol(str(ro.get("symbol") or ""))
+                st_ev = str(ro.get("status") or "UNKNOWN")
+                exchange_risk_events.append(
+                    {
+                        "client_order_id": cid,
+                        "exchange_order_id": str(ro.get("id") or ro.get("orderId") or ""),
+                        "symbol": sym_ev,
+                        "status": st_ev,
+                    }
+                )
+                discrepancies.append(f"Exchange risk event order detected: {cid} ({sym_ev} {st_ev})")
+
         # 3. 餘額比對
         bal_diff = round(abs(local_balance - remote_balance), 2)
         if bal_diff > 1.0:
@@ -125,6 +144,8 @@ class ReconciliationService:
             "discrepancies": discrepancies,
             "position_diffs": pos_diffs,
             "order_resolutions": order_diffs,
+            "exchange_risk_events": exchange_risk_events,
+            "exchange_risk_event_count": len(exchange_risk_events),
             "balance_discrepancy": bal_diff,
             "allowed_actions": "ALL" if self.is_reconciled else "REDUCE_ONLY",
         }

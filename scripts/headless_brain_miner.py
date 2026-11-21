@@ -60,7 +60,7 @@ DEFAULT_DATASETS: tuple[str, ...] = (
 
 def _is_rate_or_auth_cooldown(text: str) -> bool:
     low = (text or "").lower()
-    return "429" in low or "rate" in low or "captcha" in low or "authentication" in low
+    return "429" in low or "rate" in low or "rate_limited" in low or "too many requests" in low or "captcha" in low or "authentication" in low
 
 
 
@@ -343,14 +343,28 @@ def run_headless_miner(
                 is_check_status="PASS",
             )
             if auto_submit:
-                client.stage_candidate_for_daily_selection(
-                    str(alpha_id),
-                    str(r.get("expression") or ""),
-                    float(sharpe),
-                    float(fitness),
-                    float(turnover),
-                    float(margin or 0.0),
-                )
+                _skip_local_corr = False
+                if not getattr(client, "offline_mode", True) and hasattr(client, "check_local_active_self_correlation"):
+                    try:
+                        _reg = str((r.get("settings") or {}).get("region") or "USA").upper()
+                        _lsc = client.check_local_active_self_correlation(str(alpha_id), region=_reg, threshold=0.70)
+                        if isinstance(_lsc, dict) and _lsc.get("blocked"):
+                            _skip_local_corr = True
+                            print(
+                                f"[LOCAL_SELF_CORR_SKIP] Alpha {alpha_id} skipped staging: "
+                                f"local_corr={_lsc.get('max_corr')} vs {_lsc.get('matched_alpha_id')}"
+                            )
+                    except Exception:
+                        pass
+                if not _skip_local_corr:
+                    client.stage_candidate_for_daily_selection(
+                        str(alpha_id),
+                        str(r.get("expression") or ""),
+                        float(sharpe),
+                        float(fitness),
+                        float(turnover),
+                        float(margin or 0.0),
+                    )
             print(f"[PENDING_STAGED] Alpha {alpha_id} ({r.get('stage')}) Sharpe={sharpe:.2f} Fitness={fitness:.2f}")
 
         err_suffix = f" | sample_err={sample_error}" if (batch_failed > 0 and sample_error) else ""
@@ -359,9 +373,24 @@ def run_headless_miner(
             f"completed={stats['completed']} failed={stats['failed']} "
             f"accepted={stats['accepted']} submitted={stats['submitted']}{err_suffix}"
         )
+        all_rate_limited = (
+            batch_completed == 0
+            and batch_failed > 0
+            and all(
+                str(r.get("status") or "").upper() == "RATE_LIMITED"
+                or "429" in str(r.get("error") or "").lower()
+                or "too many requests" in str(r.get("error") or "").lower()
+                for r in results
+                if not r.get("success")
+            )
+        )
         if batch_completed == 0 and batch_failed > 0:
-            _consec_zero["count"] += 1
-            _consec_zero["last_err"] = sample_error
+            if all_rate_limited:
+                # 429 rate-limit is handled via cooldown_until; do NOT clear cookies or trip auth circuit breaker
+                hit_cooldown = True
+            else:
+                _consec_zero["count"] += 1
+                _consec_zero["last_err"] = sample_error
         elif batch_completed > 0:
             _consec_zero["count"] = 0
         return hit_cooldown
@@ -388,6 +417,11 @@ def run_headless_miner(
                 stats["submitted"] += 1
                 funnel.mark_submitted(alpha_id=aid)
                 _remove_from_app_list(aid)
+                if hasattr(client, "cache_submitted_alpha_pnl"):
+                    try:
+                        client.cache_submitted_alpha_pnl(aid, region=str(sr.get("region") or "USA"))
+                    except Exception:
+                        pass
                 print(f"[FLUSH_SUBMITTED] Alpha {aid} submitted & removed from pending list")
             else:
                 st = str(sr.get("status") or "SUBMIT_ERROR")

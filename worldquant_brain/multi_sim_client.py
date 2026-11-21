@@ -21,9 +21,15 @@ _AUTH_FAIL_COOLDOWN_SEC = 30.0
 _AUTH_REFRESH_REUSE_SEC = 5.0
 
 
-def _is_auth_rate_or_captcha_error(text: str) -> bool:
+def _is_rate_limit_error(text: str) -> bool:
     low = (text or "").lower()
-    return "captcha" in low or "429" in low or "authentication" in low
+    return "429" in low or "too many requests" in low or "rate limit" in low
+
+
+def _is_auth_rate_or_captcha_error(text: str) -> bool:
+    """True ONLY for genuine auth/CAPTCHA blocks (never plain /simulations 429 rate limits)."""
+    low = (text or "").lower()
+    return "captcha" in low or "authentication" in low or "unauthorized" in low
 
 
 def _ensure_authenticated(client: Any, *, force_refresh: bool = False) -> bool:
@@ -200,7 +206,22 @@ def _request_with_retry(
     timeout = float(getattr(client, "timeout", 30.0) or 30.0)
     resp = None
     for attempt in range(max_retries + 1):
-        resp = client.session.request(method, url, json=json_body, params=params, timeout=timeout)
+        try:
+            resp = client.session.request(method, url, json=json_body, params=params, timeout=timeout)
+        except Exception as req_exc:
+            if attempt >= max_retries:
+                raise
+            logger.warning(
+                "_request_with_retry transient %s on %s %s (attempt %d/%d): %s",
+                type(req_exc).__name__,
+                method,
+                url,
+                attempt + 1,
+                max_retries + 1,
+                req_exc,
+            )
+            time.sleep(min(15.0, 2.0 * (attempt + 1)))
+            continue
         code = int(getattr(resp, "status_code", 0) or 0)
         if code in (204, 401) and attempt == 0:
             if _ensure_authenticated(client, force_refresh=True):
@@ -434,22 +455,26 @@ def _simulate_single_fallback(
             out.setdefault("settings", sett)
             out["stage"] = stage
             out["dataset_id"] = dataset_id
+            out["probe"] = str(it.get("probe") or "")
             results.append(out)
             err_text = str(out.get("error") or "")
             for m_neut in _UNAVAILABLE_NEUT_RE.finditer(err_text):
                 unavailable_neuts.add(m_neut.group(1).upper())
             status_text = str(out.get("status") or "").upper()
-            if status_text == "AUTH_FAILED" or _is_auth_rate_or_captcha_error(err_text):
+            is_auth_blk = status_text == "AUTH_FAILED" or _is_auth_rate_or_captcha_error(err_text)
+            is_rl_blk = (not is_auth_blk) and (status_text == "RATE_LIMITED" or _is_rate_limit_error(err_text))
+            if is_auth_blk or is_rl_blk:
+                abort_status = "AUTH_FAILED" if is_auth_blk else "RATE_LIMITED"
                 for rem in items[idx + 1 :]:
                     results.append(
                         {
                             "success": False,
-                            "status": "AUTH_FAILED",
+                            "status": abort_status,
                             "expression": str(rem.get("expression") or ""),
                             "settings": dict(rem.get("settings") or DEFAULT_SIM_SETTINGS),
                             "stage": rem.get("stage", "STAGE1"),
                             "dataset_id": rem.get("dataset_id", ""),
-                            "error": err_text or "Authentication blocked during single-sim fallback",
+                            "error": err_text or ("Authentication blocked" if is_auth_blk else "429 rate-limited during single-sim fallback"),
                         }
                     )
                 break
@@ -458,10 +483,12 @@ def _simulate_single_fallback(
             for m_neut in _UNAVAILABLE_NEUT_RE.finditer(err_text):
                 unavailable_neuts.add(m_neut.group(1).upper())
             is_auth = _is_auth_rate_or_captcha_error(err_text)
+            is_rl = (not is_auth) and _is_rate_limit_error(err_text)
+            fail_status = "AUTH_FAILED" if is_auth else ("RATE_LIMITED" if is_rl else "FAILED")
             results.append(
                 {
                     "success": False,
-                    "status": "AUTH_FAILED" if is_auth else "FAILED",
+                    "status": fail_status,
                     "expression": expr,
                     "settings": sett,
                     "stage": stage,
@@ -469,12 +496,12 @@ def _simulate_single_fallback(
                     "error": err_text,
                 }
             )
-            if is_auth:
+            if is_auth or is_rl:
                 for rem in items[idx + 1 :]:
                     results.append(
                         {
                             "success": False,
-                            "status": "AUTH_FAILED",
+                            "status": fail_status,
                             "expression": str(rem.get("expression") or ""),
                             "settings": dict(rem.get("settings") or DEFAULT_SIM_SETTINGS),
                             "stage": rem.get("stage", "STAGE1"),
@@ -494,7 +521,7 @@ def simulate_multi_alpha(
     *,
     max_wait_seconds: float = 1800.0,
     poll_interval: float = 5.0,
-    fallback_item_delay: float = 1.0,
+    fallback_item_delay: float = 2.5,
 ) -> list[dict[str, Any]]:
     """Run 2-10 alpha expressions in a single WorldQuant BRAIN Multi-Simulation batch.
 
@@ -542,6 +569,7 @@ def simulate_multi_alpha(
         out.setdefault("settings", dict(it.get("settings") or DEFAULT_SIM_SETTINGS))
         out["stage"] = it.get("stage", "STAGE1")
         out["dataset_id"] = it.get("dataset_id", "")
+        out["probe"] = str(it.get("probe") or "")
         return [out]
 
     if not _ensure_authenticated(client, force_refresh=False):
@@ -566,8 +594,8 @@ def simulate_multi_alpha(
     location = resp.headers.get("Location") or resp.headers.get("location") if resp is not None else None
     resp_text = str(getattr(resp, "text", "") or "") if resp is not None else ""
 
-    if code in (401, 429) or _is_auth_rate_or_captcha_error(resp_text):
-        err_msg = f"Multi-sim auth/rate-limit blocked (HTTP {code})"
+    if code == 401 or _is_auth_rate_or_captcha_error(resp_text):
+        err_msg = f"Multi-sim auth/CAPTCHA blocked (HTTP {code})"
         return [
             {
                 "success": False,
@@ -576,6 +604,22 @@ def simulate_multi_alpha(
                 "settings": payloads[idx]["settings"],
                 "stage": items[idx].get("stage", "STAGE1"),
                 "dataset_id": items[idx].get("dataset_id", ""),
+                "probe": str(items[idx].get("probe") or ""),
+                "error": err_msg,
+            }
+            for idx in range(len(items))
+        ]
+    if code == 429 or _is_rate_limit_error(resp_text):
+        err_msg = f"Multi-sim rate-limited (HTTP {code}: 429 Too Many Requests)"
+        return [
+            {
+                "success": False,
+                "status": "RATE_LIMITED",
+                "expression": payloads[idx]["regular"],
+                "settings": payloads[idx]["settings"],
+                "stage": items[idx].get("stage", "STAGE1"),
+                "dataset_id": items[idx].get("dataset_id", ""),
+                "probe": str(items[idx].get("probe") or ""),
                 "error": err_msg,
             }
             for idx in range(len(items))
@@ -611,6 +655,7 @@ def simulate_multi_alpha(
                 "settings": payloads[idx]["settings"],
                 "stage": items[idx].get("stage", "STAGE1"),
                 "dataset_id": items[idx].get("dataset_id", ""),
+                "probe": str(items[idx].get("probe") or ""),
                 "error": err_msg,
             }
             for idx in range(len(items))
@@ -646,6 +691,7 @@ def simulate_multi_alpha(
                 "settings": payloads[idx]["settings"],
                 "stage": items[idx].get("stage", "STAGE1"),
                 "dataset_id": items[idx].get("dataset_id", ""),
+                "probe": str(items[idx].get("probe") or ""),
                 "error": err_msg,
             }
             for idx in range(len(items))

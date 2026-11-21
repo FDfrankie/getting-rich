@@ -378,6 +378,11 @@ class BinanceTestnetClient:
         order_type: str,  # 'limit' or 'market'
         amount: float,
         price: float | None = None,
+        *,
+        reduce_only: bool = False,
+        hedge_mode: bool = False,
+        closing_position_side: str | None = None,
+        post_only: bool = False,
     ) -> dict[str, Any]:
         """掛單或送出市價單 (支援 USDC 0 費率撮合與 Liquidity Guard)"""
         side = side.upper()
@@ -442,24 +447,34 @@ class BinanceTestnetClient:
             }
 
         try:
-            params = {
-                "symbol": raw_symbol,
-                "side": side,
-                "type": order_type,
-                "quantity": amount,
-            }
-            if order_type == "LIMIT" and price:
-                params["price"] = price
-                params["timeInForce"] = "GTC"
+            from crypto_trading.order_execution_service import build_binance_futures_order_params
 
-            order = self.exchange.fapiPrivatePostOrder(params)
+            endpoint, params = build_binance_futures_order_params(
+                symbol=raw_symbol,
+                side=side,
+                order_type=order_type,
+                quantity=amount,
+                price=price,
+                reduce_only=reduce_only,
+                hedge_mode=hedge_mode,
+                closing_position_side=closing_position_side,
+                post_only=post_only,
+            )
+            if endpoint == "/fapi/v1/algoOrder":
+                if hasattr(self.exchange, "fapiPrivatePostAlgoOrder"):
+                    order = self.exchange.fapiPrivatePostAlgoOrder(params)
+                else:
+                    order = self.exchange.request("algoOrder", "fapiPrivate", "POST", params)
+            else:
+                order = self.exchange.fapiPrivatePostOrder(params)
             return {
                 "success": True,
                 "mode": "OFFICIAL_BINANCE_TESTNET",
-                "exchange_order_id": str(order.get("orderId") or order.get("id") or ""),
+                "endpoint": endpoint,
+                "exchange_order_id": str(order.get("orderId") or order.get("algoId") or order.get("id") or ""),
                 "order": order,
                 "zero_fee": self.settlement == "USDC",
-                "message": f"[幣安官方合約測試網] 訂單成功送出 (ID: {order.get('orderId')}, 狀態: {order.get('status')})",
+                "message": f"[幣安官方合約測試網] 訂單成功送出 (ID: {order.get('orderId') or order.get('algoId')}, 狀態: {order.get('status')})",
             }
         except Exception as e:
             # 真實遠端下單若拋出異常，應如實回傳 success: False，杜絕異常假成功
@@ -478,6 +493,11 @@ class BinanceTestnetClient:
         amount: float,
         order_type: str = "MARKET",
         price: float | None = None,
+        *,
+        reduce_only: bool = False,
+        hedge_mode: bool = False,
+        closing_position_side: str | None = None,
+        post_only: bool = False,
     ) -> dict[str, Any]:
         """Alias for create_order with (symbol, side, amount, ...) signature."""
         return self.create_order(
@@ -486,6 +506,10 @@ class BinanceTestnetClient:
             order_type=order_type,
             amount=amount,
             price=price,
+            reduce_only=reduce_only,
+            hedge_mode=hedge_mode,
+            closing_position_side=closing_position_side,
+            post_only=post_only,
         )
 
     def close_all_positions(self) -> dict[str, Any]:
@@ -496,20 +520,25 @@ class BinanceTestnetClient:
             self._mock_positions.clear()
         else:
             try:
+                from crypto_trading.order_execution_service import build_binance_futures_order_params
+
                 positions = self.fetch_positions()
                 for pos in positions:
                     raw_sym = pos["symbol"]
-                    side = "SELL" if pos["side"] == "LONG" else "BUY"
+                    pos_side = str(pos.get("side") or "LONG").upper()
+                    side = "SELL" if pos_side == "LONG" else "BUY"
                     amt = pos["contracts"]
-                    self.exchange.fapiPrivatePostOrder(
-                        {
-                            "symbol": raw_sym,
-                            "side": side,
-                            "type": "MARKET",
-                            "quantity": amt,
-                            "reduceOnly": True,
-                        }
+                    is_hedge = bool(pos.get("hedge_mode") or str(pos.get("positionSide") or "").upper() in ("LONG", "SHORT"))
+                    _ep, close_params = build_binance_futures_order_params(
+                        symbol=raw_sym,
+                        side=side,
+                        order_type="MARKET",
+                        quantity=amt,
+                        reduce_only=not is_hedge,
+                        hedge_mode=is_hedge,
+                        closing_position_side=pos_side if is_hedge else None,
                     )
+                    self.exchange.fapiPrivatePostOrder(close_params)
                     count += 1
             except Exception as e:
                 print(f"[!] 幣安合約測試網一鍵平倉異常: {e}")

@@ -241,7 +241,7 @@ def classify_verdict(
     sh = float(sharpe)
     fit = float(fitness)
     raw_to = float(turnover)
-    to = raw_to / 100.0 if 1.0 < raw_to <= 100.0 else raw_to
+    to = raw_to / 100.0 if 2.0 < raw_to <= 100.0 else raw_to
     norm_margin = (
         float(margin) / 10000.0
         if (margin is not None and float(margin) > 0.5)

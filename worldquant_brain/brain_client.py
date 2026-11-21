@@ -289,8 +289,19 @@ class BrainClient:
                 time.sleep(2**attempt)
                 continue
 
+            if response.status_code in (204, 401) and attempt < max_retries:
+                logger.warning("POST /simulations returned HTTP %d (session expired); clearing cookies and re-authenticating...", response.status_code)
+                try:
+                    self.session.cookies.clear()
+                except Exception:
+                    pass
+                self.authenticated = False
+                if self.authenticate():
+                    continue
+                response.raise_for_status()
             if response.status_code == 429:
-                retry_after = float(response.headers.get("Retry-After", 2**attempt))
+                hdr_ra = _parse_retry_after(response.headers.get("Retry-After"), default=float(2 ** (attempt + 1)), cap=30.0)
+                retry_after = min(30.0, max(hdr_ra, float(2 ** (attempt + 1))))
                 logger.warning("POST /simulations hit 429 rate limit. Retry-After: %.1fs", retry_after)
                 if attempt >= max_retries:
                     response.raise_for_status()
@@ -343,6 +354,8 @@ class BrainClient:
         interval = self.poll_interval if poll_interval is None else float(poll_interval)
         deadline = time.monotonic() + float(max_wait_seconds)
         last: dict[str, Any] = {}
+        poll_net_errors = 0
+        poll_reauth_used = False
 
         # Poll simulation
         while True:
@@ -351,12 +364,36 @@ class BrainClient:
                 raise TimeoutError(f"BRAIN simulation polling 超過 {max_wait_seconds} 秒；Location={location}")
 
             t0 = time.monotonic()
-            poll = self.session.get(location, timeout=self.timeout)
+            try:
+                poll = self.session.get(location, timeout=self.timeout)
+                poll_net_errors = 0
+            except Exception as poll_exc:
+                poll_net_errors += 1
+                logger.warning(
+                    "WorldQuant simulation poll connection error (%d/4): %s",
+                    poll_net_errors,
+                    mask_sensitive_data(str(poll_exc)),
+                )
+                if poll_net_errors >= 4:
+                    raise
+                time.sleep(min(15.0, interval * poll_net_errors))
+                continue
             elapsed = time.monotonic() - t0
 
+            if poll.status_code in (204, 401) and not poll_reauth_used:
+                poll_reauth_used = True
+                logger.warning("Polling hit HTTP %d (session expired); clearing cookies and re-authenticating...", poll.status_code)
+                try:
+                    self.session.cookies.clear()
+                except Exception:
+                    pass
+                self.authenticated = False
+                if self.authenticate():
+                    time.sleep(1.0)
+                    continue
             if poll.status_code == 429:
                 retry_header = poll.headers.get("Retry-After")
-                sleep_sec = float(retry_header) if retry_header else interval
+                sleep_sec = _parse_retry_after(retry_header, default=interval, cap=30.0)
                 logger.warning("Polling hit 429. Retry-After: %.1fs", sleep_sec)
                 time.sleep(max(interval, sleep_sec))
                 continue
@@ -373,16 +410,24 @@ class BrainClient:
                 sim_id = last.get("id") or location.rstrip("/").split("/")[-1]
                 alpha_id = last.get("alpha") or last.get("alpha_id") or sim_id
                 
-                # If metrics are not in the simulation object, fetch the alpha object
+                # If metrics are not in the simulation object, fetch the alpha object (with transient retry)
                 alpha_data = {}
                 if last.get("alpha"):
-                    try:
-                        alpha_url = f"{self.BASE_URL}/alphas/{last['alpha']}"
-                        alpha_resp = self.session.get(alpha_url, timeout=self.timeout)
-                        if alpha_resp.status_code == 200:
-                            alpha_data = alpha_resp.json()
-                    except Exception as e:
-                        logger.warning("Failed to fetch alpha record %s: %s", last["alpha"], e)
+                    alpha_url = f"{self.BASE_URL}/alphas/{last['alpha']}"
+                    for _a_try in range(3):
+                        try:
+                            alpha_resp = self.session.get(alpha_url, timeout=self.timeout)
+                            if alpha_resp.status_code == 200 and getattr(alpha_resp, "content", None):
+                                alpha_data = alpha_resp.json() or {}
+                                break
+                            if alpha_resp.status_code in (429, 502, 503, 504) and _a_try < 2:
+                                time.sleep(2.0 * (_a_try + 1))
+                                continue
+                            break
+                        except Exception as e:
+                            logger.warning("Failed to fetch alpha record %s (try %d/3): %s", last["alpha"], _a_try + 1, e)
+                            if _a_try < 2:
+                                time.sleep(2.0 * (_a_try + 1))
 
                 metrics_source = dict(last)
                 if alpha_data:
@@ -394,6 +439,21 @@ class BrainClient:
                 fitness = self._number(metrics_source, "fitness")
                 turnover = self._number(metrics_source, "turnover")
                 margin = self._number(metrics_source, "margin")
+                returns_val = self._number(metrics_source, "returns")
+                drawdown_val = self._number(metrics_source, "drawdown")
+
+                # P21 vertical fix: extract official IS-checks so single-sim fallback populates checks_passed/failed_checks
+                checks_raw = metrics_source.get("checks")
+                failed_checks: list[str] = []
+                if isinstance(checks_raw, list):
+                    for chk in checks_raw:
+                        if isinstance(chk, Mapping):
+                            res_st = str(chk.get("result") or "").upper()
+                            if res_st in ("FAIL", "FAILED", "ERROR"):
+                                failed_checks.append(str(chk.get("name") or chk.get("message") or "CHECK_FAILED"))
+                    checks_passed = len(failed_checks) == 0
+                else:
+                    checks_passed = False
 
                 has_valid_metrics = (sharpe is not None) and (fitness is not None)
                 result = {
@@ -406,11 +466,15 @@ class BrainClient:
                     "fitness": fitness,
                     "turnover": turnover,
                     "margin": margin,
+                    "returns": returns_val,
+                    "drawdown": drawdown_val,
+                    "checks_passed": checks_passed,
+                    "failed_checks": failed_checks,
                     "message": "Alpha 模擬成功完成"
                     if has_valid_metrics
                     else "模擬完成但未取得有效 Sharpe/Fitness 指標",
                     "error": None if has_valid_metrics else "Missing Sharpe or Fitness in simulation result",
-                    "raw": last,
+                    "raw": alpha_data or last,
                     "location": location,
                     "deduplicated": False,
                 }
@@ -469,6 +533,56 @@ class BrainClient:
             return str(AlphaVault.DEFAULT_DB_PATH)
         except Exception:
             return os.path.join(os.path.dirname(__file__), "alpha_vault.db")
+
+    def get_active_pnl_cache(self):
+        """Return ActivePnlCache backed by the local alpha_vault SQLite DB."""
+        from worldquant_brain.active_pnl_cache import ActivePnlCache
+
+        return ActivePnlCache(self._quota_db())
+
+    def check_local_active_self_correlation(
+        self,
+        alpha_id: str,
+        *,
+        region: str = "USA",
+        threshold: float = 0.70,
+        candidate_pnl: list[float] | None = None,
+    ) -> dict[str, Any]:
+        """Pre-check candidate alpha daily PnL against cached ACTIVE alphas to save submission quota."""
+        try:
+            cache = self.get_active_pnl_cache()
+            pnl = list(candidate_pnl) if candidate_pnl is not None else self.fetch_alpha_pnl(alpha_id)
+            if len(pnl) < 30:
+                return {"checked": False, "blocked": False, "max_corr": 0.0, "matched_alpha_id": None}
+            max_corr, worst_id = cache.max_local_self_correlation(pnl, region=region)
+            blocked = bool(worst_id is not None and max_corr >= float(threshold))
+            return {
+                "checked": True,
+                "blocked": blocked,
+                "max_corr": max_corr,
+                "matched_alpha_id": worst_id,
+            }
+        except Exception as exc:
+            logger.debug("check_local_active_self_correlation failed: %s", exc)
+            return {"checked": False, "blocked": False, "max_corr": 0.0, "matched_alpha_id": None}
+
+    def cache_submitted_alpha_pnl(
+        self,
+        alpha_id: str,
+        *,
+        region: str = "USA",
+        cum_pnl: list[float] | None = None,
+    ) -> bool:
+        """Persist a newly submitted ACTIVE alpha's cumulative PnL into ActivePnlCache."""
+        try:
+            pnl = list(cum_pnl) if cum_pnl is not None else self.fetch_alpha_pnl(alpha_id)
+            if len(pnl) < 30:
+                return False
+            self.get_active_pnl_cache().upsert_cumulative_pnl(str(alpha_id), str(region).upper(), pnl)
+            return True
+        except Exception as exc:
+            logger.debug("cache_submitted_alpha_pnl failed: %s", exc)
+            return False
 
     def _today_brain_quota_day(self) -> str:
         from datetime import datetime, timedelta, timezone
@@ -887,6 +1001,14 @@ class BrainClient:
             norm_margin = margin / 10000.0 if margin > 0.5 else margin
             if norm_margin < 0.0010:
                 reasons.append(f"Margin {norm_margin:.5f} < 0.0010 (10 bps)")
+
+        if len(reasons) == 0 and not has_side_effect and not self.offline_mode:
+            region_val = str(settings_blk.get("region") or "USA").upper()
+            local_sc = self.check_local_active_self_correlation(alpha_id, region=region_val, threshold=0.70)
+            if local_sc.get("blocked"):
+                reasons.append(
+                    f"LOCAL_ACTIVE_SELF_CORRELATION={local_sc['max_corr']:.4f} >= 0.70 (vs {local_sc['matched_alpha_id']})"
+                )
 
         return {
             "passed": len(reasons) == 0,

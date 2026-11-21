@@ -44,7 +44,58 @@ class TaiwanStockMLRanker:
                 rename[current] = canonical
         return out.rename(columns=rename)
 
-    def extract_features(self, df: pd.DataFrame, forward_period: int = 5) -> pd.DataFrame:
+    @staticmethod
+    def attach_twse_t86_features(
+        df: pd.DataFrame,
+        t86_by_date: Mapping[Any, Any] | None = None,
+    ) -> pd.DataFrame:
+        """Attach directional smart_institutional_lots (excluding dealer hedging) via taiwan_stock.twse_t86."""
+        out = df.copy()
+        if not t86_by_date:
+            if "smart_institutional_lots" in out.columns:
+                out["smart_inst_5d_sum"] = (
+                    pd.to_numeric(out["smart_institutional_lots"], errors="coerce")
+                    .rolling(5, min_periods=1)
+                    .sum()
+                )
+            return out
+        from taiwan_stock.twse_t86 import parse_twse_t86_row
+
+        if not isinstance(out.index, pd.DatetimeIndex):
+            out.index = pd.to_datetime(out.index, errors="raise")
+        records: dict[pd.Timestamp, dict[str, float]] = {}
+        for dt_key, item in t86_by_date.items():
+            ts = pd.Timestamp(dt_key).normalize()
+            parsed: dict[str, Any] | None = None
+            if isinstance(item, tuple) and len(item) == 2:
+                parsed = parse_twse_t86_row(list(item[0]), list(item[1]))
+            elif isinstance(item, Mapping):
+                parsed = dict(item)
+            if parsed and "smart_institutional_lots" in parsed:
+                records[ts] = {
+                    "smart_institutional_lots": float(parsed["smart_institutional_lots"]),
+                    "foreign_net_lots": float(parsed.get("foreign_net_lots", 0.0)),
+                    "trust_net_lots": float(parsed.get("trust_net_lots", 0.0)),
+                    "dealer_prop_lots": float(parsed.get("dealer_prop_lots", 0.0)),
+                }
+        if records:
+            t86_df = pd.DataFrame.from_dict(records, orient="index").sort_index()
+            norm_idx = pd.DatetimeIndex(out.index).normalize()
+            for col in t86_df.columns:
+                out[col] = norm_idx.map(t86_df[col])
+            out["smart_inst_5d_sum"] = (
+                pd.to_numeric(out["smart_institutional_lots"], errors="coerce")
+                .rolling(5, min_periods=1)
+                .sum()
+            )
+        return out
+
+    def extract_features(
+        self,
+        df: pd.DataFrame,
+        forward_period: int = 5,
+        t86_by_date: Mapping[Any, Any] | None = None,
+    ) -> pd.DataFrame:
         """只用 t 與過去資料建構特徵；唯一前瞻欄位為訓練目標。"""
         out = self._normalise_ohlcv_columns(df).copy()
         required = {"High", "Low", "Close", "Volume"}
@@ -86,15 +137,21 @@ class TaiwanStockMLRanker:
         pos_days_20 = (daily_ret > 0).rolling(20, min_periods=20).mean()
         neg_days_20 = (daily_ret < 0).rolling(20, min_periods=20).mean()
         out["fip_20d"] = np.sign(out["mom_20d"]).fillna(0.0) * (pos_days_20 - neg_days_20)
+        out = self.attach_twse_t86_features(out, t86_by_date=t86_by_date)
         out[self.TARGET_COLUMN] = c.shift(-forward_period).div(c).sub(1.0)
         return out.replace([np.inf, -np.inf], np.nan)
 
-    def prepare_dataset(self, stock_data_map: Mapping[str, pd.DataFrame]) -> tuple[pd.DataFrame, list[str]]:
+    def prepare_dataset(
+        self,
+        stock_data_map: Mapping[str, pd.DataFrame],
+        t86_map: Mapping[str, Mapping[Any, Any]] | None = None,
+    ) -> tuple[pd.DataFrame, list[str]]:
         panels: list[pd.DataFrame] = []
+        tmap = t86_map or {}
         for symbol, raw in stock_data_map.items():
             if raw is None or raw.empty:
                 continue
-            panel = self.extract_features(raw)
+            panel = self.extract_features(raw, t86_by_date=tmap.get(str(symbol)))
             panel["symbol"] = str(symbol)
             panels.append(panel)
         if not panels:
@@ -103,7 +160,17 @@ class TaiwanStockMLRanker:
         combined = pd.concat(panels, axis=0, sort=False)
         # 關鍵：跨股票合併後，依日期索引進行全域穩定排序。
         combined = combined.sort_index(kind="mergesort")
-        for col in ("mom_20d", "hist_vol_20", "vol_surge", "fip_20d", "rev_yoy_pct", "total_inst_net_shares", "margin_change_lots"):
+        for col in (
+            "mom_20d",
+            "hist_vol_20",
+            "vol_surge",
+            "fip_20d",
+            "rev_yoy_pct",
+            "total_inst_net_shares",
+            "margin_change_lots",
+            "smart_institutional_lots",
+            "smart_inst_5d_sum",
+        ):
             if col in combined.columns:
                 combined[f"cs_rank_{col}"] = combined.groupby(level=0)[col].rank(pct=True)
         if self.TARGET_COLUMN in combined.columns:

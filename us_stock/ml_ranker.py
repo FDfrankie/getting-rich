@@ -20,7 +20,12 @@ class USStockMLRanker:
         self.model: Any = None
 
     @staticmethod
-    def extract_price_features(df: pd.DataFrame, pit_fundamentals: pd.DataFrame | None = None) -> pd.DataFrame:
+    def extract_price_features(
+        df: pd.DataFrame,
+        pit_fundamentals: pd.DataFrame | None = None,
+        quarterly_eps_records: list[dict[str, object]] | None = None,
+        form4_filings: list[dict[str, object]] | None = None,
+    ) -> pd.DataFrame:
         out = df.copy()
         if not isinstance(out.index, pd.DatetimeIndex):
             out.index = pd.to_datetime(out.index)
@@ -59,6 +64,28 @@ class USStockMLRanker:
                 ).set_index("_dt")
                 out = merged
 
+        if quarterly_eps_records:
+            from us_stock.sec_edgar_client import compute_pead_sue_score
+
+            # Strictly PIT: evaluate SUE only as of each date (filed < as_of_date)
+            sue_vals: list[float] = []
+            for dt in out.index:
+                s = compute_pead_sue_score(quarterly_eps_records, as_of_date=pd.Timestamp(dt).strftime("%Y-%m-%d"))
+                sue_vals.append(np.nan if s is None else float(s))
+            out["pead_sue_score"] = sue_vals
+
+        if form4_filings:
+            from us_stock.sec_edgar_client import compute_form4_cluster_buy_score
+
+            f4_scores: list[float] = []
+            f4_cnts: list[int] = []
+            for dt in out.index:
+                res = compute_form4_cluster_buy_score(form4_filings, as_of_date=pd.Timestamp(dt).strftime("%Y-%m-%d"))
+                f4_scores.append(float(res["cluster_buy_score"]))
+                f4_cnts.append(int(res["distinct_insiders"]))
+            out["form4_cluster_buy_score"] = f4_scores
+            out["form4_distinct_insiders"] = f4_cnts
+
         out["raw_fwd_20d"] = c.shift(-20).div(c).sub(1.0)
         return out.replace([np.inf, -np.inf], np.nan)
 
@@ -67,14 +94,23 @@ class USStockMLRanker:
         price_map: Mapping[str, pd.DataFrame],
         fundamentals_map: Mapping[str, pd.DataFrame] | None = None,
         sector_map: Mapping[str, str] | None = None,
+        eps_records_map: Mapping[str, list[dict[str, object]]] | None = None,
+        form4_filings_map: Mapping[str, list[dict[str, object]]] | None = None,
     ) -> pd.DataFrame:
         panels: list[pd.DataFrame] = []
         fmap = fundamentals_map or {}
         smap = sector_map or {}
+        emap = eps_records_map or {}
+        f4map = form4_filings_map or {}
         for sym, df in price_map.items():
             if df is None or len(df) < 260:
                 continue
-            p = self.extract_price_features(df, fmap.get(sym))
+            p = self.extract_price_features(
+                df,
+                fmap.get(sym),
+                quarterly_eps_records=emap.get(sym),
+                form4_filings=f4map.get(sym),
+            )
             p["symbol"] = sym
             p["sector"] = smap.get(sym, "UNKNOWN")
             panels.append(p)
@@ -82,7 +118,15 @@ class USStockMLRanker:
             raise ValueError("No valid US equity data for panel construction")
 
         combined = pd.concat(panels, axis=0, sort=False).sort_index(kind="mergesort")
-        for col in ("mom_12_1", "vol_scaled_mom", "fip_63d", "gross_profitability", "cash_accrual_quality"):
+        for col in (
+            "mom_12_1",
+            "vol_scaled_mom",
+            "fip_63d",
+            "gross_profitability",
+            "cash_accrual_quality",
+            "pead_sue_score",
+            "form4_cluster_buy_score",
+        ):
             if col in combined.columns:
                 combined[f"sec_rank_{col}"] = combined.groupby([combined.index, "sector"])[col].rank(pct=True)
         cs_med = combined.groupby(level=0)["raw_fwd_20d"].transform("median")
