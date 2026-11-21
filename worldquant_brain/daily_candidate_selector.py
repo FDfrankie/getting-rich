@@ -119,6 +119,28 @@ def select_daily_candidates(
         reverse=True,
     )
 
+    def _is_too_similar_to_selected(cand: Mapping[str, Any], chosen: list[SelectedCandidate]) -> bool:
+        expr_a = str(cand.get("expression") or "").strip()
+        ds_a = str(cand.get("dataset_id") or "").strip()
+        toks_a = {t for t in expr_a.replace("(", " ").replace(")", " ").replace(",", " ").split() if t}
+        pnl_a = cand.get("daily_pnl_diff")
+        for prev in chosen:
+            p_cand = prev.candidate
+            pnl_b = p_cand.get("daily_pnl_diff")
+            if pnl_a is not None and pnl_b is not None and len(pnl_a) >= 20 and len(pnl_a) == len(pnl_b):
+                import numpy as _np
+                c = float(_np.corrcoef(pnl_a, pnl_b)[0, 1])
+                if _np.isfinite(c) and abs(c) >= 0.65:
+                    return True
+            expr_b = str(p_cand.get("expression") or "").strip()
+            toks_b = {t for t in expr_b.replace("(", " ").replace(")", " ").replace(",", " ").split() if t}
+            if toks_a and toks_b:
+                jac = len(toks_a & toks_b) / max(1, len(toks_a | toks_b))
+                ds_b = str(p_cand.get("dataset_id") or "").strip()
+                if (ds_a and ds_a == ds_b and jac >= 0.65) or jac >= 0.80:
+                    return True
+        return False
+
     chosen_ids: set[str] = set()
     selected: list[SelectedCandidate] = []
 
@@ -135,7 +157,7 @@ def select_daily_candidates(
                 or candidate.get("id")
                 or ""
             )
-            if alpha_id in chosen_ids:
+            if alpha_id in chosen_ids or _is_too_similar_to_selected(candidate, selected):
                 continue
             if use_exploration:
                 has_official_sim = bool(

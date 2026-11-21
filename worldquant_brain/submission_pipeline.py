@@ -156,6 +156,15 @@ class BrainAutoSubmitGate:
             if submission_key in self._submitted_keys:
                 return False, "ALREADY_SUBMITTED_IDEMPOTENT"
 
+            try:
+                from zoneinfo import ZoneInfo
+                _cur_day = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+            except Exception:
+                _cur_day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if getattr(self, "_quota_day", None) != _cur_day:
+                self._quota_day = _cur_day
+                self._submitted_today = 0
+
             if self._submitted_today >= self.daily_quota:
                 return False, f"DAILY_QUOTA_EXCEEDED (Max {self.daily_quota}/day)"
 
@@ -169,6 +178,14 @@ class BrainAutoSubmitGate:
     def record_submission(self, alpha_id: str, submission_key: str, status: str = "SUBMITTED", error: Optional[str] = None):
         with self._lock:
             self._submitted_keys.add(submission_key)
+            try:
+                from zoneinfo import ZoneInfo
+                _cur_day = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+            except Exception:
+                _cur_day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if getattr(self, "_quota_day", None) != _cur_day:
+                self._quota_day = _cur_day
+                self._submitted_today = 0
             self._submitted_today += 1
             self._last_submitted_at = time.time()
             entry = {
@@ -287,6 +304,14 @@ class SubmissionService:
                         "PENDING_NEXT_REFRESH",
                     ),
                 )
+                if ok and str(resp.get("status") or "").upper() != "UNSUBMITTED":
+                    try:
+                        conn.execute(
+                            "UPDATE alphas SET status = 'SUBMITTED', submitted_at = ? WHERE alpha_id = ? OR brain_alpha_id = ?",
+                            (now, alpha_id, str(resp.get("brain_alpha_id") or alpha_id)),
+                        )
+                    except Exception:
+                        pass
             if ok:
                 submitted_ids.append(alpha_id)
             else:

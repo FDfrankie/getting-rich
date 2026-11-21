@@ -158,11 +158,13 @@ def evaluate_parent_child_repair(
     parent_sharpe: float,
     child_sharpe: float,
     performance_improvement_ratio: float,
+    delay: int = 1,
 ) -> tuple[bool, str]:
     """Repair is only successful when official corr/gate improves without severe Sharpe degradation."""
     if parent_child_pnl_corr is None or not official_corr:
         return False, "NOT_VERIFIED"
-    if child_sharpe < parent_sharpe - 0.25 or child_sharpe < 1.25:
+    min_child_sr = 2.00 if int(delay) == 0 else 1.25
+    if child_sharpe < parent_sharpe - 0.25 or child_sharpe < min_child_sr:
         return False, "SHARPE_SEVERELY_DEGRADED"
     if parent_child_pnl_corr >= 0.70 and performance_improvement_ratio < 0.10:
         return False, "INSUFFICIENT_PERFORMANCE_OVERRIDE_BELOW_10PCT"

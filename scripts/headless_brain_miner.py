@@ -269,15 +269,41 @@ def run_headless_miner(
         if ing["promoted"] > 0:
             print(f"[NEAR_MISS_PROMOTE] Promoted {ing['promoted']} near-miss seed(s) for fine-tuning")
 
+        batch_completed = 0
+        batch_failed = 0
+        sample_error = ""
         for r in results:
             if not r.get("success"):
                 stats["failed"] += 1
-                if _is_rate_or_auth_cooldown(str(r.get("error") or "")):
+                batch_failed += 1
+                err_s = str(r.get("error") or r.get("status") or "").strip()
+                if err_s and not sample_error:
+                    sample_error = err_s[:140]
+                if _is_rate_or_auth_cooldown(err_s):
                     hit_cooldown = True
                 continue
             stats["completed"] += 1
+            batch_completed += 1
             if r.get("stage") == "STAGE2":
                 stats["refined"] += 1
+            try:
+                from worldquant_brain.shadow_writeback import record_simulation_shadow
+                record_simulation_shadow(
+                    vault.db_path,
+                    expression=str(r.get("expression") or ""),
+                    settings=r.get("settings") if isinstance(r.get("settings"), dict) else None,
+                    metrics={
+                        "sharpe": r.get("sharpe"),
+                        "fitness": r.get("fitness"),
+                        "turnover": r.get("turnover"),
+                        "margin": r.get("margin"),
+                        "checks_passed": r.get("checks_passed"),
+                    },
+                    alpha_id=str(r.get("alpha_id") or "") or None,
+                    dataset_id=str(r.get("dataset_id") or ""),
+                )
+            except Exception:
+                pass
 
             alpha_id = r.get("alpha_id")
             sharpe = r.get("sharpe")
@@ -327,11 +353,17 @@ def run_headless_miner(
                 )
             print(f"[PENDING_STAGED] Alpha {alpha_id} ({r.get('stage')}) Sharpe={sharpe:.2f} Fitness={fitness:.2f}")
 
+        err_suffix = f" | sample_err={sample_error}" if (batch_failed > 0 and sample_error) else ""
         print(
-            f"[BATCH_RESULT] batch_size={len(results)} | totals: mined={stats['mined']} "
+            f"[BATCH_RESULT] batch_size={len(results)} (ok={batch_completed}, fail={batch_failed}) | totals: mined={stats['mined']} "
             f"completed={stats['completed']} failed={stats['failed']} "
-            f"accepted={stats['accepted']} submitted={stats['submitted']}"
+            f"accepted={stats['accepted']} submitted={stats['submitted']}{err_suffix}"
         )
+        if batch_completed == 0 and batch_failed > 0:
+            _consec_zero["count"] += 1
+            _consec_zero["last_err"] = sample_error
+        elif batch_completed > 0:
+            _consec_zero["count"] = 0
         return hit_cooldown
 
     def _flush_pending_if_due() -> None:
@@ -371,6 +403,7 @@ def run_headless_miner(
                 stats["submit_failed_deleted"] += 1
                 print(f"[FLUSH_FAILED_REMOVED] Alpha {aid} permanently rejected ({reason})")
 
+    _consec_zero: dict[str, Any] = {"count": 0, "last_err": "", "reauth_attempts": 0}
     in_flight: list[Future[list[dict[str, Any]]]] = []
     cooldown_until = 0.0
     auth_blocked = False
@@ -406,6 +439,28 @@ def run_headless_miner(
                 if auth_blocked:
                     print("[AUTH_COOLDOWN] Authentication rate-limited or CAPTCHA required by WorldQuant BRAIN; stopping headless miner to protect account.")
                     break
+
+                if _consec_zero["count"] >= 3:
+                    _consec_zero["reauth_attempts"] += 1
+                    print(
+                        f"[CONSEC_FAIL_RECOVERY] {_consec_zero['count']} consecutive zero-success batches "
+                        f"(attempt #{_consec_zero['reauth_attempts']}, err={_consec_zero['last_err']}); "
+                        f"clearing cookies, re-authenticating, and cooling down 120s"
+                    )
+                    _consec_zero["count"] = 0
+                    try:
+                        _sess = getattr(client, "session", None)
+                        if _sess is not None and hasattr(_sess, "cookies"):
+                            _sess.cookies.clear()
+                        client.authenticated = False
+                        re_ok = bool(client.authenticate())
+                    except Exception:
+                        re_ok = False
+                    if not re_ok or _consec_zero["reauth_attempts"] >= 3:
+                        print("[CIRCUIT_BREAKER] Re-authentication failed or repeated consecutive zero-success batches; stopping safely without burning search space.")
+                        auth_blocked = True
+                        break
+                    cooldown_until = max(cooldown_until, time.monotonic() + 120.0)
 
                 exhausted = False
                 if time.monotonic() >= cooldown_until:

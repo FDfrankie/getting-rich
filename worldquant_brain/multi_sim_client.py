@@ -42,6 +42,12 @@ def _ensure_authenticated(client: Any, *, force_refresh: bool = False) -> bool:
 
         if force_refresh:
             client.authenticated = False
+            _sess = getattr(client, "session", None)
+            if _sess is not None and hasattr(_sess, "cookies"):
+                try:
+                    _sess.cookies.clear()
+                except Exception:
+                    pass
         ok = bool(client.authenticate())
         now_after = time.monotonic()
         if ok:
@@ -196,7 +202,7 @@ def _request_with_retry(
     for attempt in range(max_retries + 1):
         resp = client.session.request(method, url, json=json_body, params=params, timeout=timeout)
         code = int(getattr(resp, "status_code", 0) or 0)
-        if code == 401 and attempt == 0:
+        if code in (204, 401) and attempt == 0:
             if _ensure_authenticated(client, force_refresh=True):
                 continue
             return resp
@@ -235,24 +241,35 @@ def fetch_available_datasets(
         return []
 
     base_url = getattr(client, "BASE_URL", "https://api.worldquantbrain.com")
-    params = {
-        "instrumentType": "EQUITY",
-        "region": region,
-        "universe": universe,
-        "delay": int(delay),
-        "limit": 50,
-        "offset": 0,
-    }
+    results: list[Any] = []
+    offset = 0
+    page_limit = 50
     try:
-        resp = _request_with_retry(client, "GET", f"{base_url}/data-sets", params=params, max_retries=2)
-        if int(getattr(resp, "status_code", 0) or 0) != 200:
-            return []
-        data = resp.json() if getattr(resp, "content", None) else {}
-        results = data.get("results") if isinstance(data, Mapping) else None
-        if not isinstance(results, list):
-            return []
+        while offset < 200:
+            params = {
+                "instrumentType": "EQUITY",
+                "region": region,
+                "universe": universe,
+                "delay": int(delay),
+                "limit": page_limit,
+                "offset": offset,
+            }
+            resp = _request_with_retry(client, "GET", f"{base_url}/data-sets", params=params, max_retries=2)
+            if int(getattr(resp, "status_code", 0) or 0) != 200:
+                break
+            data = resp.json() if getattr(resp, "content", None) else {}
+            page_res = data.get("results") if isinstance(data, Mapping) else None
+            if not isinstance(page_res, list) or not page_res:
+                break
+            results.extend(page_res)
+            if len(page_res) < page_limit:
+                break
+            offset += page_limit
     except Exception as exc:
         logger.warning("fetch_available_datasets error: %s", exc)
+        if not results:
+            return []
+    if not results:
         return []
 
     items: list[dict[str, Any]] = []

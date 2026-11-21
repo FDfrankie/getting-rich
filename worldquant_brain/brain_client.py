@@ -470,9 +470,16 @@ class BrainClient:
         except Exception:
             return os.path.join(os.path.dirname(__file__), "alpha_vault.db")
 
-    def _today_taipei(self) -> str:
+    def _today_brain_quota_day(self) -> str:
         from datetime import datetime, timedelta, timezone
-        return datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        try:
+            from zoneinfo import ZoneInfo
+            return datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        except Exception:
+            return datetime.now(timezone(timedelta(hours=-5))).strftime("%Y-%m-%d")
+
+    def _today_taipei(self) -> str:
+        return self._today_brain_quota_day()
 
     def get_daily_submission_count(self, day_str: str | None = None) -> int:
         import sqlite3
@@ -538,7 +545,15 @@ class BrainClient:
         m_score = max(0.0, min(1.0, (m_bps - 5.0) / 20.0)) if m_bps > 0 else 0.30
         t_val = max(0.005, min(1.0, float(turnover) / 100.0 if float(turnover) > 2.0 else float(turnover)))
         t_bell = math.exp(-((math.log(t_val) - math.log(0.20)) ** 2) / (2.0 * (0.65 ** 2)))
-        e_bonus = 0.85 if ("opt6_" in str(expression) or "scl12_" in str(expression) or "ts_regression" in str(expression)) else 0.35
+        _expr_low = str(expression).lower()
+        _is_high_yield_domain = any(
+            k in _expr_low
+            for k in (
+                "fnd6_", "anl4_", "opt8_", "opt6_", "mdl16_", "nws12_", "snt1_", "scl12_",
+                "est_eps", "ebitda", "cashflow_op", "operating_income",
+            )
+        )
+        e_bonus = 0.85 if _is_high_yield_domain else (0.55 if "ts_regression" in _expr_low else 0.30)
         corr_bonus = max(0.0, min(1.0, (0.70 - abs(float(self_correlation))) / 0.70)) * 5.0 if self_correlation is not None else 0.0
         score = round(100.0 * (0.35 * s_score + 0.25 * f_score + 0.15 * m_score + 0.15 * t_bell + 0.10 * e_bonus) + float(sharpe) * 0.01 + corr_bonus, 4)
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -552,9 +567,13 @@ class BrainClient:
                 )
                 ensure_schema_from_ddl(conn, "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)")
                 self.ensure_novelty_survey_tables(conn)
+                _all_existing = conn.execute(
+                    "SELECT alpha_id, expression FROM brain_candidate_pool WHERE status IN ('PENDING', 'SUBMITTED')"
+                ).fetchall()
+                _existing_exprs = [{"alpha_id": str(r[0]), "expression": str(r[1])} for r in _all_existing if str(r[0]) != str(alpha_id)]
                 from worldquant_brain.alpha_novelty import find_duplicate
-                dup_chk = find_duplicate(expression, [])
-                if dup_chk.blocked and dup_chk.reason == "PUBLIC_EXPRESSION_DENYLIST":
+                dup_chk = find_duplicate(expression, _existing_exprs)
+                if dup_chk.blocked:
                     return
                 from worldquant_brain.alpha_miner import extract_expression_skeleton
                 new_skel = extract_expression_skeleton(expression)
@@ -598,30 +617,27 @@ class BrainClient:
                 (day,),
             ).fetchall()
             from worldquant_brain.alpha_miner import extract_expression_skeleton
-            seen_skels: set[str] = set()
-            rows = []
-            for r in all_pending:
-                sk = extract_expression_skeleton(str(r[1] or ""))
-                if sk in seen_skels:
-                    conn.execute("UPDATE brain_candidate_pool SET status = 'DEDUP_SKIPPED' WHERE alpha_id = ?", (str(r[0]),))
-                else:
-                    seen_skels.add(sk)
-                    rows.append(r)
+            rows = list(all_pending)
             conn.commit()
         finally:
             conn.close()
 
         results: list[dict[str, Any]] = []
         submitted_count = 0
+        submitted_skels: set[str] = set()
         for row in rows:
             if submitted_count >= remaining:
                 break
             aid = str(row["alpha_id"])
+            skel = extract_expression_skeleton(str(row["expression"] or ""))
+            if skel in submitted_skels:
+                continue  # Skip same skeleton only AFTER a sibling succeeded this round
             res = self.submit_alpha(aid, max_daily_submissions=limit, enforce_checks=True, day_str=day)
             results.append(res)
             status_val = str(res.get("status") or "")
             if res.get("success"):
                 submitted_count += 1
+                submitted_skels.add(skel)
                 try:
                     c_ok = sqlite3.connect(db_p, timeout=10.0)
                     c_ok.execute("UPDATE brain_candidate_pool SET status = 'SUBMITTED' WHERE alpha_id = ?", (aid,))

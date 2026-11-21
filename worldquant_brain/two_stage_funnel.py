@@ -232,7 +232,7 @@ def classify_verdict(
     sett = result.get("settings") if isinstance(result.get("settings"), Mapping) else {}
     delay = int(sett["delay"]) if sett.get("delay") is not None else 1
 
-    if sharpe is None or fitness is None:
+    if sharpe is None or fitness is None or turnover is None:
         return "REJECTED", str(result.get("error") or "MISSING_METRICS")
 
     eff_min_sharpe = 2.00 if delay == 0 else float(min_sharpe)
@@ -240,7 +240,8 @@ def classify_verdict(
 
     sh = float(sharpe)
     fit = float(fitness)
-    to = float(turnover) if turnover is not None else 0.25
+    raw_to = float(turnover)
+    to = raw_to / 100.0 if 1.0 < raw_to <= 100.0 else raw_to
     norm_margin = (
         float(margin) / 10000.0
         if (margin is not None and float(margin) > 0.5)
@@ -252,7 +253,7 @@ def classify_verdict(
         reasons.append(f"LOW_SHARPE({sh:.2f}<{eff_min_sharpe:.2f})")
     if fit < min_fitness:
         reasons.append(f"LOW_FITNESS({fit:.2f}<{min_fitness:.2f})")
-    if not (min_turnover < to < max_turnover):
+    if not (min_turnover <= to <= max_turnover):
         reasons.append(f"TURNOVER_OUT_OF_RANGE({to:.3f})")
     if norm_margin is not None and norm_margin < 0.0010:
         reasons.append(f"LOW_MARGIN({norm_margin:.5f})")
@@ -864,8 +865,14 @@ class TwoStageAlphaFunnel:
         promoted = 0
         passed = 0
         rejected = 0
+        unsimulated_released = 0
         now_iso = datetime.now(timezone.utc).isoformat()
         near_misses_to_queue: list[tuple[Mapping[str, Any], str]] = []
+
+        _PERMANENT_SYNTAX_TOKENS = (
+            "SYNTAX", "INVALID FIELD", "UNKNOWN FIELD", "UNEXPECTED TOKEN",
+            "PARSE ERROR", "NOT AVAILABLE FOR", "OPERATOR", "TYPE ERROR",
+        )
 
         with self._connect() as conn:
             for r in results:
@@ -879,6 +886,19 @@ class TwoStageAlphaFunnel:
                 turnover = r.get("turnover")
                 margin = r.get("margin")
                 alpha_id = r.get("alpha_id")
+                sh_hash = _sim_hash(expr, sett) if expr else hashlib.sha256(str(alpha_id or now_iso).encode()).hexdigest()
+
+                # P18: Do NOT burn funnel_tried or penalize RL when simulation never completed (API/auth/429/timeout error)
+                if not r.get("success") and sharpe is None:
+                    err_up = str(r.get("error") or r.get("status") or "").upper()
+                    for m_neut in _UNAVAILABLE_NEUT_RE.finditer(err_up):
+                        self._unavailable_neutralizations.add(m_neut.group(1).upper())
+                    is_syntax_err = any(tok in err_up for tok in _PERMANENT_SYNTAX_TOKENS)
+                    if not is_syntax_err:
+                        conn.execute("DELETE FROM funnel_tried WHERE sim_hash = ?", (sh_hash,))
+                        self._session_seen_hashes.discard(sh_hash)
+                        unsimulated_released += 1
+                        continue
 
                 if ds_id:
                     conn.execute(
@@ -896,7 +916,6 @@ class TwoStageAlphaFunnel:
                 err_blob = f"{r.get('error') or ''} {reason or ''}"
                 for m_neut in _UNAVAILABLE_NEUT_RE.finditer(err_blob):
                     self._unavailable_neutralizations.add(m_neut.group(1).upper())
-                sh_hash = _sim_hash(expr, sett) if expr else hashlib.sha256(str(alpha_id or now_iso).encode()).hexdigest()
 
                 conn.execute(
                     """
@@ -980,7 +999,50 @@ class TwoStageAlphaFunnel:
         for nm_res, nm_reason in near_misses_to_queue:
             self._enqueue_immediate_refinement(nm_res, nm_reason)
 
-        return {"promoted": promoted, "passed": passed, "rejected": rejected}
+        return {"promoted": promoted, "passed": passed, "rejected": rejected, "unsimulated_released": unsimulated_released}
+
+
+    def purge_false_failures(self) -> dict[str, int]:
+        """Release funnel_tried & funnel_reference_db entries that never actually simulated (sharpe IS NULL)."""
+        with self._connect() as conn:
+            before_tried = int(conn.execute("SELECT COUNT(*) FROM funnel_tried").fetchone()[0] or 0)
+            before_ref = int(conn.execute("SELECT COUNT(*) FROM funnel_reference_db").fetchone()[0] or 0)
+
+            # 1. Remove REJECTED rows in funnel_reference_db that have NULL sharpe (unsimulated API failures)
+            cur_ref = conn.execute(
+                "DELETE FROM funnel_reference_db WHERE UPPER(outcome) = 'REJECTED' AND sharpe IS NULL"
+            )
+            deleted_ref = int(cur_ref.rowcount or 0)
+
+            # 2. Remove funnel_tried rows that do NOT have a real simulated entry (sharpe IS NOT NULL) in funnel_reference_db
+            cur_tried = conn.execute(
+                """DELETE FROM funnel_tried
+                   WHERE sim_hash NOT IN (
+                       SELECT sim_hash FROM funnel_reference_db WHERE sharpe IS NOT NULL
+                   )"""
+            )
+            deleted_tried = int(cur_tried.rowcount or 0)
+
+            # 3. Reset heavily negative RL arms that only had false failures (seeds_found=0 and passed_count=0)
+            conn.execute(
+                """DELETE FROM funnel_rl_policy
+                   WHERE reward_sum < -5.0 AND dataset_id IN (
+                       SELECT dataset_id FROM funnel_dataset_stats WHERE seeds_found = 0 AND passed_count = 0
+                   )"""
+            )
+
+            after_tried = int(conn.execute("SELECT COUNT(*) FROM funnel_tried").fetchone()[0] or 0)
+            after_ref = int(conn.execute("SELECT COUNT(*) FROM funnel_reference_db").fetchone()[0] or 0)
+
+        self._session_seen_hashes.clear()
+        return {
+            "before_tried": before_tried,
+            "after_tried": after_tried,
+            "deleted_tried": deleted_tried,
+            "before_ref": before_ref,
+            "after_ref": after_ref,
+            "deleted_ref": deleted_ref,
+        }
 
     def summary(self) -> dict[str, Any]:
         with self._connect() as conn:

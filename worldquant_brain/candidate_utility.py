@@ -207,7 +207,9 @@ def evaluate_candidate(candidate: Mapping[str, Any]) -> UtilityResult:
         + duplicate_penalty
     )
     final_utility = max(0.0, gross_utility - total_penalty)
-    eligible = not (duplicate_expression or already_submitted)
+    has_blocking_corr = (max_corr is not None and abs(max_corr) >= 0.70)
+    is_failed = str(candidate.get("is_check_status") or "").upper() in {"FAIL", "FAILED", "ERROR"}
+    eligible = not (duplicate_expression or already_submitted or has_blocking_corr or is_failed)
 
     if not eligible:
         decision = "REJECT_DUPLICATE"
