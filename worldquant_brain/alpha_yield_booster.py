@@ -283,20 +283,7 @@ def precision_repair_near_miss(
         })
 
     if any("CORR" in c for c in failed):
-        atom = random.choice(_HIGH_YIELD_ATOMS["FUND_QUALITY"] + _HIGH_YIELD_ATOMS["ANALYST_REV"])
-        repairs.append({
-            "name": "Repair_Corr_OrthogCombo",
-            "expression": f"hump(group_neutralize(0.5 * winsorize(rank({expr}), std=4) + 0.5 * winsorize(rank({atom}), std=4), industry), hump=0.01)",
-            "settings": dict(base),
-            "reason": "CORR_ORTHOG_COMBO",
-        })
-        if _re.search(r"\bclose\b", expr):
-            repairs.append({
-                "name": "Repair_Corr_FieldSubVwap",
-                "expression": _re.sub(r"\bclose\b", "vwap", expr),
-                "settings": dict(base),
-                "reason": "CORR_FIELD_SUBSTITUTION_VWAP",
-            })
+        repairs.extend(generate_decorrelation_variants(expr, base, max_variants=4))
 
     return repairs
 
@@ -344,3 +331,75 @@ def pick_low_crowding_region_settings(enable_multi_region: bool = False) -> dict
         region, universe = "USA", random.choice(["TOP3000", "TOP1000", "TOP500"])
     neut = random.choice(ADVANCED_NEUTRALIZATIONS)
     return {"region": region, "universe": universe, "neutralization": neut}
+
+
+def generate_decorrelation_variants(
+    expression: str,
+    settings: dict[str, Any] | None = None,
+    *,
+    max_variants: int = 4,
+    unavailable_neutralizations: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Official WorldQuant BRAIN 4-pillar de-correlation rescue for good Alphas hitting SELF/PROD correlation.
+
+    1. Equivalent data field substitution (close -> vwap / open / (high+low)/2).
+    2. Operator substitution (rank -> zscore, ts_mean -> ts_median, ts_zscore -> ts_rank).
+    3. Meaningful grouping & neutralization rotation (SUBINDUSTRY -> INDUSTRY / SECTOR / CROWDING).
+    4. Orthogonal conditioning / cross-domain combo (ts_regression residual or orthogonal fundamental/analyst blend).
+    """
+    import re as _re
+
+    expr = (expression or "").strip()
+    if not expr:
+        return []
+    base = dict(settings or generate_smart_settings("COMBO"))
+    unavail = {str(u).upper() for u in (unavailable_neutralizations or set())}
+    out: list[dict[str, Any]] = []
+    seen_exprs: set[tuple[str, str]] = {(expr, str(base.get("neutralization") or "").upper())}
+
+    def _add(name: str, new_expr: str, new_sett: dict[str, Any], reason: str) -> None:
+        if len(out) >= max_variants:
+            return
+        key = (new_expr.strip(), str(new_sett.get("neutralization") or "").upper())
+        if not new_expr.strip() or key in seen_exprs:
+            return
+        seen_exprs.add(key)
+        out.append({"name": name, "expression": new_expr.strip(), "settings": new_sett, "reason": reason})
+
+    # Pillar 1: Equivalent data field substitution
+    if _re.search(r"\bclose\b", expr):
+        _add("Decorr_FieldSub_Vwap", _re.sub(r"\bclose\b", "vwap", expr), dict(base), "CORR_FIELD_SUBSTITUTION_VWAP")
+        _add("Decorr_FieldSub_Open", _re.sub(r"\bclose\b", "open", expr), dict(base), "CORR_FIELD_SUBSTITUTION_OPEN")
+
+    # Pillar 2: Similar operator substitution (median vs mean, zscore vs rank, ts_rank vs ts_zscore)
+    if _re.search(r"\bts_mean\s*\(", expr):
+        _add("Decorr_OpSub_TsMedian", _re.sub(r"\bts_mean\s*\(", "ts_median(", expr, count=1), dict(base), "CORR_OP_SUBSTITUTION_TS_MEDIAN")
+    elif _re.search(r"\bts_zscore\s*\(", expr):
+        _add("Decorr_OpSub_TsRank", _re.sub(r"\bts_zscore\s*\(", "ts_rank(", expr, count=1), dict(base), "CORR_OP_SUBSTITUTION_TS_RANK")
+    elif _re.search(r"\brank\s*\(", expr):
+        _add("Decorr_OpSub_Zscore", _re.sub(r"\brank\s*\(", "winsorize(zscore(", expr, count=1).replace(")", "), std=4)", 1) if expr.count(")") >= 1 else expr, dict(base), "CORR_OP_SUBSTITUTION_ZSCORE")
+
+    # Pillar 3: Meaningful grouping & neutralization rotation (no arbitrary groups)
+    cur_neut = str(base.get("neutralization") or "SUBINDUSTRY").upper()
+    for alt_neut in ("INDUSTRY", "SECTOR", "CROWDING", "MARKET"):
+        if alt_neut != cur_neut and alt_neut not in unavail:
+            s_neut = dict(base)
+            s_neut["neutralization"] = alt_neut
+            _add(f"Decorr_Neut_{alt_neut}", expr, s_neut, f"CORR_NEUTRALIZATION_{alt_neut}")
+            break
+
+    # Pillar 4: Orthogonal conditioning / cross-domain blend
+    _add(
+        "Decorr_Orthog_RetResid",
+        f"group_neutralize(ts_regression(winsorize(rank({expr}), std=4), returns, 60, lag=0, rettype=0), industry)",
+        dict(base),
+        "CORR_ORTHOG_RETURN_RESIDUAL",
+    )
+    atom = random.choice(_HIGH_YIELD_ATOMS["FUND_QUALITY"] + _HIGH_YIELD_ATOMS["ANALYST_REV"])
+    _add(
+        "Decorr_Orthog_Combo",
+        f"hump(group_neutralize(0.5 * winsorize(rank({expr}), std=4) + 0.5 * winsorize(rank({atom}), std=4), industry), hump=0.01)",
+        dict(base),
+        "CORR_ORTHOG_COMBO",
+    )
+    return out[:max_variants]

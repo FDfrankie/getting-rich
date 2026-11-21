@@ -63,6 +63,8 @@ _DEFAULT_STAGE2_NEUTRALIZATIONS: tuple[str, ...] = (
     "SUBINDUSTRY",
     "INDUSTRY",
     "SECTOR",
+    "SLOW",
+    "FAST",
     "MARKET",
 )
 _env_neuts = [
@@ -595,7 +597,7 @@ class TwoStageAlphaFunnel:
             else (float(src_margin) if src_margin is not None else None)
         )
         # Diagnostic tuning: target the specific bottleneck instead of blind grid search
-        if "TURNOVER" in reason or "FITNESS" in reason or (src_to is not None and float(src_to) > 0.15):
+        if "TURNOVER" in reason or ("FITNESS" in reason and (src_to is None or float(src_to) > 0.25)) or (src_to is not None and float(src_to) > 0.40):
             for lw_expr in _log_window_variants(expr, prefer_larger=True):
                 candidates.append((lw_expr, dict(base_sett)))
             candidates.append((f"hump(winsorize({expr}, std=4), hump=0.01)", dict(base_sett, decay=4)))
@@ -603,9 +605,15 @@ class TwoStageAlphaFunnel:
         if "MARGIN" in reason or (norm_margin is not None and norm_margin < 0.0010):
             candidates.append((f"signed_power(rank({expr}) - 0.5, 2)", dict(base_sett, decay=0)))
         if "WEIGHT" in reason or "SUB_UNIVERSE" in reason:
+            # Official BRAIN Weight/Coverage FAQ: rank/group_rank balances long-short counts + lower truncation
+            candidates.append((f"group_rank({expr}, subindustry)", dict(base_sett, truncation=0.05)))
+            candidates.append((f"winsorize({expr}, std=3)", dict(base_sett, truncation=0.05)))
             candidates.append((f"hump({expr}, hump=0.01)", dict(base_sett, truncation=0.06)))
-            for trunc in (0.05, 0.06):
-                candidates.append((f"winsorize({expr}, std=3)", dict(base_sett, truncation=trunc)))
+        if src_to is not None and float(src_to) < 0.08 and ("FITNESS" in reason or "SHARPE" in reason or "TURNOVER" in reason):
+            # Official BRAIN Returns/Turnover FAQ: boost stale low-turnover signals via lower decay, liquid TOP1000, shorter window
+            candidates.append((expr, dict(base_sett, decay=0, universe="TOP1000")))
+            for sw_expr in _log_window_variants(expr, prefer_larger=False):
+                candidates.append((sw_expr, dict(base_sett, decay=0)))
         if "2Y_SHARPE" in reason or "LOW_2Y" in reason:
             candidates.append((expr, dict(base_sett, decay=2)))
             for sw_expr in _log_window_variants(expr, prefer_larger=False):
@@ -763,11 +771,14 @@ class TwoStageAlphaFunnel:
                         k in ds_low for k in ("fundamental", "fnd", "balance", "income", "cashflow")
                     ):
                         continue
-                    eff_template = (
-                        template.replace("ts_backfill({f}, 20)", "ts_backfill({f}, 63)")
-                        if ("fundamental" in ds_low or ds_low.startswith("fnd"))
-                        else template
-                    )
+                    if "fundamental" in ds_low or ds_low.startswith("fnd"):
+                        eff_template = template.replace("ts_backfill({f}, 20)", "ts_backfill({f}, 60)")
+                    elif ds_low.startswith("pv") or "option" in ds_low or ds_low.startswith("opt"):
+                        eff_template = template.replace("ts_backfill({f}, 20)", "ts_backfill({f}, 2)")
+                    elif any(k in ds_low for k in ("news", "nws", "social", "analyst", "anl", "model", "mdl", "sentiment")):
+                        eff_template = template.replace("ts_backfill({f}, 20)", "ts_backfill({f}, 5)")
+                    else:
+                        eff_template = template
                     expr = _format_probe(eff_template, field)
                     sett = dict(self.base_settings)
                     if any(
@@ -888,7 +899,89 @@ class TwoStageAlphaFunnel:
                     """,
                     (dataset_id, now_iso),
                 )
-            self._update_rl_arm(conn, dataset_id, probe, -1.0)
+            self._update_rl_arm(conn, dataset_id, probe, -0.3 if "CORR" in str(reason or "").upper() else -1.0)
+
+        # P23: When a good Alpha is rejected specifically for SELF/PROD correlation, enqueue 4-pillar de-correlation rescue
+        if "CORR" in str(reason or "").upper():
+            res_expr = expression
+            res_sett = dict(self.base_settings)
+            if settings:
+                res_sett.update(dict(settings))
+            if not res_expr:
+                with self._connect() as conn2:
+                    r_row = conn2.execute(
+                        "SELECT expression, settings_json, dataset_id, probe, sharpe FROM funnel_reference_db WHERE alpha_id = ?",
+                        (str(alpha_id),),
+                    ).fetchone()
+                    if r_row:
+                        res_expr = str(r_row["expression"] or "")
+                        dataset_id = dataset_id or str(r_row["dataset_id"] or "")
+                        probe = probe or str(r_row["probe"] or "")
+                        try:
+                            res_sett.update(json.loads(str(r_row["settings_json"] or "{}")))
+                        except Exception:
+                            pass
+            if res_expr:
+                self.enqueue_decorrelation_rescue(
+                    expression=res_expr,
+                    settings=res_sett,
+                    dataset_id=dataset_id,
+                    probe=probe,
+                    priority_sharpe=1.50,
+                )
+
+    def enqueue_decorrelation_rescue(
+        self,
+        *,
+        expression: str,
+        settings: Mapping[str, Any] | None = None,
+        dataset_id: str = "",
+        probe: str = "",
+        priority_sharpe: float = 1.50,
+        max_variants: int = 3,
+    ) -> int:
+        """Enqueue WorldQuant BRAIN 4-pillar de-correlation variants for a good Alpha blocked by correlation."""
+        from worldquant_brain.alpha_yield_booster import generate_decorrelation_variants
+
+        base_sett = dict(self.base_settings)
+        if settings:
+            base_sett.update(dict(settings))
+        variants = generate_decorrelation_variants(
+            expression,
+            base_sett,
+            max_variants=max_variants,
+            unavailable_neutralizations=self._unavailable_neutralizations,
+        )
+        added = 0
+        with self._connect() as conn:
+            for v in variants:
+                c_expr = str(v.get("expression") or "").strip()
+                c_sett = dict(v.get("settings") or base_sett)
+                if not c_expr:
+                    continue
+                sh = _sim_hash(c_expr, c_sett)
+                if self._is_tried(conn, sh):
+                    continue
+                self._mark_tried(conn, sh, c_expr, c_sett, "STAGE2", dataset_id)
+                self._session_refinement_queue.append(
+                    {
+                        "expression": c_expr,
+                        "settings": c_sett,
+                        "stage": "STAGE2",
+                        "dataset_id": dataset_id,
+                        "probe": probe or str(v.get("reason") or "decorr_rescue"),
+                        "_priority_sharpe": float(priority_sharpe),
+                    }
+                )
+                added += 1
+        if added and self._session_refinement_queue:
+            self._session_refinement_queue.sort(
+                key=lambda item: float(item.get("_priority_sharpe", 0.0)),
+                reverse=True,
+            )
+            if len(self._session_refinement_queue) > 60:
+                del self._session_refinement_queue[60:]
+        return added
 
     def ingest_results(self, results: Iterable[Mapping[str, Any]]) -> dict[str, int]:
         """Record all outcomes in reference DB, update RL policy, and queue immediate session refinements."""

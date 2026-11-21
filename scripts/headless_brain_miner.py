@@ -354,6 +354,16 @@ def run_headless_miner(
                                 f"[LOCAL_SELF_CORR_SKIP] Alpha {alpha_id} skipped staging: "
                                 f"local_corr={_lsc.get('max_corr')} vs {_lsc.get('matched_alpha_id')}"
                             )
+                            if hasattr(funnel, "enqueue_decorrelation_rescue"):
+                                _dc_n = funnel.enqueue_decorrelation_rescue(
+                                    expression=str(r.get("expression") or ""),
+                                    settings=r.get("settings") if isinstance(r.get("settings"), dict) else None,
+                                    dataset_id=str(r.get("dataset_id") or ""),
+                                    probe=str(r.get("probe") or ""),
+                                    priority_sharpe=abs(float(sharpe)),
+                                )
+                                if _dc_n > 0:
+                                    print(f"[DECORR_RESCUE_QUEUED] Enqueued {_dc_n} de-correlation variant(s) for {alpha_id}")
                     except Exception:
                         pass
                 if not _skip_local_corr:

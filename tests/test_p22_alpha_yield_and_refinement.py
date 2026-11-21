@@ -32,7 +32,7 @@ class TestP22AlphaYieldAndRefinement(unittest.TestCase):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             f = TwoStageAlphaFunnel(Path(td) / "vault.db")
             res = {
-                "expression": "rank(ts_backfill(fnd6_ebitda, 63))",
+                "expression": "rank(ts_backfill(fnd6_ebitda, 60))",
                 "settings": dict(f.base_settings),
                 "dataset_id": "fundamental6",
                 "probe": "rank_bf",
@@ -46,7 +46,7 @@ class TestP22AlphaYieldAndRefinement(unittest.TestCase):
             added = f._enqueue_immediate_refinement(res, "LOW_SHARPE;LOW_FITNESS")
             self.assertGreaterEqual(added, 1)
             q = f.next_stage2_batch(batch_size=4)
-            self.assertEqual(q[0]["expression"], "-(rank(ts_backfill(fnd6_ebitda, 63)))")
+            self.assertEqual(q[0]["expression"], "-(rank(ts_backfill(fnd6_ebitda, 60)))")
             self.assertEqual(q[0]["settings"]["decay"], f.base_settings["decay"])
             gc.collect()
 
@@ -56,7 +56,7 @@ class TestP22AlphaYieldAndRefinement(unittest.TestCase):
             fnd_batch = f.next_batch({"fundamental6": ["fnd6_ebitda"]}, batch_size=25)
             self.assertTrue(len(fnd_batch) > 0)
             self.assertTrue(all(it["settings"].get("nanHandling") == "ON" for it in fnd_batch))
-            self.assertTrue(any("ts_backfill(fnd6_ebitda, 63)" in it["expression"] for it in fnd_batch))
+            self.assertTrue(any("ts_backfill(fnd6_ebitda, 60)" in it["expression"] for it in fnd_batch))
 
             news_batch = f.next_batch({"news18": ["nws18_sent"]}, batch_size=25)
             self.assertTrue(all(it["probe"] != "cap_norm_gauss" for it in news_batch))
