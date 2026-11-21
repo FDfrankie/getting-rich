@@ -61,3 +61,39 @@ def fetch_twse_t86_institutional(date_yyyymmdd: str, timeout: int = 20) -> dict[
     )
     resp.raise_for_status()
     return parse_twse_t86_payload(resp.json())
+
+
+def parse_twse_t86_row(fields: list[str], row: list[str]) -> dict[str, float | str] | None:
+    """Safely parse a TWSE T86 19-column row into lots (1000 shares) without double-counting dealer/foreign sub-columns."""
+    fmap = {str(k).strip(): str(v).strip() for k, v in zip(fields, row)}
+    code = fmap.get("證券代號", "").strip()
+    if not code:
+        return None
+
+    def _shares_to_lots(col_name: str) -> float:
+        raw = fmap.get(col_name, "").replace(",", "").replace("+", "").strip()
+        if not raw or raw in {"--", "---", "X"}:
+            return 0.0
+        try:
+            return float(raw) / 1000.0
+        except ValueError:
+            return 0.0
+
+    foreign_ex_dealer = _shares_to_lots("外陸資買賣超股數(不含外資自營商)")
+    foreign_dealer = _shares_to_lots("外資自營商買賣超股數")
+    trust_net = _shares_to_lots("投信買賣超股數")
+    dealer_prop = _shares_to_lots("自營商買賣超股數(自行買賣)")
+    dealer_hedge = _shares_to_lots("自營商買賣超股數(避險)")
+    official_total = _shares_to_lots("三大法人買賣超股數")
+
+    # Directional institutional flow: foreign + trust + dealer proprietary (excludes mechanical warrant/CB hedging)
+    smart_institutional_lots = (foreign_ex_dealer + foreign_dealer) + trust_net + dealer_prop
+    return {
+        "code": code,
+        "foreign_net_lots": foreign_ex_dealer + foreign_dealer,
+        "trust_net_lots": trust_net,
+        "dealer_prop_lots": dealer_prop,
+        "dealer_hedge_lots": dealer_hedge,
+        "official_total_lots": official_total,
+        "smart_institutional_lots": smart_institutional_lots,
+    }

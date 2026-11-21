@@ -73,7 +73,7 @@ def generate_smart_settings(domain: str = "") -> dict[str, Any]:
         "truncation": random.choice([0.04, 0.05, 0.06]),
         "pasteurization": "ON",
         "unitHandling": "VERIFY",
-        "nanHandling": "OFF",
+        "nanHandling": "ON" if any(k in dom for k in ("FUND", "ANALYST", "OPT", "SENTIMENT", "NEWS", "COMBO", "MODEL")) else "OFF",
         "language": "FASTEXPR",
         "visualization": False,
     }
@@ -251,6 +251,37 @@ def precision_repair_near_miss(
                 "reason": "LOW_FITNESS_BOOST_RETURNS_CONCENTRATION",
             })
 
+    import re as _re
+
+    if float(sharpe) <= -1.05:
+        repairs.append({
+            "name": "Repair_NegativeSharpe_SignFlip",
+            "expression": expr[5:].strip() if expr.startswith("-1 * ") else f"-1 * ({expr})",
+            "settings": dict(base),
+            "reason": "NEGATIVE_SHARPE_SIGN_FLIP",
+        })
+
+    if any("CONCENTRATED_WEIGHT" in c or "WEIGHT" in c for c in failed):
+        s_w = dict(base)
+        s_w["truncation"] = min(0.05, float(base.get("truncation", 0.08) or 0.08))
+        s_w["nanHandling"] = "ON"
+        repairs.append({
+            "name": "Repair_ConcentratedWeight_RankBackfill",
+            "expression": f"group_neutralize(rank(ts_backfill({expr}, 20)), subindustry)",
+            "settings": s_w,
+            "reason": "CONCENTRATED_WEIGHT_RANK_BACKFILL_TRUNC05",
+        })
+
+    if any("2Y_SHARPE" in c for c in failed):
+        s_2y = dict(base)
+        s_2y["decay"] = min(10, max(4, int(base.get("decay", 4) or 4) + 2))
+        repairs.append({
+            "name": "Repair_Low2YSharpe_JumpDecay",
+            "expression": f"jump_decay(group_neutralize(winsorize(rank({expr}), std=3.5), subindustry), 10, sensitivity=0.5)",
+            "settings": s_2y,
+            "reason": "LOW_2Y_SHARPE_JUMP_DECAY_STABILIZE",
+        })
+
     if any("CORR" in c for c in failed):
         atom = random.choice(_HIGH_YIELD_ATOMS["FUND_QUALITY"] + _HIGH_YIELD_ATOMS["ANALYST_REV"])
         repairs.append({
@@ -259,10 +290,10 @@ def precision_repair_near_miss(
             "settings": dict(base),
             "reason": "CORR_ORTHOG_COMBO",
         })
-        if "close" in expr:
+        if _re.search(r"\bclose\b", expr):
             repairs.append({
                 "name": "Repair_Corr_FieldSubVwap",
-                "expression": expr.replace("close", "vwap"),
+                "expression": _re.sub(r"\bclose\b", "vwap", expr),
                 "settings": dict(base),
                 "reason": "CORR_FIELD_SUBSTITUTION_VWAP",
             })
@@ -286,3 +317,30 @@ def maybe_invert_negative_sharpe_candidate(
             return clean[6:-1].strip()
         return f"-1 * ({clean})"
     return None
+
+
+REGION_UNIVERSE_POOL: tuple[tuple[str, str], ...] = (
+    ("USA", "TOP3000"),
+    ("USA", "TOP1000"),
+    ("EUR", "TOP2500"),
+    ("ASI", "MINVOL1M"),
+    ("GLB", "TOP3000"),
+)
+
+ADVANCED_NEUTRALIZATIONS: tuple[str, ...] = (
+    "SUBINDUSTRY",
+    "INDUSTRY",
+    "CROWDING",
+    "REVERSION_AND_MOMENTUM",
+    "STATISTICAL",
+)
+
+
+def pick_low_crowding_region_settings(enable_multi_region: bool = False) -> dict[str, str]:
+    """Rotate across low-crowding regions (when enabled) and advanced risk-model neutralizations."""
+    if enable_multi_region or os.getenv("BRAIN_ENABLE_MULTI_REGION", "false").lower() == "true":
+        region, universe = random.choice(REGION_UNIVERSE_POOL)
+    else:
+        region, universe = "USA", random.choice(["TOP3000", "TOP1000", "TOP500"])
+    neut = random.choice(ADVANCED_NEUTRALIZATIONS)
+    return {"region": region, "universe": universe, "neutralization": neut}

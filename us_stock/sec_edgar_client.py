@@ -96,3 +96,85 @@ class SecEdgarClient:
         if cik is None:
             return pd.DataFrame()
         return parse_company_facts_pit(self._get_json(SEC_FACTS_URL.format(cik=cik)))
+
+
+def compute_pead_sue_score(
+    quarterly_eps_records: list[dict[str, object]],
+    as_of_date: str,
+) -> float | None:
+    """Compute strictly Point-in-Time Standardized Unexpected Earnings (SUE) using filed < as_of_date."""
+    import math
+
+    as_of = str(as_of_date).strip()[:10]
+    eligible = [
+        r for r in quarterly_eps_records
+        if str(r.get("filed") or "").strip()[:10] < as_of and r.get("eps") is not None
+    ]
+    # Deduplicate by period end date keeping the latest filed restatement available as of as_of_date
+    by_end: dict[str, dict[str, object]] = {}
+    for r in eligible:
+        end_key = str(r.get("end") or r.get("filed") or "").strip()[:10]
+        prev = by_end.get(end_key)
+        if prev is None or str(r.get("filed") or "") >= str(prev.get("filed") or ""):
+            by_end[end_key] = r
+    ordered = [by_end[k] for k in sorted(by_end.keys())]
+    if len(ordered) < 5:
+        return None
+    eps_vals = [float(r["eps"]) for r in ordered]
+    # Seasonal YoY EPS changes (q - q_lag4) over trailing up to 8 quarters
+    yoy_diffs = [eps_vals[i] - eps_vals[i - 4] for i in range(4, len(eps_vals))]
+    recent = yoy_diffs[-8:]
+    if len(recent) < 2:
+        return None
+    mean_d = sum(recent) / len(recent)
+    var_d = sum((x - mean_d) ** 2 for x in recent) / max(1, len(recent) - 1)
+    std_d = math.sqrt(var_d)
+    if std_d < 1e-9:
+        return 0.0
+    return round((recent[-1] - mean_d) / std_d, 4)
+
+
+def compute_form4_cluster_buy_score(
+    filings: list[dict[str, object]],
+    as_of_date: str,
+    *,
+    lookback_days: int = 30,
+) -> dict[str, float | int]:
+    """Compute strictly PIT SEC Form 4 open-market insider cluster buy score (code=='P', non-10b5-1)."""
+    import math
+    from datetime import date, timedelta
+
+    as_of_dt = date.fromisoformat(str(as_of_date).strip()[:10])
+    cutoff_dt = as_of_dt - timedelta(days=max(1, int(lookback_days)))
+
+    distinct_insiders: set[str] = set()
+    total_usd = 0.0
+    for f in filings:
+        filed_s = str(f.get("filed") or "").strip()[:10]
+        if not filed_s:
+            continue
+        try:
+            f_dt = date.fromisoformat(filed_s)
+        except ValueError:
+            continue
+        if f_dt > as_of_dt or f_dt < cutoff_dt:
+            continue
+        if str(f.get("transactionCode") or "").upper() != "P":
+            continue
+        if bool(f.get("is_10b5_1")):
+            continue
+        insider = str(f.get("insider_name") or f.get("rptOwnerCik") or "").strip()
+        if insider:
+            distinct_insiders.add(insider)
+        shares = float(f.get("shares") or 0.0)
+        price = float(f.get("price") or 0.0)
+        if shares > 0 and price > 0:
+            total_usd += shares * price
+
+    n_insiders = len(distinct_insiders)
+    cluster_score = round(math.log1p(total_usd) * (1.0 + 0.25 * (n_insiders - 2)), 4) if n_insiders >= 2 else 0.0
+    return {
+        "distinct_insiders": n_insiders,
+        "total_buy_usd": round(total_usd, 2),
+        "cluster_buy_score": cluster_score,
+    }

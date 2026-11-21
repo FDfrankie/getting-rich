@@ -135,3 +135,58 @@ class OrderExecutionService:
 
         final_status = "COMPLETE" if (closed and not failed) else ("PARTIAL" if closed else "FAILED")
         return {"status": final_status, "closed": closed, "failed": failed}
+
+
+CONDITIONAL_ORDER_TYPES: frozenset[str] = frozenset({
+    "STOP_MARKET",
+    "TAKE_PROFIT_MARKET",
+    "STOP",
+    "TAKE_PROFIT",
+    "TRAILING_STOP_MARKET",
+})
+
+EXCHANGE_RISK_ORDER_PREFIXES: tuple[str, ...] = (
+    "autoclose-",
+    "adl_autoclose",
+    "settlement_autoclose-",
+    "delivery_autoclose-",
+)
+
+
+def build_binance_futures_order_params(
+    *,
+    symbol: str,
+    side: str,
+    order_type: str,
+    quantity: float,
+    price: float | None = None,
+    reduce_only: bool = False,
+    hedge_mode: bool = False,
+    closing_position_side: str | None = None,
+    post_only: bool = False,
+) -> tuple[str, dict[str, Any]]:
+    """Return (endpoint_path, params) compliant with Binance USD-M 2025-12+ Algo Order & Hedge Mode rules."""
+    otype = str(order_type).upper()
+    endpoint = "/fapi/v1/algoOrder" if otype in CONDITIONAL_ORDER_TYPES else "/fapi/v1/order"
+    params: dict[str, Any] = {
+        "symbol": str(symbol).replace("/", ""),
+        "side": str(side).upper(),
+        "type": otype,
+        "quantity": float(quantity),
+        "selfTradePreventionMode": "EXPIRE_MAKER",
+    }
+    if otype == "LIMIT" and price is not None:
+        params["price"] = float(price)
+        params["timeInForce"] = "GTX" if post_only else "GTC"
+    if hedge_mode:
+        # Binance Futures rejects reduceOnly in Hedge Mode; use explicit positionSide instead
+        params["positionSide"] = (closing_position_side or ("LONG" if str(side).upper() == "SELL" else "SHORT")).upper()
+    elif reduce_only:
+        params["reduceOnly"] = "true"
+    return endpoint, params
+
+
+def is_exchange_risk_event_order(client_order_id: str | None) -> bool:
+    """Identify Binance liquidation / ADL / settlement system orders."""
+    cid = str(client_order_id or "")
+    return cid.startswith(EXCHANGE_RISK_ORDER_PREFIXES)
