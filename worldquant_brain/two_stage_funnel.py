@@ -46,6 +46,9 @@ STAGE1_PROBES: tuple[tuple[str, str], ...] = (
     ("reg_resid60", "rank(ts_regression(ts_backfill({f}, 20), returns, 60, lag=0, rettype=0))"),
     ("reg_neut_cap", "regression_neut(rank(ts_backfill({f}, 20)), log(cap + 1.0))"),
     ("trade_when_vol", "trade_when(volume > ts_mean(volume, 20), group_neutralize(winsorize(rank(ts_backfill({f}, 20)), std=4), industry), -1)"),
+    ("cartesian_cap_sub", "group_neutralize(rank(ts_backfill({f}, 20)), group_cartesian_product(subindustry, bucket(rank(cap), range=\"0, 1, 0.25\")))"),
+    ("jump_decay_neut", "group_neutralize(jump_decay(rank(ts_backfill({f}, 20)), 5, sensitivity=0.5), subindustry)"),
+    ("target_tvr_decay", "ts_target_tvr_decay(group_neutralize(rank(ts_backfill({f}, 20)), industry), lambda_min=0, lambda_max=1, target_tvr=0.15)"),
 )
 
 

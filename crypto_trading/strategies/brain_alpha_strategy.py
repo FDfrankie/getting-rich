@@ -73,7 +73,7 @@ def evaluate_fastexpr_on_ohlcv(expression: str, df: pd.DataFrame) -> pd.Series:
 
     def ts_delay(x: Any, d: int = 1) -> pd.Series:
         s = x if isinstance(x, pd.Series) else pd.Series(x, index=df.index, dtype=float)
-        return s.shift(max(1, int(d))).bfill()
+        return s.shift(max(1, int(d)))
 
     def ts_mean(x: Any, d: int = 10) -> pd.Series:
         s = x if isinstance(x, pd.Series) else pd.Series(x, index=df.index, dtype=float)

@@ -18,29 +18,42 @@ class Role:
 class AuthManager:
     """管理 Web UI 授權、Session 與角色權限"""
 
-    def __init__(self, secret_key: str | None = None):
+    def __init__(self, secret_key: str | None = None, max_sessions: int = 1000):
+        import threading
         self.secret_key = secret_key or secrets.token_hex(32)
+        self._lock = threading.Lock()
+        self._max_sessions = max(10, int(max_sessions))
         self.sessions: dict[str, dict[str, Any]] = {}
-        self.csrf_tokens: dict[str, float] = {}
 
     def create_session(self, username: str, role: str = Role.VIEWER, ttl: int = 86400) -> str:
+        now = time.time()
         session_id = secrets.token_urlsafe(32)
-        self.sessions[session_id] = {
-            "username": username,
-            "role": role,
-            "expires_at": time.time() + ttl,
-            "csrf_token": secrets.token_hex(16),
-        }
+        with self._lock:
+            expired = [sid for sid, s in self.sessions.items() if now > s.get("expires_at", 0)]
+            for sid in expired:
+                self.sessions.pop(sid, None)
+            while len(self.sessions) >= self._max_sessions:
+                oldest = next(iter(self.sessions))
+                self.sessions.pop(oldest, None)
+            self.sessions[session_id] = {
+                "username": username,
+                "role": role,
+                "expires_at": now + ttl,
+                "csrf_token": secrets.token_hex(16),
+            }
         return session_id
 
     def get_session(self, session_id: str | None) -> dict[str, Any] | None:
-        if not session_id or session_id not in self.sessions:
+        if not session_id:
             return None
-        session = self.sessions[session_id]
-        if time.time() > session["expires_at"]:
-            del self.sessions[session_id]
-            return None
-        return session
+        with self._lock:
+            session = self.sessions.get(session_id)
+            if not session:
+                return None
+            if time.time() > session["expires_at"]:
+                self.sessions.pop(session_id, None)
+                return None
+            return session
 
     def validate_csrf(self, session_id: str, csrf_token: str) -> bool:
         session = self.get_session(session_id)

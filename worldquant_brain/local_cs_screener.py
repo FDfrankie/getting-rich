@@ -185,21 +185,35 @@ def evaluate_fastexpr_panel(expression: str, panel: Mapping[str, pd.DataFrame]) 
             sx = sx.shift(int(lag))
         w = max(3, int(d))
         cov = sy.rolling(w, min_periods=3).cov(sx)
-        var = sx.rolling(w, min_periods=3).var().replace(0, np.nan)
-        beta = (cov / var).fillna(0.0)
-        if rettype == 2:
-            return beta
+        var_x = sx.rolling(w, min_periods=3).var().replace(0, np.nan)
+        beta = (cov / var_x).fillna(0.0)
         alpha = ts_mean(sy, w) - beta * ts_mean(sx, w)
-        return sy - (alpha + beta * sx)
+        yhat = alpha + beta * sx
+        rt = int(rettype)
+        if rt == 1:
+            return alpha
+        if rt == 2:
+            return beta
+        if rt == 3:
+            return yhat
+        if rt == 6:
+            var_y = sy.rolling(w, min_periods=3).var().replace(0, np.nan)
+            return ((cov ** 2) / (var_x * var_y)).clip(0.0, 1.0).fillna(0.0)
+        return sy - yhat
 
     def signed_power(x: Any, p: float = 2.0) -> pd.DataFrame:
         df = _as_df(x)
         return np.sign(df) * (df.abs() ** float(p))
 
     def trade_when(cond: Any, alpha_expr: Any, exit_cond: Any = -1) -> pd.DataFrame:
-        c = _as_df(cond).astype(bool)
+        c = _as_df(cond).fillna(0).astype(bool)
         a = _as_df(alpha_expr)
-        return a.where(c).ffill()
+        if isinstance(exit_cond, (int, float)) and exit_cond <= 0:
+            return a.where(c).ffill()
+        ex = _as_df(exit_cond).fillna(0).astype(bool)
+        sentinel = np.inf
+        marked = a.where(c).mask(ex, sentinel).ffill()
+        return marked.replace(sentinel, np.nan)
 
     env: dict[str, Any] = {
         "__builtins__": {},

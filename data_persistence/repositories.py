@@ -50,11 +50,15 @@ class SQLiteRepository:
         conn.execute("PRAGMA busy_timeout=10000")
         return conn
 
-    def acquire_advisory_lock(self, namespace: str, key: str, owner: str) -> bool:
+    def acquire_advisory_lock(self, namespace: str, key: str, owner: str, ttl_seconds: int = 1800) -> bool:
+        from datetime import timedelta
         lock_id = advisory_lock_key(namespace, key)
-        now = datetime.now(timezone.utc).isoformat()
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
+        cutoff = (now_dt - timedelta(seconds=max(1, int(ttl_seconds)))).isoformat()
         with self._lock_guard:
             with self.connect() as conn:
+                conn.execute("DELETE FROM advisory_locks WHERE lock_id=? AND acquired_at < ?", (lock_id, cutoff))
                 try:
                     conn.execute(
                         "INSERT INTO advisory_locks (lock_id, owner, acquired_at) VALUES (?, ?, ?)",

@@ -180,7 +180,7 @@ class BrainJobQueue:
         self.db_path = db_path
         self._jobs: dict[str, BrainSimulationJob] = {}
         self._key_to_job_id: dict[str, str] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self.num_workers = max(1, int(num_workers if num_workers is not None else os.getenv("BRAIN_QUEUE_WORKERS", "3")))
         self._worker_thread: threading.Thread | None = None
         self._worker_threads: list[threading.Thread] = []
@@ -313,6 +313,23 @@ class BrainJobQueue:
             execute_with_sqlite_retry(self.db_path, _op)
         except sqlite3.OperationalError as exc:
             logger.warning("SQLite persistence failed for job %s (continuing in-memory): %s", job.job_id, exc)
+        self._evict_completed_jobs(max_keep=500)
+
+    def _evict_completed_jobs(self, max_keep: int = 500) -> None:
+        with self._lock:
+            if len(self._jobs) <= max_keep:
+                return
+            removable = [
+                (j.created_at, jid, j.simulation_key)
+                for jid, j in self._jobs.items()
+                if j.status in (BrainJobStatus.COMPLETED, BrainJobStatus.FAILED, BrainJobStatus.OFFLINE)
+            ]
+            removable.sort()
+            excess = len(self._jobs) - max_keep
+            for _, jid, skey in removable[:excess]:
+                self._jobs.pop(jid, None)
+                if self._key_to_job_id.get(skey) == jid:
+                    self._key_to_job_id.pop(skey, None)
 
     def _restore_jobs(self) -> None:
         if not self.db_path or self.db_path == ":memory:" or not os.path.exists(self.db_path):

@@ -84,13 +84,14 @@ class MultiSymbolBotManager:
         spec = get_instrument_spec(norm)
         return self.bots.get(spec.display_symbol)
 
-    def active_positions_notional(self) -> dict[str, float]:
+    def active_positions_notional(self, mark_prices: dict[str, float] | None = None) -> dict[str, float]:
         out: dict[str, float] = {}
+        mp = mark_prices or {}
         for sym, bot in self.bots.items():
             pos = float(getattr(bot, "position", 0.0) or 0.0)
-            entry = float(getattr(bot, "entry_price", 0.0) or 0.0)
-            if abs(pos) > 0 and entry > 0:
-                out[sym] = abs(pos * entry)
+            px = float(mp.get(sym) or getattr(bot, "last_price", 0.0) or getattr(bot, "entry_price", 0.0) or 0.0)
+            if abs(pos) > 0 and px > 0:
+                out[sym] = abs(pos * px)
         return out
 
     def evaluate_portfolio_gate(
@@ -99,13 +100,20 @@ class MultiSymbolBotManager:
         requested_notional_usdt: float,
         *,
         is_reduce_only: bool = False,
+        mark_prices: dict[str, float] | None = None,
+        realized_ann_vol: float | None = None,
+        target_ann_vol: float = 0.40,
     ) -> PortfolioAllocationDecision:
         total_eq = sum(float(getattr(b, "balance_usdt", 0.0) or 0.0) for b in self.bots.values()) / max(1, len(self.bots))
-        self.portfolio_allocator.total_equity_usdt = max(self.portfolio_allocator.total_equity_usdt, total_eq)
+        self.portfolio_allocator.update_equity(total_eq)
+        scaled_req = float(requested_notional_usdt)
+        if not is_reduce_only and realized_ann_vol is not None and realized_ann_vol > 1e-6:
+            vol_mult = max(0.25, min(1.50, float(target_ann_vol) / float(realized_ann_vol)))
+            scaled_req *= vol_mult
         return self.portfolio_allocator.evaluate_allocation(
             symbol=symbol,
-            requested_notional_usdt=requested_notional_usdt,
-            active_positions_notional=self.active_positions_notional(),
+            requested_notional_usdt=scaled_req,
+            active_positions_notional=self.active_positions_notional(mark_prices),
             is_reduce_only=is_reduce_only,
         )
 
@@ -124,7 +132,8 @@ class MultiSymbolBotManager:
             try:
                 is_flat = getattr(bot, "position_side", "FLAT") == "FLAT"
                 if is_flat:
-                    gate = self.evaluate_portfolio_gate(sym, requested_notional_usdt=1.0, is_reduce_only=False)
+                    est_notional = max(10.0, float(getattr(bot, "balance_usdt", 0.0) or 0.0) * 0.25)
+                    gate = self.evaluate_portfolio_gate(sym, requested_notional_usdt=est_notional, is_reduce_only=False)
                     if not gate.allowed:
                         results[sym] = {
                             "ok": True,

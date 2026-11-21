@@ -100,7 +100,19 @@ class BrainClient:
         self._shared_headers: dict[str, str] = {}
         self._auth_generation: int = 0
         self.authenticated = False
-        self._submitted: dict[str, dict[str, Any]] = {}
+        from collections import OrderedDict
+        self._submitted_max_size: int = 2000
+        self._submitted: OrderedDict[str, dict[str, Any]] = OrderedDict()
+
+
+    def _cache_submitted(self, key: str, result: dict[str, Any]) -> None:
+        self._submitted[key] = result
+        try:
+            self._submitted.move_to_end(key)
+            while len(self._submitted) > self._submitted_max_size:
+                self._submitted.popitem(last=False)
+        except Exception:
+            pass
 
     @property
     def session(self) -> requests.Session:

@@ -154,9 +154,26 @@ class StockScreener:
             if curr["Close"] < curr["BB_LOWER"]:
                 bearish_signals.append("跌破布林下軌 (超跌/弱勢主跌)")
 
+            def _snap_twse_tick(px: float) -> float:
+                p_val = max(float(px), 0.01)
+                if p_val < 10:
+                    tick = 0.01
+                elif p_val < 50:
+                    tick = 0.05
+                elif p_val < 100:
+                    tick = 0.1
+                elif p_val < 500:
+                    tick = 0.5
+                elif p_val < 1000:
+                    tick = 1.0
+                else:
+                    tick = 5.0
+                return round(round(p_val / tick) * tick, 2)
+
             atr = curr["ATR"] if not np.isnan(curr["ATR"]) else (curr["Close"] * 0.03)
-            suggested_stop_loss = round(curr["Close"] - (atr * PARAMS["atr_stop_loss_multiplier"]), 2)
-            suggested_target = round(curr["Close"] + (atr * PARAMS["atr_stop_loss_multiplier"] * 2), 2)
+            suggested_stop_loss = _snap_twse_tick(curr["Close"] - (atr * PARAMS["atr_stop_loss_multiplier"]))
+            suggested_target = _snap_twse_tick(curr["Close"] + (atr * PARAMS["atr_stop_loss_multiplier"] * 2))
+            adv5_twd = float((df["Close"] * df["Volume"]).tail(5).mean()) if len(df) >= 1 else 0.0
 
             matches = self.registry.search(query=symbol.split(".")[0], limit=1)
             meta = matches[0] if matches else {"name": symbol, "industry": "台股標的"}
@@ -187,7 +204,9 @@ class StockScreener:
                 "signals": (signals + (suit.get("reasons") or [])[:2]) if signals else (suit.get("reasons") or ["盤整觀望中"]),
                 "bearish_signals": bearish_signals,
                 "is_weak": len(bearish_signals) > 0 or (curr["MA5"] < curr["MA20"]),
-                "meets_threshold": blended_score >= 55 and suit.get("verdict_code") != "CAUTION",
+                "adv5_twd": round(adv5_twd, 0),
+                "is_disposition": bool(meta.get("is_disposition") or meta.get("is_full_delivery")),
+                "meets_threshold": blended_score >= 55 and suit.get("verdict_code") != "CAUTION" and (adv5_twd >= float(PARAMS.get("min_adv5_twd", 10_000_000.0)) if adv5_twd > 0 else True) and (not bool(meta.get("is_disposition") or meta.get("is_full_delivery"))),
                 "stop_loss": suggested_stop_loss,
                 "target_price": suggested_target,
                 "risk_reward_ratio": "1 : 2.0",
