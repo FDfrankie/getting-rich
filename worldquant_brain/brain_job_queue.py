@@ -139,7 +139,13 @@ class BrainSimulationJob:
 
 
 def compute_simulation_key(expression: str, settings: Mapping[str, Any] | None = None) -> str:
-    data = {"expression": expression.strip(), "settings": dict(settings or {})}
+    expr_clean = (expression or "").strip()
+    try:
+        from worldquant_brain.canonical_ast import parse_fastexpr
+        canon = parse_fastexpr(expr_clean).canonical_expression or expr_clean
+    except Exception:
+        canon = expr_clean
+    data = {"expression": canon, "settings": dict(settings or {})}
     raw = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -262,24 +268,46 @@ class BrainJobQueue:
                         _c.close()
 
         def _op(conn: sqlite3.Connection) -> None:
-            conn.execute(
-                """INSERT OR REPLACE INTO brain_jobs
-                (job_id, simulation_key, expression, settings_json, status, simulation_location, alpha_id, metrics_json, safe_error, created_at, priority, source, requested_by, manual_note, simulation_only, queued_at, claimed_by, claimed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    job.job_id,
-                    job.simulation_key,
-                    job.expression,
-                    json.dumps(job.settings, ensure_ascii=False),
-                    job.status.value if isinstance(job.status, BrainJobStatus) else str(job.status),
-                    job.simulation_location,
-                    job.alpha_id,
-                    json.dumps(job.metrics, ensure_ascii=False),
-                    job.safe_error, job.created_at, job.priority, job.source,
-                    job.requested_by, job.manual_note, int(job.simulation_only),
-                    job.queued_at, job.claimed_by, job.claimed_at,
-                ),
-            )
+            now_iso = datetime.now(timezone.utc).isoformat()
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(brain_jobs)")}
+            if "updated_at" in cols:
+                conn.execute(
+                    """INSERT OR REPLACE INTO brain_jobs
+                    (job_id, simulation_key, expression, settings_json, status, simulation_location, alpha_id, metrics_json, safe_error, created_at, updated_at, priority, source, requested_by, manual_note, simulation_only, queued_at, claimed_by, claimed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        job.job_id,
+                        job.simulation_key,
+                        job.expression,
+                        json.dumps(job.settings, ensure_ascii=False),
+                        job.status.value if isinstance(job.status, BrainJobStatus) else str(job.status),
+                        job.simulation_location,
+                        job.alpha_id,
+                        json.dumps(job.metrics, ensure_ascii=False),
+                        job.safe_error, job.created_at, now_iso, job.priority, job.source,
+                        job.requested_by, job.manual_note, int(job.simulation_only),
+                        job.queued_at, job.claimed_by, job.claimed_at,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """INSERT OR REPLACE INTO brain_jobs
+                    (job_id, simulation_key, expression, settings_json, status, simulation_location, alpha_id, metrics_json, safe_error, created_at, priority, source, requested_by, manual_note, simulation_only, queued_at, claimed_by, claimed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        job.job_id,
+                        job.simulation_key,
+                        job.expression,
+                        json.dumps(job.settings, ensure_ascii=False),
+                        job.status.value if isinstance(job.status, BrainJobStatus) else str(job.status),
+                        job.simulation_location,
+                        job.alpha_id,
+                        json.dumps(job.metrics, ensure_ascii=False),
+                        job.safe_error, job.created_at, job.priority, job.source,
+                        job.requested_by, job.manual_note, int(job.simulation_only),
+                        job.queued_at, job.claimed_by, job.claimed_at,
+                    ),
+                )
 
         try:
             execute_with_sqlite_retry(self.db_path, _op)
@@ -751,6 +779,17 @@ class BrainJobQueue:
                             }
                         self._store_simulation_cache(job)
                         self._persist_job(job)
+                        try:
+                            from worldquant_brain.shadow_writeback import record_simulation_shadow
+                            record_simulation_shadow(
+                                self.db_path,
+                                expression=job.expression,
+                                settings=job.settings,
+                                metrics=job.metrics,
+                                alpha_id=job.alpha_id,
+                            )
+                        except Exception as _shadow_exc:
+                            logger.debug("Shadow writeback failed for job %s: %s", job.job_id, _shadow_exc)
                     else:
                         with self._lock:
                             job.safe_error = "線上模擬完成但缺少有效 Sharpe 或 Fitness 指標"

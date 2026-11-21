@@ -79,18 +79,33 @@ def evaluate_pre_submission(
     fitness = _number(record, "fitness")
     turnover = _number(record, "turnover")
     self_corr = _number(record, "self_correlation")
+    prod_corr = _number(record, "production_correlation")
+    if prod_corr is None:
+        prod_corr = _number(record, "prod_correlation")
     max_weight = _number(record, "max_instrument_weight")
+    try:
+        delay_val = int(record.get("delay", 1))
+    except (TypeError, ValueError):
+        delay_val = 1
+    min_sharpe = max(p.minimum_sharpe, 2.00) if delay_val == 0 else p.minimum_sharpe
 
-    if sharpe is None or sharpe < p.minimum_sharpe:
+    if sharpe is None or sharpe < min_sharpe:
         reasons.append("SHARPE_NOT_PASSED")
     if fitness is None or fitness < p.minimum_fitness:
         reasons.append("FITNESS_NOT_PASSED")
-    if turnover is None or not (p.minimum_turnover <= turnover <= p.maximum_turnover):
+    if turnover is None:
         reasons.append("TURNOVER_NOT_PASSED")
+    else:
+        norm_to = turnover / 100.0 if 1.0 < turnover <= 70.0 else turnover
+        if not (p.minimum_turnover <= norm_to <= p.maximum_turnover):
+            reasons.append("TURNOVER_NOT_PASSED")
+    corr_cap = 0.50 if bool(record.get("is_power_pool")) else p.maximum_self_correlation
     if self_corr is None:
         reasons.append("SELF_CORRELATION_NOT_VERIFIED")
-    elif self_corr >= p.maximum_self_correlation:
+    elif self_corr >= corr_cap:
         reasons.append("SELF_CORRELATION_NOT_PASSED")
+    if prod_corr is not None and prod_corr >= 0.70:
+        reasons.append("PROD_CORRELATION_NOT_PASSED")
 
     official_checks_verified = bool(
         record.get("is_checks_passed") is True or str(record.get("is_check_status") or "").upper() == "PASS"

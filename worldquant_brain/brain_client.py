@@ -729,9 +729,15 @@ class BrainClient:
             if "CORRELATION" in str(r).upper() and str(r) not in reasons:
                 passed = False
                 reasons.append(str(r))
-        if self_corr is not None and self_corr >= 0.70:
+        corr_limit = 0.50 if getattr(self, "power_pool_mode", False) else 0.70
+        if self_corr is not None and self_corr >= corr_limit:
             passed = False
-            msg = f"SELF_CORRELATION={self_corr:.4f} >= 0.70"
+            msg = f"SELF_CORRELATION={self_corr:.4f} >= {corr_limit:.2f}"
+            if msg not in reasons:
+                reasons.append(msg)
+        if prod_corr is not None and prod_corr >= 0.70:
+            passed = False
+            msg = f"PROD_CORRELATION={prod_corr:.4f} >= 0.70"
             if msg not in reasons:
                 reasons.append(msg)
         return {
@@ -783,21 +789,27 @@ class BrainClient:
             logger.debug("worldquant_brain/brain_client.py:L716 suppressed exception: %s", _silent_exc)
 
         if not isinstance(getattr(resp, "status_code", None), int) or resp.status_code != 200 or not getattr(resp, "content", None):
-            if check_reasons:
-                return {"passed": False, "status": "SUBMISSION_CHECK_FAILED", "reasons": check_reasons}
-            return {"passed": True, "status": "SKIPPED_NO_DETAIL", "reasons": []}
+            return {
+                "passed": False,
+                "status": "SUBMISSION_CHECK_FAILED",
+                "reasons": check_reasons or [f"ALPHA_DETAIL_UNAVAILABLE_HTTP_{getattr(resp, 'status_code', 'ERR')}"],
+            }
 
         try:
             data = resp.json()
         except Exception:
-            if check_reasons:
-                return {"passed": False, "status": "SUBMISSION_CHECK_FAILED", "reasons": check_reasons}
-            return {"passed": True, "status": "SKIPPED_NON_JSON", "reasons": []}
+            return {
+                "passed": False,
+                "status": "SUBMISSION_CHECK_FAILED",
+                "reasons": check_reasons or ["ALPHA_DETAIL_NON_JSON"],
+            }
 
         if not isinstance(data, dict):
-            if check_reasons:
-                return {"passed": False, "status": "SUBMISSION_CHECK_FAILED", "reasons": check_reasons}
-            return {"passed": True, "status": "SKIPPED_NON_DICT", "reasons": []}
+            return {
+                "passed": False,
+                "status": "SUBMISSION_CHECK_FAILED",
+                "reasons": check_reasons or ["ALPHA_DETAIL_NON_DICT"],
+            }
 
         is_block = data.get("is") if isinstance(data.get("is"), dict) else data
         reasons: list[str] = list(check_reasons)
@@ -829,12 +841,18 @@ class BrainClient:
         turnover = self._number(is_block, "turnover")
         margin = self._number(is_block, "margin")
 
-        if sharpe is not None and sharpe < 1.25:
-            reasons.append(f"Sharpe {sharpe:.2f} < 1.25")
+        settings_blk = data.get("settings") if isinstance(data.get("settings"), dict) else {}
+        try:
+            delay_val = int(settings_blk.get("delay", 1))
+        except (TypeError, ValueError):
+            delay_val = 1
+        min_sharpe = 2.00 if delay_val == 0 else 1.25
+        if sharpe is not None and sharpe < min_sharpe:
+            reasons.append(f"Sharpe {sharpe:.2f} < {min_sharpe:.2f} (delay={delay_val})")
         if fitness is not None and fitness < 1.0:
             reasons.append(f"Fitness {fitness:.2f} < 1.00")
         if turnover is not None:
-            norm_to = turnover / 100.0 if 2.0 < turnover <= 70.0 else turnover
+            norm_to = turnover / 100.0 if 1.0 < turnover <= 70.0 else turnover
             if not (0.01 <= norm_to <= 0.70):
                 reasons.append(f"Turnover {norm_to:.4f} outside [0.01, 0.70]")
         if margin is not None:

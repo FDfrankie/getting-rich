@@ -298,3 +298,11 @@ def ensure_schema_from_ddl(
         if added:
             migrated[table_name] = added
     return migrated
+
+
+def open_sqlite_wal(db_path: str | Path, *, timeout: float = 30.0) -> sqlite3.Connection:
+    """Open a SQLite connection configured with WAL mode, NORMAL sync, and busy_timeout."""
+    conn = sqlite3.connect(str(db_path), timeout=timeout)
+    conn.row_factory = sqlite3.Row
+    _configure_connection(conn, str(db_path), timeout=timeout)
+    return conn

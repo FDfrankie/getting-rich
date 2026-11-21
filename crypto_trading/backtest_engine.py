@@ -101,7 +101,11 @@ class BacktestEngine:
         slippage_rate = self.fee_schedule.slippage_bps / 10000.0
         slippage_costs = turnover * slippage_rate
         # 4.5 資金費率成本 (Funding Cost)
-        funding_costs = strategy_pos.abs() * self.fee_schedule.funding_rate_per_bar
+        if "funding_rate" in df.columns:
+            _fr = pd.to_numeric(df["funding_rate"], errors="coerce").fillna(0.0)
+            funding_costs = strategy_pos * _fr
+        else:
+            funding_costs = strategy_pos * self.fee_schedule.funding_rate_per_bar
 
         # 總摩擦成本
         total_friction_cost = taker_costs + maker_costs + spread_costs + slippage_costs + funding_costs
@@ -142,8 +146,11 @@ class BacktestEngine:
         sharpe = float((mean_net / (std_net + 1e-9)) * np.sqrt(annual_factor))
 
         downside_returns = net_returns[net_returns < 0]
-        downside_std = downside_returns.std()
-        sortino = float((mean_net / (downside_std + 1e-9)) * np.sqrt(annual_factor))
+        downside_std = float(downside_returns.std()) if len(downside_returns) >= 2 else 0.0
+        if not np.isfinite(downside_std) or downside_std <= 0.0:
+            sortino = 0.0 if mean_net <= 0 else float(sharpe)
+        else:
+            sortino = float((mean_net / (downside_std + 1e-9)) * np.sqrt(annual_factor))
 
         calmar = float(net_return_pct / (abs(max_drawdown) + 1e-9))
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,30 +25,61 @@ class AuditLog:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = str(db_path)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS audit_events (
-                    event_id TEXT PRIMARY KEY,
-                    occurred_at TEXT NOT NULL,
-                    component TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    actor TEXT,
-                    correlation_id TEXT,
-                    entity_type TEXT,
-                    entity_id TEXT,
-                    outcome TEXT NOT NULL,
-                    details_json TEXT NOT NULL
-                )
-            """)
+        _audit_ddl = """
+            CREATE TABLE IF NOT EXISTS audit_events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL DEFAULT '',
+                occurred_at TEXT NOT NULL DEFAULT '',
+                component TEXT NOT NULL DEFAULT '',
+                action TEXT NOT NULL DEFAULT '',
+                actor TEXT NOT NULL DEFAULT '',
+                correlation_id TEXT,
+                entity_type TEXT,
+                entity_id TEXT,
+                outcome TEXT NOT NULL DEFAULT '',
+                previous_state TEXT,
+                next_state TEXT,
+                reason TEXT,
+                payload_json TEXT,
+                details_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT ''
+            )
+        """
+        from worldquant_brain.sqlite_resilience import open_sqlite_wal
+        with open_sqlite_wal(self.db_path, timeout=30.0) as conn:
+            conn.execute(_audit_ddl)
+            ensure_schema_from_ddl(conn, _audit_ddl)
 
     def write(self, *, component: str, action: str, outcome: str, details: Mapping[str, Any] | None = None,
               actor: str | None = None, correlation_id: str | None = None,
               entity_type: str | None = None, entity_id: str | None = None) -> str:
         event_id = uuid.uuid4().hex
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (event_id, datetime.now(timezone.utc).isoformat(), component, action, actor,
-                  correlation_id, entity_type, entity_id, outcome,
-                  json.dumps(scrub(details or {}), sort_keys=True, ensure_ascii=False)))
+        now_iso = datetime.now(timezone.utc).isoformat()
+        details_str = json.dumps(scrub(details or {}), sort_keys=True, ensure_ascii=False)
+        from worldquant_brain.sqlite_resilience import open_sqlite_wal
+        with open_sqlite_wal(self.db_path, timeout=30.0) as conn:
+            conn.execute(
+                """
+                INSERT INTO audit_events (
+                    event_id, event_type, occurred_at, component, action, actor,
+                    correlation_id, entity_type, entity_id, outcome,
+                    payload_json, details_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    f"{component}.{action}",
+                    now_iso,
+                    component,
+                    action,
+                    actor or "",
+                    correlation_id,
+                    entity_type,
+                    entity_id,
+                    outcome,
+                    details_str,
+                    details_str,
+                    now_iso,
+                ),
+            )
         return event_id

@@ -34,9 +34,8 @@ class AlphaVault:
     def _get_connection(self) -> sqlite3.Connection:
         if self._shared_conn is not None:
             return self._shared_conn
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        from worldquant_brain.sqlite_resilience import open_sqlite_wal
+        return open_sqlite_wal(self.db_path, timeout=30.0)
 
     def _init_db(self):
         with self._get_connection() as conn:
@@ -92,11 +91,12 @@ class AlphaVault:
 
     @staticmethod
     def _canonical_expression_hash(expression: str) -> str:
+        cleaned = " ".join(str(expression or "").strip().split())
         try:
             from worldquant_brain.canonical_ast import parse_fastexpr
-            canon = parse_fastexpr(expression).canonical_expression or str(expression or "").strip()
+            canon = parse_fastexpr(cleaned).canonical_expression or cleaned
         except Exception:
-            canon = str(expression or "").strip()
+            canon = cleaned
         return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
     @staticmethod
