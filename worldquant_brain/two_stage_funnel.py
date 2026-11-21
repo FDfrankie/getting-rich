@@ -31,8 +31,8 @@ from worldquant_brain.multi_sim_client import DEFAULT_SIM_SETTINGS
 
 STAGE1_PROBES: tuple[tuple[str, str], ...] = (
     ("rank_bf", "rank(ts_backfill({f}, 20))"),
-    ("zscore60", "ts_zscore(ts_backfill({f}, 20), 60)"),
-    ("grp_zscore", "group_zscore(ts_backfill({f}, 20), industry)"),
+    ("zscore60", "winsorize(ts_zscore(ts_backfill({f}, 20), 60), std=4)"),
+    ("grp_zscore", "winsorize(group_zscore(ts_backfill({f}, 20), industry), std=4)"),
     ("grp_delta20", "group_rank(ts_delta(ts_backfill({f}, 20), 20), subindustry)"),
     ("tsrank120", "winsorize(ts_rank(ts_backfill({f}, 20), 120), std=4)"),
     ("decay5_bf", "winsorize(rank(ts_decay_linear(ts_backfill({f}, 20), 5)), std=4)"),
@@ -273,7 +273,11 @@ def classify_verdict(
         return "REJECTED", ";".join(reasons)
     if len(failed_checks) > max_fc:
         return "REJECTED", ";".join(reasons)
-    if abs(sh) < eff_nm_sharpe:
+    # P22 turnover-aware rescue: high-turnover raw signals (0.25 < to <= 0.78) have strong decay leverage
+    # (decay reduces turnover and lifts Fitness by ~1.3x-1.6x), so allow slightly lower Stage-1 Sharpe/Fitness.
+    high_to_leverage = (to > 0.25) and (delay != 0) and (near_miss_min_fitness is None)
+    adaptive_nm_sharpe = min(eff_nm_sharpe, 1.05) if high_to_leverage else eff_nm_sharpe
+    if abs(sh) < adaptive_nm_sharpe:
         return "REJECTED", ";".join(reasons)
     # When Sharpe is strongly negative (e.g. -1.48), BRAIN Fitness and Margin are also negative;
     # evaluate their sign-flipped magnitude so Stage-2 negation (-1 * expr) can rescue them.
@@ -284,7 +288,10 @@ def classify_verdict(
         if near_miss_min_fitness is None
         else near_miss_min_fitness
     )
-    min_nm_fit = max(0.82, base_nm_fit - 0.06) if abs(sh) >= eff_min_sharpe else base_nm_fit
+    if high_to_leverage:
+        min_nm_fit = min(base_nm_fit, 0.72)
+    else:
+        min_nm_fit = max(0.82, base_nm_fit - 0.06) if abs(sh) >= eff_min_sharpe else base_nm_fit
     if eff_fit < min_nm_fit:
         return "REJECTED", ";".join(reasons)
     nm_min_to = float(
@@ -568,7 +575,8 @@ class TwoStageAlphaFunnel:
         if not expr:
             return 0
         sharpe = result.get("sharpe")
-        if sharpe is not None and float(sharpe) < 0:
+        is_neg_sharpe = sharpe is not None and float(sharpe) < 0
+        if is_neg_sharpe:
             expr = _negate_expression(expr)
         base_sett = dict(self.base_settings)
         if isinstance(result.get("settings"), Mapping):
@@ -577,6 +585,9 @@ class TwoStageAlphaFunnel:
         src_to = result.get("turnover")
 
         candidates: list[tuple[str, dict[str, Any]]] = []
+        # P22: Always try pure sign-flipped -(expr) with original settings FIRST before any mutation
+        if is_neg_sharpe:
+            candidates.append((expr, dict(base_sett)))
         src_margin = result.get("margin")
         norm_margin = (
             float(src_margin) / 10000.0
@@ -595,6 +606,10 @@ class TwoStageAlphaFunnel:
             candidates.append((f"hump({expr}, hump=0.01)", dict(base_sett, truncation=0.06)))
             for trunc in (0.05, 0.06):
                 candidates.append((f"winsorize({expr}, std=3)", dict(base_sett, truncation=trunc)))
+        if "2Y_SHARPE" in reason or "LOW_2Y" in reason:
+            candidates.append((expr, dict(base_sett, decay=2)))
+            for sw_expr in _log_window_variants(expr, prefer_larger=False):
+                candidates.append((sw_expr, dict(base_sett, decay=2)))
         base_neut = str(base_sett.get("neutralization") or "").upper()
         base_decay = int(base_sett.get("decay", 4) or 0)
         base_trunc = round(float(base_sett.get("truncation", 0.08) or 0.08), 4)
@@ -743,8 +758,23 @@ class TwoStageAlphaFunnel:
                     prefix = _field_family_prefix(field)
                     if prefix and self._weak_prefix_counts.get((ds_id, prefix), 0) >= self._prefix_early_stop_limit:
                         continue
-                    expr = _format_probe(template, field)
+                    ds_low = str(ds_id or "").lower()
+                    if probe_name == "cap_norm_gauss" and not any(
+                        k in ds_low for k in ("fundamental", "fnd", "balance", "income", "cashflow")
+                    ):
+                        continue
+                    eff_template = (
+                        template.replace("ts_backfill({f}, 20)", "ts_backfill({f}, 63)")
+                        if ("fundamental" in ds_low or ds_low.startswith("fnd"))
+                        else template
+                    )
+                    expr = _format_probe(eff_template, field)
                     sett = dict(self.base_settings)
+                    if any(
+                        k in ds_low
+                        for k in ("fundamental", "fnd", "analyst", "anl", "news", "nws", "social", "option", "opt", "model", "mdl", "sentiment")
+                    ):
+                        sett["nanHandling"] = "ON"
                     sh = _sim_hash(expr, sett)
                     if self._is_tried(conn, sh):
                         continue
