@@ -268,3 +268,21 @@ def precision_repair_near_miss(
             })
 
     return repairs
+
+
+def maybe_invert_negative_sharpe_candidate(
+    expression: str,
+    metrics: dict[str, Any],
+    *,
+    min_abs_sharpe: float = 1.25,
+    max_turnover: float = 0.65,
+) -> str | None:
+    """Flip strongly negative-Sharpe alphas (-1 * expr) to salvage inverted economic signals."""
+    sharpe = float(metrics.get("sharpe") or 0.0)
+    turnover = float(metrics.get("turnover") or 1.0)
+    if sharpe <= -abs(min_abs_sharpe) and turnover <= max_turnover:
+        clean = expression.strip()
+        if clean.startswith("-1 * (") and clean.endswith(")"):
+            return clean[6:-1].strip()
+        return f"-1 * ({clean})"
+    return None

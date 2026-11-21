@@ -45,6 +45,7 @@ except ImportError:
 from worldquant_brain.alpha_vault import AlphaVault
 from worldquant_brain.brain_client import BrainClient
 from worldquant_brain.multi_sim_client import fetch_available_datasets, fetch_dataset_fields, simulate_multi_alpha
+from worldquant_brain.local_cs_screener import LocalCrossSectionalScreener, is_price_volume_only
 from worldquant_brain.two_stage_funnel import TwoStageAlphaFunnel, classify_verdict
 
 DEFAULT_DATASETS: tuple[str, ...] = (
@@ -131,9 +132,16 @@ def run_headless_miner(
     submit_immediately = os.getenv("BRAIN_SUBMIT_IMMEDIATELY", "false").lower() == "true"
     flush_hour = int(os.getenv("BRAIN_DAILY_FLUSH_HOUR", "22") or "22")
     max_daily = int(os.getenv("BRAIN_MAX_DAILY_SUBMISSIONS", "2") or "2")
+    enable_local_pv = os.getenv("BRAIN_LOCAL_PV_SCREENING", "true").lower() == "true"
+    allow_pv_dl = os.getenv("BRAIN_LOCAL_PV_AUTO_DOWNLOAD", "false").lower() == "true"
+    local_screener = LocalCrossSectionalScreener() if enable_local_pv else None
+    pv_panel_ready = bool(local_screener and local_screener.has_panel())
+    if local_screener and not pv_panel_ready and allow_pv_dl:
+        pv_panel_ready = local_screener.load_or_fetch_panel(allow_download=True) is not None
     print(
         f"[MINER_CONFIG] vault_db={vault.db_path} auto_submit={auto_submit} "
-        f"submit_immediately={submit_immediately} flush_hour={flush_hour} max_daily={max_daily}"
+        f"submit_immediately={submit_immediately} flush_hour={flush_hour} max_daily={max_daily} "
+        f"local_pv_screener={enable_local_pv} pv_panel_ready={pv_panel_ready}"
     )
     _last_flush_wait_hour: dict[str, int | None] = {"hour": None}
 
@@ -287,10 +295,20 @@ def run_headless_miner(
                 exhausted = False
                 if time.monotonic() >= cooldown_until:
                     while len(in_flight) < eff_workers and time.monotonic() < deadline:
-                        batch = funnel.next_batch(datasets_fields, batch_size=eff_batch)
+                        raw_size = eff_batch * 4 if (local_screener and pv_panel_ready) else eff_batch
+                        batch = funnel.next_batch(datasets_fields, batch_size=raw_size)
                         if not batch:
                             exhausted = True
                             break
+                        if local_screener and pv_panel_ready and any(is_price_volume_only(str(x.get("expression") or "")) for x in batch):
+                            screened = local_screener.screen_batch(batch, top_k=eff_batch, allow_download=False)
+                            if screened:
+                                print(f"[LOCAL_PV_SCREEN] Filtered {len(batch)} -> {len(screened)} top PV/mixed candidates")
+                                batch = screened
+                            else:
+                                batch = batch[:eff_batch]
+                        elif len(batch) > eff_batch:
+                            batch = batch[:eff_batch]
                         stats["mined"] += len(batch)
                         stats["batches"] += 1
                         stage_tag = batch[0].get("stage", "STAGE1")
@@ -330,7 +348,7 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=int(os.getenv("BRAIN_MULTI_SIM_WORKERS", _default_workers)))
     parser.add_argument("--batch-size", type=int, default=int(os.getenv("BRAIN_MULTI_SIM_BATCH_SIZE", _default_batch)))
     parser.add_argument("--datasets", type=str, default="")
-    parser.add_argument("--seed-sharpe", type=float, default=0.90)
+    parser.add_argument("--seed-sharpe", type=float, default=float(os.getenv("BRAIN_SEED_SHARPE_THRESHOLD", "1.05") or "1.05"))
     args = parser.parse_args()
     ds_list = [d.strip() for d in args.datasets.split(",") if d.strip()] or None
     run_headless_miner(

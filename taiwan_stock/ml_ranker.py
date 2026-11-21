@@ -103,7 +103,7 @@ class TaiwanStockMLRanker:
         combined = pd.concat(panels, axis=0, sort=False)
         # 關鍵：跨股票合併後，依日期索引進行全域穩定排序。
         combined = combined.sort_index(kind="mergesort")
-        for col in ("mom_20d", "hist_vol_20", "vol_surge", "fip_20d"):
+        for col in ("mom_20d", "hist_vol_20", "vol_surge", "fip_20d", "rev_yoy_pct", "total_inst_net_shares", "margin_change_lots"):
             if col in combined.columns:
                 combined[f"cs_rank_{col}"] = combined.groupby(level=0)[col].rank(pct=True)
         if self.TARGET_COLUMN in combined.columns:
@@ -164,6 +164,7 @@ class TaiwanStockMLRanker:
     def _build_model(self) -> Any:
         if self.model_type == "lightgbm" and lgb is not None:
             return lgb.LGBMRegressor(
+                objective="huber",
                 n_estimators=300,
                 learning_rate=0.03,
                 num_leaves=31,

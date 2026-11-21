@@ -44,6 +44,8 @@ STAGE1_PROBES: tuple[tuple[str, str], ...] = (
     ("last_revision", "rank(ts_backfill({f}, 20) - last_diff_value(ts_backfill({f}, 20), 252))"),
     ("ts_av_diff60", "quantile(ts_av_diff(ts_backfill({f}, 20), 60), driver=\"gaussian\")"),
     ("reg_resid60", "rank(ts_regression(ts_backfill({f}, 20), returns, 60, lag=0, rettype=0))"),
+    ("reg_neut_cap", "regression_neut(rank(ts_backfill({f}, 20)), log(cap + 1.0))"),
+    ("trade_when_vol", "trade_when(volume > ts_mean(volume, 20), group_neutralize(winsorize(rank(ts_backfill({f}, 20)), std=4), industry), -1)"),
 )
 
 
@@ -72,6 +74,83 @@ _UNAVAILABLE_NEUT_RE = re.compile(
 )
 STAGE2_DECAYS: tuple[int, ...] = (0, 4, 8, 15)
 STAGE2_TRUNCATIONS: tuple[float, ...] = (0.05, 0.08, 0.10)
+
+
+_LOG_WINDOWS: tuple[int, ...] = (5, 20, 60, 120, 252)
+_TS_WIN_RE = re.compile(r"\b(ts_(?:zscore|rank|delta|mean|std_dev|av_diff|decay_linear|corr|regression)\s*\([^()]*?,\s*)(\d+)(\s*(?:,|\)))")
+_FIELD_IN_BF_RE = re.compile(r"ts_backfill\(\s*(?:vec_avg\()?([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def _field_family_prefix(raw_field: str) -> str:
+    """Group related fields (e.g., news18_sent_7d / news18_sent_30d) by prefix for early-stopping."""
+    f = raw_field[4:] if raw_field.startswith("VEC:") else raw_field
+    parts = [tok for tok in f.lower().split("_") if tok]
+    if len(parts) >= 2:
+        return "_".join(parts[:2])
+    return parts[0] if parts else ""
+
+
+def _extract_primary_field(expression: str) -> str:
+    m = _FIELD_IN_BF_RE.search(expression or "")
+    return m.group(1) if m else ""
+
+
+_TS_OP_HEAD_RE = re.compile(r"\b(ts_(?:zscore|rank|delta|mean|std_dev|av_diff|decay_linear|corr|regression))\s*\(")
+
+
+def _log_window_variants(expression: str, *, prefer_larger: bool = False) -> list[str]:
+    """Generate integer-only logarithmic window jump variants for nested ts_* operators."""
+    expr = expression or ""
+    m = _TS_OP_HEAD_RE.search(expr)
+    if not m:
+        return []
+    # Find matching closing paren for this ts_* call
+    depth = 1
+    idx = m.end()
+    last_comma = -1
+    while idx < len(expr) and depth > 0:
+        ch = expr[idx]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        elif ch == "," and depth == 1:
+            last_comma = idx
+        idx += 1
+    if depth != 0 or last_comma < 0:
+        return []
+    # Scan top-level comma-separated arguments after first comma for an integer literal window
+    args_span = expr[m.end() : idx]
+    win_start = win_end = cur_w = -1
+    cur_depth = 0
+    seg_start = 0
+    for pos, ch in enumerate(args_span + ","):
+        if ch == "(":
+            cur_depth += 1
+        elif ch == ")":
+            cur_depth -= 1
+        elif ch == "," and cur_depth == 0:
+            if seg_start > 0:
+                raw_arg = args_span[seg_start:pos]
+                stripped = raw_arg.strip()
+                if stripped.isdigit():
+                    lead = len(raw_arg) - len(raw_arg.lstrip())
+                    win_start = m.end() + seg_start + lead
+                    win_end = win_start + len(stripped)
+                    cur_w = int(stripped)
+                    break
+            seg_start = pos + 1
+    if cur_w < 0:
+        return []
+    targets = [w for w in _LOG_WINDOWS if w != cur_w and (not prefer_larger or w > cur_w)]
+    out: list[str] = []
+    for w in targets[:3]:
+        replaced = expr[:win_start] + str(w) + expr[win_end:]
+        if replaced != expr:
+            out.append(replaced)
+    return out
 
 _TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -204,12 +283,36 @@ class TwoStageAlphaFunnel:
         self,
         db_path: str | Path,
         *,
-        seed_sharpe_threshold: float = 0.90,
+        seed_sharpe_threshold: float | None = None,
         base_settings: Mapping[str, Any] | None = None,
         repulsion_jaccard: float = 0.92,
+        max_stage2_variants_per_seed: int | None = None,
+        stage1_to_stage2_ratio: int | None = None,
     ) -> None:
         self.db_path = str(db_path)
-        self.seed_sharpe_threshold = float(seed_sharpe_threshold)
+        default_thresh = float(os.getenv("BRAIN_SEED_SHARPE_THRESHOLD", "1.05") or "1.05")
+        self.seed_sharpe_threshold = float(default_thresh if seed_sharpe_threshold is None else seed_sharpe_threshold)
+        self.max_stage2_variants_per_seed = max(
+            1,
+            int(
+                os.getenv("BRAIN_MAX_STAGE2_VARIANTS", "5") or "5"
+                if max_stage2_variants_per_seed is None
+                else max_stage2_variants_per_seed
+            ),
+        )
+        self.stage1_to_stage2_ratio = max(
+            0,
+            int(
+                os.getenv("BRAIN_STAGE1_PER_STAGE2", "2") or "2"
+                if stage1_to_stage2_ratio is None
+                else stage1_to_stage2_ratio
+            ),
+        )
+        self._stage1_batches_since_stage2: int = 0
+        self._weak_prefix_counts: dict[tuple[str, str], int] = {}
+        self._prefix_early_stop_limit: int = max(2, int(os.getenv('BRAIN_PREFIX_EARLY_STOP', '3') or '3'))
+        self._strong_fields: dict[str, dict[str, float]] = {}
+        self._paired_fields: set[tuple[str, str, str]] = set()
         self.repulsion_jaccard = float(repulsion_jaccard)
         self.base_settings = dict(DEFAULT_SIM_SETTINGS)
         if base_settings:
@@ -439,11 +542,20 @@ class TwoStageAlphaFunnel:
         src_to = result.get("turnover")
 
         candidates: list[tuple[str, dict[str, Any]]] = []
-        # Target 12.5% turnover sweet spot (Fitness floor) and Sub-Universe / Weight robustness via hump()
+        src_margin = result.get("margin")
+        norm_margin = (
+            float(src_margin) / 10000.0
+            if (src_margin is not None and float(src_margin) > 0.5)
+            else (float(src_margin) if src_margin is not None else None)
+        )
+        # Diagnostic tuning: target the specific bottleneck instead of blind grid search
         if "TURNOVER" in reason or "FITNESS" in reason or (src_to is not None and float(src_to) > 0.15):
+            for lw_expr in _log_window_variants(expr, prefer_larger=True):
+                candidates.append((lw_expr, dict(base_sett)))
             candidates.append((f"hump(winsorize({expr}, std=4), hump=0.01)", dict(base_sett, decay=4)))
             candidates.append((f"ts_decay_linear({expr}, 8)", dict(base_sett, decay=6)))
-            candidates.append((f"winsorize(ts_mean({expr}, 5), std=4)", dict(base_sett, decay=6)))
+        if "MARGIN" in reason or (norm_margin is not None and norm_margin < 0.0010):
+            candidates.append((f"signed_power(rank({expr}) - 0.5, 2)", dict(base_sett, decay=0)))
         if "WEIGHT" in reason or "SUB_UNIVERSE" in reason:
             candidates.append((f"hump({expr}, hump=0.01)", dict(base_sett, truncation=0.06)))
             for trunc in (0.05, 0.06):
@@ -471,9 +583,12 @@ class TwoStageAlphaFunnel:
                 continue
             candidates.append((expr, dict(base_sett, truncation=trunc)))
 
+        priority_sharpe = abs(float(sharpe)) if sharpe is not None else 0.0
         added = 0
         with self._connect() as conn:
             for c_expr, c_sett in candidates:
+                if added >= self.max_stage2_variants_per_seed:
+                    break
                 sh = _sim_hash(c_expr, c_sett)
                 if self._is_tried(conn, sh):
                     continue
@@ -485,9 +600,66 @@ class TwoStageAlphaFunnel:
                         "stage": "STAGE2",
                         "dataset_id": ds_id,
                         "probe": str(result.get("probe") or ""),
+                        "_priority_sharpe": priority_sharpe,
                     }
                 )
                 added += 1
+        if self._session_refinement_queue:
+            self._session_refinement_queue.sort(
+                key=lambda item: float(item.get("_priority_sharpe", 0.0)),
+                reverse=True,
+            )
+            if len(self._session_refinement_queue) > 60:
+                del self._session_refinement_queue[60:]
+        return added
+
+    def _maybe_enqueue_pairwise_synergy(self, ds_id: str, new_field: str, new_abs_sharpe: float) -> int:
+        """Pair newly discovered strong field with the strongest distinct peer field in the same dataset."""
+        ds_strong = self._strong_fields.get(ds_id) or {}
+        peers = sorted(
+            ((sc, f) for f, sc in ds_strong.items() if f != new_field),
+            reverse=True,
+        )
+        if not peers:
+            return 0
+        peer_sh, peer_field = peers[0]
+        pair_key = (ds_id, min(new_field, peer_field), max(new_field, peer_field))
+        if pair_key in self._paired_fields:
+            return 0
+        self._paired_fields.add(pair_key)
+
+        synergy_exprs = [
+            f"rank(ts_backfill({new_field}, 20)) - rank(ts_backfill({peer_field}, 20))",
+            f"rank(ts_regression(ts_backfill({new_field}, 20), ts_backfill({peer_field}, 20), 60, lag=0, rettype=0))",
+            f"winsorize(rank(divide(ts_backfill({new_field}, 20), ts_std_dev(ts_backfill({peer_field}, 20), 20) + 1e-6)), std=4)",
+        ]
+        prio = max(new_abs_sharpe, peer_sh) + 0.05
+        added = 0
+        with self._connect() as conn:
+            for expr in synergy_exprs:
+                sett = dict(self.base_settings)
+                sh = _sim_hash(expr, sett)
+                if self._is_tried(conn, sh):
+                    continue
+                self._mark_tried(conn, sh, expr, sett, "STAGE2", ds_id)
+                self._session_refinement_queue.append(
+                    {
+                        "expression": expr,
+                        "settings": sett,
+                        "stage": "STAGE2",
+                        "dataset_id": ds_id,
+                        "probe": "pairwise_synergy",
+                        "_priority_sharpe": prio,
+                    }
+                )
+                added += 1
+        if added and self._session_refinement_queue:
+            self._session_refinement_queue.sort(
+                key=lambda item: float(item.get("_priority_sharpe", 0.0)),
+                reverse=True,
+            )
+            if len(self._session_refinement_queue) > 60:
+                del self._session_refinement_queue[60:]
         return added
 
     def next_stage2_batch(self, batch_size: int = 8) -> list[dict[str, Any]]:
@@ -514,10 +686,15 @@ class TwoStageAlphaFunnel:
         *,
         batch_size: int = 8,
     ) -> list[dict[str, Any]]:
-        """Return immediate session near-miss refinements first; otherwise RL-guided Stage-1 batch."""
-        s2 = self.next_stage2_batch(batch_size=batch_size)
-        if s2:
-            return s2
+        """Interleave Stage-1 exploration and priority-sorted Stage-2 refinement so Stage-2 never starves discovery."""
+        if (
+            self._session_refinement_queue
+            and self._stage1_batches_since_stage2 >= self.stage1_to_stage2_ratio
+        ):
+            s2 = self.next_stage2_batch(batch_size=batch_size)
+            if s2:
+                self._stage1_batches_since_stage2 = 0
+                return s2
 
         out: list[dict[str, Any]] = []
         with self._connect() as conn:
@@ -526,7 +703,11 @@ class TwoStageAlphaFunnel:
             for ds_id, probe_name, template in arms:
                 for field in datasets_fields.get(ds_id, ()):
                     if len(out) >= batch_size:
+                        self._stage1_batches_since_stage2 += 1
                         return out
+                    prefix = _field_family_prefix(field)
+                    if prefix and self._weak_prefix_counts.get((ds_id, prefix), 0) >= self._prefix_early_stop_limit:
+                        continue
                     expr = _format_probe(template, field)
                     sett = dict(self.base_settings)
                     sh = _sim_hash(expr, sett)
@@ -546,6 +727,12 @@ class TwoStageAlphaFunnel:
                             "field": field,
                         }
                     )
+        if out:
+            self._stage1_batches_since_stage2 += 1
+            return out
+        if self._session_refinement_queue:
+            self._stage1_batches_since_stage2 = 0
+            return self.next_stage2_batch(batch_size=batch_size)
         return out
 
     def mark_submitted(
@@ -733,6 +920,28 @@ class TwoStageAlphaFunnel:
                 else:
                     rejected += 1
                     self._update_rl_arm(conn, ds_id, probe, -0.4)
+
+        # Update prefix early-stop stats & collect strong fields for pairwise synergy
+        for r in results:
+            if str(r.get("stage") or "STAGE1") != "STAGE1":
+                continue
+            ds_id = str(r.get("dataset_id") or "")
+            fld = _extract_primary_field(str(r.get("expression") or ""))
+            sh_val = r.get("sharpe")
+            if not ds_id or not fld or sh_val is None:
+                continue
+            abs_sh = abs(float(sh_val))
+            pref = _field_family_prefix(fld)
+            if pref:
+                if abs_sh < 0.30:
+                    self._weak_prefix_counts[(ds_id, pref)] = self._weak_prefix_counts.get((ds_id, pref), 0) + 1
+                elif abs_sh >= 0.70:
+                    self._weak_prefix_counts[(ds_id, pref)] = 0
+            if abs_sh >= 0.85:
+                ds_strong = self._strong_fields.setdefault(ds_id, {})
+                if abs_sh > ds_strong.get(fld, 0.0):
+                    ds_strong[fld] = abs_sh
+                self._maybe_enqueue_pairwise_synergy(ds_id, fld, abs_sh)
 
         for nm_res, nm_reason in near_misses_to_queue:
             self._enqueue_immediate_refinement(nm_res, nm_reason)

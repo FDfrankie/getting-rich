@@ -37,6 +37,13 @@ def _wrap_hygiene(
     inner = core
     if transform == "TS_REGRESSION_RESID" and "ts_regression" not in inner:
         inner = f"ts_regression(rank({inner}), returns, {_w_med()}, rettype=0)"
+    elif transform == "REGRESSION_NEUT_CAP" and "regression_neut" not in inner:
+        inner = f"regression_neut(rank({inner}), log(cap + 1.0))"
+    elif transform == "REGRESSION_NEUT_VOL" and "regression_neut" not in inner:
+        inner = f"regression_neut(rank({inner}), ts_std_dev(returns, 20))"
+    elif transform == "TRADE_WHEN_VOL_EVENT" and "trade_when" not in inner:
+        base_sig = f"group_neutralize(winsorize(rank({inner}), std={std_v}), {g})"
+        return f"trade_when(volume > ts_mean(volume, 20), {base_sig}, -1)"
     elif transform == "ZSCORE_RANK" and "ts_zscore" not in inner:
         inner = f"ts_zscore({inner}, {_w_med()})"
     elif transform == "SUB_UNIVERSE_LIQ_BOOST":
@@ -231,6 +238,46 @@ _TEMPLATE_FAMILIES: dict[str, list[Callable[..., tuple[str, str]]]] = {
         lambda grp=None, transform=None: (
             "VolLiq_UpDown_VolRatio",
             _wrap_hygiene(f"-1 * ts_corr(abs(returns), volume, {_w_short()}) * rank(ts_av_diff(close, {_w_med()}))", grp=grp, transform=transform),
+        ),
+    ],
+    "OPTIONS_ORTHOGONAL": [
+        lambda grp=None, transform=None: (
+            "Opt_IV_RV_Spread",
+            _wrap_hygiene(
+                "implied_volatility_call_120 / (parkinson_volatility_120 + 0.001)",
+                grp=grp,
+                transform=transform or "REGRESSION_NEUT_CAP",
+            ),
+        ),
+        lambda grp=None, transform=None: (
+            "Opt_CP_Skew_TradeWhen",
+            f"trade_when(pcr_oi_270 < 1, group_neutralize(rank(implied_volatility_call_60 - implied_volatility_put_60), {grp or _grp()}), -1)",
+        ),
+        lambda grp=None, transform=None: (
+            "Opt_IV_Delta_Spread",
+            _wrap_hygiene(
+                f"ts_delta(implied_volatility_call_60, {_w_short()}) - ts_delta(implied_volatility_put_60, {_w_short()})",
+                grp=grp,
+                transform=transform or "REGRESSION_NEUT_VOL",
+            ),
+        ),
+    ],
+    "FUND_ANALYST_ORTHO": [
+        lambda grp=None, transform=None: (
+            "Retained_Earnings_PerShare_Delta",
+            _wrap_hygiene(
+                f"ts_delta(retained_earnings / (sharesout + 0.001), {_w_med()})",
+                grp=grp,
+                transform=transform or "REGRESSION_NEUT_CAP",
+            ),
+        ),
+        lambda grp=None, transform=None: (
+            "OpInc_Over_Close_Ortho",
+            _wrap_hygiene(
+                f"ts_rank(operating_income / (close + 0.001), {_w_long()})",
+                grp=grp,
+                transform=transform or "REGRESSION_NEUT_VOL",
+            ),
         ),
     ],
 }
