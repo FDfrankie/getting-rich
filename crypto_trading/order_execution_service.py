@@ -113,7 +113,7 @@ class OrderExecutionService:
         for pos in targets:
             sym = str(pos.get("symbol") or symbol or "BTC/USDT")
             qty = Decimal(str(pos.get("contracts")))
-            side = "SELL" if str(pos.get("side", "LONG")).upper() == "LONG" else "BUY"
+            side = "SELL" if str(pos.get("side", "LONG")).upper() in {"LONG", "BUY"} else "BUY"
             try:
                 norm_q = self.instrument.normalize_quantity(qty)
                 res = self.order_manager.execute_with_idempotency(

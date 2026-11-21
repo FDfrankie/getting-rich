@@ -24,7 +24,7 @@ class BitunixClient:
         self,
         api_key: str | None = None,
         api_secret: str | None = None,
-        base_url: str = "https://api.bitunix.com",
+        base_url: str = "https://fapi.bitunix.com",
         settings: Settings | None = None,
     ):
         self._settings = settings or get_settings()
@@ -39,27 +39,28 @@ class BitunixClient:
         self._simulated_positions = []
         self._simulated_orders = []
 
-    def _generate_signature(self, timestamp: str, nonce: str, query_params: str, body: str = "") -> str:
+    def _generate_signature(self, nonce: str, timestamp: str, query_params: str = "", body: str = "") -> str:
+        """Bitunix Futures OpenAPI official Double-SHA256 signature.
+
+        digest = SHA256(nonce + timestamp + api-key + queryParams + body)
+        sign   = SHA256(digest + secretKey)
         """
-        Bitunix HMAC-SHA256 簽名算法:
-        Signature = HMAC-SHA256(secret, timestamp + nonce + api_key + query_params + body)
-        """
-        raw_payload = f"{timestamp}{nonce}{self.api_key}{query_params}{body}"
-        sig = hmac.new(self.api_secret.encode("utf-8"), raw_payload.encode("utf-8"), hashlib.sha256).hexdigest()
-        return sig
+        digest_input = f"{nonce}{timestamp}{self.api_key}{query_params}{body}"
+        first_hash = hashlib.sha256(digest_input.encode("utf-8")).hexdigest()
+        return hashlib.sha256(f"{first_hash}{self.api_secret}".encode("utf-8")).hexdigest()
 
     def _get_headers(self, query_params: str = "", body: str = "") -> dict[str, str]:
-        """產生 Bitunix 要求的 HTTP Header"""
+        """Generate official Bitunix Futures OpenAPI authentication headers."""
         timestamp = str(int(time.time() * 1000))
-        nonce = hashlib.md5(f"{timestamp}_{os.urandom(8)}".encode()).hexdigest()[:16]
-        signature = self._generate_signature(timestamp, nonce, query_params, body)
-
+        nonce = os.urandom(16).hex()
+        sign = self._generate_signature(nonce, timestamp, query_params, body)
         return {
             "Content-Type": "application/json",
+            "language": "en-US",
             "api-key": self.api_key,
-            "timestamp": timestamp,
             "nonce": nonce,
-            "signature": signature,
+            "timestamp": timestamp,
+            "sign": sign,
         }
 
     def fetch_ticker(self, symbol: str = "BTC/USDT") -> dict[str, Any]:
@@ -277,7 +278,7 @@ class BitunixClient:
             if order_type == "LIMIT" and price:
                 payload["price"] = str(price)
 
-            body_str = json.dumps(payload)
+            body_str = json.dumps(payload, separators=(",", ":"))
             headers = self._get_headers(body=body_str)
 
             resp = requests.post(url, headers=headers, data=body_str, timeout=5)

@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import traceback
 from collections.abc import Mapping
@@ -59,6 +60,24 @@ def _classify_auth_challenge(response) -> str | None:
     return None
 
 
+
+def _parse_retry_after(header_val: str | None, default: float = 2.0, cap: float = 15.0) -> float:
+    if not header_val:
+        return default
+    raw = str(header_val).strip()
+    try:
+        return min(max(float(raw), 0.1), cap)
+    except ValueError:
+        try:
+            from datetime import datetime, timezone
+            from email.utils import parsedate_to_datetime
+            dt = parsedate_to_datetime(raw)
+            delta = (dt - datetime.now(dt.tzinfo or timezone.utc)).total_seconds()
+            return min(max(delta, 0.5), cap)
+        except Exception:
+            return default
+
+
 class BrainClient:
     BASE_URL = "https://api.worldquantbrain.com"
 
@@ -74,9 +93,38 @@ class BrainClient:
         self.password = os.getenv("BRAIN_PASSWORD") if password is None else password
         self.timeout = float(timeout)
         self.poll_interval = float(poll_interval)
-        self.session = session or requests.Session()
+        self._fixed_session: requests.Session | None = session
+        self._thread_local = threading.local()
+        self._auth_lock = threading.RLock()
+        self._shared_cookies: dict[str, str] = {}
+        self._shared_headers: dict[str, str] = {}
+        self._auth_generation: int = 0
         self.authenticated = False
         self._submitted: dict[str, dict[str, Any]] = {}
+
+    @property
+    def session(self) -> requests.Session:
+        """Return a thread-local requests.Session (or injected fixed session) with synced auth cookies."""
+        if self._fixed_session is not None:
+            return self._fixed_session
+        sess = getattr(self._thread_local, "session", None)
+        gen = getattr(self._thread_local, "auth_generation", -1)
+        if sess is None:
+            sess = requests.Session()
+            self._thread_local.session = sess
+            gen = -1
+        if gen != self._auth_generation:
+            with self._auth_lock:
+                if self._shared_cookies:
+                    sess.cookies.update(self._shared_cookies)
+                if self._shared_headers:
+                    sess.headers.update(self._shared_headers)
+                self._thread_local.auth_generation = self._auth_generation
+        return sess
+
+    @session.setter
+    def session(self, value: requests.Session | None) -> None:
+        self._fixed_session = value
 
     @property
     def offline_mode(self) -> bool:
@@ -113,7 +161,18 @@ class BrainClient:
                 if challenge == "BRAIN_WAF_BLOCKED":
                     raise BrainWAFBlocked("WorldQuant BRAIN request blocked by WAF/anti-bot challenge.")
                 r.raise_for_status()
-            self.authenticated = True
+            with self._auth_lock:
+                if self._fixed_session is None:
+                    try:
+                        self._shared_cookies.update(self.session.cookies.get_dict())
+                        auth_hdr = self.session.headers.get("Authorization")
+                        if auth_hdr:
+                            self._shared_headers["Authorization"] = str(auth_hdr)
+                        self._auth_generation += 1
+                        self._thread_local.auth_generation = self._auth_generation
+                    except Exception as _sync_exc:
+                        logger.debug("Could not sync auth cookies across threads: %s", _sync_exc)
+                self.authenticated = True
             logger.info("WorldQuant authentication successful in %.2fs", elapsed)
             return True
         except Exception as e:
@@ -551,6 +610,13 @@ class BrainClient:
             status_val = str(res.get("status") or "")
             if res.get("success"):
                 submitted_count += 1
+                try:
+                    c_ok = sqlite3.connect(db_p, timeout=10.0)
+                    c_ok.execute("UPDATE brain_candidate_pool SET status = 'SUBMITTED' WHERE alpha_id = ?", (aid,))
+                    c_ok.commit()
+                    c_ok.close()
+                except Exception as _ok_exc:
+                    logger.debug("Could not mark candidate SUBMITTED for %s: %s", aid, _ok_exc)
             elif status_val == "DAILY_QUOTA_REACHED":
                 break
             elif status_val in ("SUBMISSION_CHECK_FAILED", "SUBMIT_REJECTED"):
@@ -663,9 +729,15 @@ class BrainClient:
             if "CORRELATION" in str(r).upper() and str(r) not in reasons:
                 passed = False
                 reasons.append(str(r))
-        if self_corr is not None and self_corr >= 0.70:
+        corr_limit = 0.50 if getattr(self, "power_pool_mode", False) else 0.70
+        if self_corr is not None and self_corr >= corr_limit:
             passed = False
-            msg = f"SELF_CORRELATION={self_corr:.4f} >= 0.70"
+            msg = f"SELF_CORRELATION={self_corr:.4f} >= {corr_limit:.2f}"
+            if msg not in reasons:
+                reasons.append(msg)
+        if prod_corr is not None and prod_corr >= 0.70:
+            passed = False
+            msg = f"PROD_CORRELATION={prod_corr:.4f} >= 0.70"
             if msg not in reasons:
                 reasons.append(msg)
         return {
@@ -717,21 +789,27 @@ class BrainClient:
             logger.debug("worldquant_brain/brain_client.py:L716 suppressed exception: %s", _silent_exc)
 
         if not isinstance(getattr(resp, "status_code", None), int) or resp.status_code != 200 or not getattr(resp, "content", None):
-            if check_reasons:
-                return {"passed": False, "status": "SUBMISSION_CHECK_FAILED", "reasons": check_reasons}
-            return {"passed": True, "status": "SKIPPED_NO_DETAIL", "reasons": []}
+            return {
+                "passed": False,
+                "status": "SUBMISSION_CHECK_FAILED",
+                "reasons": check_reasons or [f"ALPHA_DETAIL_UNAVAILABLE_HTTP_{getattr(resp, 'status_code', 'ERR')}"],
+            }
 
         try:
             data = resp.json()
         except Exception:
-            if check_reasons:
-                return {"passed": False, "status": "SUBMISSION_CHECK_FAILED", "reasons": check_reasons}
-            return {"passed": True, "status": "SKIPPED_NON_JSON", "reasons": []}
+            return {
+                "passed": False,
+                "status": "SUBMISSION_CHECK_FAILED",
+                "reasons": check_reasons or ["ALPHA_DETAIL_NON_JSON"],
+            }
 
         if not isinstance(data, dict):
-            if check_reasons:
-                return {"passed": False, "status": "SUBMISSION_CHECK_FAILED", "reasons": check_reasons}
-            return {"passed": True, "status": "SKIPPED_NON_DICT", "reasons": []}
+            return {
+                "passed": False,
+                "status": "SUBMISSION_CHECK_FAILED",
+                "reasons": check_reasons or ["ALPHA_DETAIL_NON_DICT"],
+            }
 
         is_block = data.get("is") if isinstance(data.get("is"), dict) else data
         reasons: list[str] = list(check_reasons)
@@ -763,12 +841,18 @@ class BrainClient:
         turnover = self._number(is_block, "turnover")
         margin = self._number(is_block, "margin")
 
-        if sharpe is not None and sharpe < 1.25:
-            reasons.append(f"Sharpe {sharpe:.2f} < 1.25")
+        settings_blk = data.get("settings") if isinstance(data.get("settings"), dict) else {}
+        try:
+            delay_val = int(settings_blk.get("delay", 1))
+        except (TypeError, ValueError):
+            delay_val = 1
+        min_sharpe = 2.00 if delay_val == 0 else 1.25
+        if sharpe is not None and sharpe < min_sharpe:
+            reasons.append(f"Sharpe {sharpe:.2f} < {min_sharpe:.2f} (delay={delay_val})")
         if fitness is not None and fitness < 1.0:
             reasons.append(f"Fitness {fitness:.2f} < 1.00")
         if turnover is not None:
-            norm_to = turnover / 100.0 if 2.0 < turnover <= 70.0 else turnover
+            norm_to = turnover / 100.0 if 1.0 < turnover <= 70.0 else turnover
             if not (0.01 <= norm_to <= 0.70):
                 reasons.append(f"Turnover {norm_to:.4f} outside [0.01, 0.70]")
         if margin is not None:
@@ -829,15 +913,20 @@ class BrainClient:
                 }
 
         url = f"{self.BASE_URL}/alphas/{alpha_id}/submit"
-        deadline = time.monotonic() + float(max_wait_seconds)
+        deadline = time.monotonic() + float(max(max_wait_seconds, 90.0))
         resp = self.session.post(url, timeout=self.timeout)
-        if resp.status_code in (401, 403):
+
+        # Only re-authenticate on 401 (or 403 explicitly complaining about auth credentials)
+        if resp.status_code == 401 or (
+            resp.status_code == 403
+            and any(tok in (resp.text or "").lower() for tok in ("authentication", "credentials", "unauthorized"))
+        ):
             self.authenticated = False
             if self.authenticate():
                 resp = self.session.post(url, timeout=self.timeout)
+
         if resp.status_code == 429:
-            retry_after = float(resp.headers.get("Retry-After") or self.poll_interval)
-            time.sleep(min(retry_after, 10.0))
+            time.sleep(_parse_retry_after(resp.headers.get("Retry-After"), default=self.poll_interval, cap=15.0))
             resp = self.session.post(url, timeout=self.timeout)
 
         def _extract_failed_checks(payload: Any) -> list[str]:
@@ -865,25 +954,57 @@ class BrainClient:
                         if rst in ("UNSUBMITTED", "REJECTED", "FAIL", "FAILED"):
                             return False, rst, rdata
             except Exception as _silent_exc:
-                logger.debug("worldquant_brain/brain_client.py:L867 suppressed exception: %s", _silent_exc)
+                logger.debug("worldquant_brain/brain_client.py verify_not_unsubmitted exception: %s", _silent_exc)
             return True, "", {}
 
+        # Immediate 400/403 rule rejection on POST (preserve exact BRAIN rejection reasons without re-auth)
+        if resp.status_code in (400, 403):
+            try:
+                err_data = resp.json() if getattr(resp, "content", None) else {}
+            except Exception:
+                err_data = {}
+            failed_checks = _extract_failed_checks(err_data)
+            detail_msg = str(err_data.get("detail") or "") if isinstance(err_data, dict) else ""
+            corr_rej = any("CORR" in c.upper() for c in failed_checks) or ("CORR" in detail_msg.upper())
+            return {
+                "success": False,
+                "status": "SUBMIT_REJECTED",
+                "alpha_id": alpha_id,
+                "http_status": resp.status_code,
+                "failed_checks": failed_checks,
+                "corr_rejected": corr_rej,
+                "error": "BRAIN 提交被拒: " + (", ".join(failed_checks) if failed_checks else (detail_msg or f"HTTP {resp.status_code}")),
+                "raw": err_data,
+            }
+
+        # CRITICAL FIX: BRAIN POST /alphas/{id}/submit returns 201/202 with Retry-After (often WITHOUT Location header).
+        # Poll `Location` if present, otherwise poll `GET /alphas/{alpha_id}/submit` until Retry-After clears!
         location = resp.headers.get("Location") or resp.headers.get("location")
-        if resp.status_code in (200, 201, 202) and location:
-            if location.startswith("/"):
-                location = f"{self.BASE_URL}{location}"
+        init_retry = resp.headers.get("Retry-After") if hasattr(resp, "headers") and resp.headers else None
+        needs_poll = (
+            (resp.status_code in (200, 201, 202) and bool(location))
+            or resp.status_code == 202
+            or (resp.status_code == 201 and (bool(init_retry) or not getattr(resp, "content", None)))
+        )
+
+        if needs_poll:
+            poll_url = (f"{self.BASE_URL}{location}" if location and location.startswith("/") else (location or url))
+            if init_retry:
+                time.sleep(_parse_retry_after(init_retry, default=self.poll_interval, cap=10.0))
             while time.monotonic() < deadline:
-                poll = self.session.get(location, timeout=self.timeout)
+                poll = self.session.get(poll_url, timeout=self.timeout)
+                if poll.status_code == 401:
+                    self.authenticated = False
+                    if self.authenticate():
+                        continue
+                    return {"success": False, "status": "AUTH_FAILED", "alpha_id": alpha_id, "error": "輪詢期間登入失效"}
                 if poll.status_code == 429:
-                    time.sleep(float(poll.headers.get("Retry-After") or self.poll_interval))
+                    time.sleep(_parse_retry_after(poll.headers.get("Retry-After"), default=self.poll_interval, cap=15.0))
                     continue
                 if poll.status_code in (200, 201, 202):
                     retry_hdr = poll.headers.get("Retry-After") if hasattr(poll, "headers") and poll.headers else None
-                    if retry_hdr and not getattr(poll, "content", None):
-                        try:
-                            time.sleep(min(float(retry_hdr), 5.0))
-                        except Exception:
-                            time.sleep(min(self.poll_interval, 5.0))
+                    if retry_hdr and (not getattr(poll, "content", None) or poll.status_code in (201, 202)):
+                        time.sleep(_parse_retry_after(retry_hdr, default=self.poll_interval, cap=10.0))
                         continue
                     data = poll.json() if getattr(poll, "content", None) else {}
                     if isinstance(data, dict) and data.get("detail") and not data.get("status") and not data.get("state"):
@@ -897,8 +1018,12 @@ class BrainClient:
                             "error": f"BRAIN 提交被拒: {detail_msg}",
                             "raw": data,
                         }
-                    st = str((data.get("status") or data.get("state") or ("PENDING" if poll.status_code == 202 else "SUBMITTED")) if isinstance(data, dict) else "").upper()
                     failed_checks = _extract_failed_checks(data)
+                    st = str(
+                        (data.get("status") or data.get("state") or ("PENDING" if poll.status_code == 202 else "SUBMITTED"))
+                        if isinstance(data, dict)
+                        else ""
+                    ).upper()
                     if failed_checks or st in ("FAIL", "FAILED", "ERROR"):
                         corr_rej = any("CORR" in c.upper() for c in failed_checks) or ("CORR" in str(data).upper() and bool(failed_checks))
                         return {
@@ -910,17 +1035,16 @@ class BrainClient:
                             "error": "BRAIN 提交被拒: " + (", ".join(failed_checks) if failed_checks else st),
                             "raw": data,
                         }
-                    if st in ("COMPLETE", "COMPLETED", "SUBMITTED", "PASS", "ACTIVE"):
+                    if st in ("COMPLETE", "COMPLETED", "SUBMITTED", "PASS", "ACTIVE") or (poll.status_code == 200 and not retry_hdr):
                         ok_remote, remote_st, remote_raw = _verify_not_unsubmitted()
                         if not ok_remote:
                             r_failed = _extract_failed_checks(remote_raw)
-                            corr_rej = any("CORR" in c.upper() for c in r_failed)
                             return {
                                 "success": False,
                                 "status": "SUBMIT_REJECTED",
                                 "alpha_id": alpha_id,
                                 "failed_checks": r_failed or [f"REMOTE_STATUS_{remote_st}"],
-                                "corr_rejected": corr_rej,
+                                "corr_rejected": any("CORR" in c.upper() for c in r_failed),
                                 "error": f"官網狀態仍為 {remote_st}，未正式送出",
                                 "raw": remote_raw or data,
                             }
@@ -942,13 +1066,14 @@ class BrainClient:
                         "failed_checks": failed_checks,
                         "corr_rejected": corr_rej,
                         "error": "BRAIN 提交被拒: " + (", ".join(failed_checks) if failed_checks else f"HTTP {poll.status_code}"),
+                        "raw": err_data,
                     }
                 time.sleep(min(self.poll_interval, 5.0))
             return {
                 "success": False,
                 "status": "SUBMIT_TIMEOUT",
                 "alpha_id": alpha_id,
-                "error": "BRAIN 提交輪詢逾時，未正式送出",
+                "error": "BRAIN 提交輪詢逾時，請稍後查詢官網狀態避免重複送出",
             }
         if resp.status_code in (200, 201):
             data = resp.json() if resp.content else {}

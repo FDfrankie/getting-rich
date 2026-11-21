@@ -33,7 +33,7 @@ class ReconciliationService:
             "in_sync": bool(self.is_reconciled),
             "discrepancy_count": int(self.reconciliation_report.get("discrepancy_count", 0)),
             "completed_at": self.last_reconciled_time,
-            "unknown_order_count": 0,
+            "unknown_order_count": int(self.reconciliation_report.get("unknown_order_count", 0)),
         }
 
     def is_ready_for_trading(self) -> bool:
@@ -66,11 +66,11 @@ class ReconciliationService:
         remote_pos_map: dict[str, float] = {}
         for rp in remote_positions:
             sym = _normalize_recon_symbol(str(rp.get("symbol", "")))
-            amt = float(rp.get("contracts", 0.0))
+            amt = abs(float(rp.get("contracts", 0.0) or 0.0))
             side = str(rp.get("side", "LONG")).upper()
-            signed_amt = amt if side == "LONG" else -amt
+            signed_amt = amt if side in {"LONG", "BUY"} else -amt
             if sym:
-                remote_pos_map[sym] = signed_amt
+                remote_pos_map[sym] = remote_pos_map.get(sym, 0.0) + signed_amt
 
         all_symbols = set(norm_local_positions.keys()).union(set(remote_pos_map.keys()))
         pos_diffs = {}
@@ -90,8 +90,17 @@ class ReconciliationService:
             state = lo.get("state")
             if state in [OrderState.SUBMITTING.value, OrderState.UNKNOWN.value]:
                 if ex_id and ex_id in remote_order_ids:
-                    # 遠端已確認訂單
                     ro = remote_order_ids[ex_id]
+                    r_status = str(ro.get("status") or "").lower()
+                    if self.order_manager is not None and lo.get("client_order_id"):
+                        target_st = (
+                            OrderState.FILLED if r_status in ("closed", "filled")
+                            else (OrderState.CANCELLED if r_status in ("canceled", "cancelled") else OrderState.ACKNOWLEDGED)
+                        )
+                        try:
+                            self.order_manager.update_order_state(str(lo["client_order_id"]), target_st, exchange_order_id=ex_id)
+                        except Exception:
+                            pass
                     order_diffs.append(
                         {
                             "client_order_id": lo.get("client_order_id"),
@@ -112,6 +121,7 @@ class ReconciliationService:
             "is_reconciled": self.is_reconciled,
             "timestamp": self.last_reconciled_time,
             "discrepancy_count": len(discrepancies),
+            "unknown_order_count": sum(1 for lo in local_orders if lo.get("state") in (OrderState.UNKNOWN.value, OrderState.SUBMITTING.value) and str(lo.get("exchange_order_id") or "") not in remote_order_ids),
             "discrepancies": discrepancies,
             "position_diffs": pos_diffs,
             "order_resolutions": order_diffs,

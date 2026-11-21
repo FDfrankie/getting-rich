@@ -431,13 +431,24 @@ class ContinuousAlphaMiner:
     def _dedup_db_path(self) -> str:
         return getattr(self.vault, "db_path", None) or os.path.join(os.path.dirname(__file__), "alpha_vault.db")
 
+    @staticmethod
+    def _canonical_expr_hash(expression: str) -> tuple[str, str]:
+        import hashlib
+        cleaned = (expression or "").strip()
+        try:
+            from worldquant_brain.canonical_ast import parse_fastexpr
+            canon = parse_fastexpr(cleaned).canonical_expression or cleaned
+        except Exception:
+            canon = cleaned
+        return hashlib.sha256(canon.encode("utf-8")).hexdigest(), canon
+
     def has_tried_expression(self, expression: str) -> bool:
-        import hashlib, sqlite3
-        expr_hash = hashlib.sha256(expression.strip().encode("utf-8")).hexdigest()
+        from worldquant_brain.sqlite_resilience import open_sqlite_wal
+        expr_hash, _ = self._canonical_expr_hash(expression)
         db_p = self._dedup_db_path()
         if not db_p or db_p == ":memory:" or not os.path.exists(db_p):
             return False
-        conn = sqlite3.connect(db_p, timeout=10.0)
+        conn = open_sqlite_wal(db_p, timeout=30.0)
         try:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS brain_tried_expressions (expr_hash TEXT PRIMARY KEY, expression TEXT NOT NULL, created_at TEXT NOT NULL)"
@@ -449,14 +460,14 @@ class ContinuousAlphaMiner:
             conn.close()
 
     def mark_expression_tried(self, expression: str) -> None:
-        import hashlib, sqlite3
         from datetime import datetime, timezone
-        expr_hash = hashlib.sha256(expression.strip().encode("utf-8")).hexdigest()
+        from worldquant_brain.sqlite_resilience import open_sqlite_wal
+        expr_hash, canon = self._canonical_expr_hash(expression)
         db_p = self._dedup_db_path()
         if not db_p or db_p == ":memory:":
             return
         os.makedirs(os.path.dirname(os.path.abspath(db_p)), exist_ok=True)
-        conn = sqlite3.connect(db_p, timeout=10.0)
+        conn = open_sqlite_wal(db_p, timeout=30.0)
         try:
             with conn:
                 conn.execute(
@@ -465,10 +476,35 @@ class ContinuousAlphaMiner:
                 ensure_schema_from_ddl(conn, 'CREATE TABLE IF NOT EXISTS brain_tried_expressions (expr_hash TEXT PRIMARY KEY, expression TEXT NOT NULL, created_at TEXT NOT NULL)')
                 conn.execute(
                     "INSERT OR IGNORE INTO brain_tried_expressions (expr_hash, expression, created_at) VALUES (?, ?, ?)",
-                    (expr_hash, expression.strip(), datetime.now(timezone.utc).isoformat()),
+                    (expr_hash, canon, datetime.now(timezone.utc).isoformat()),
                 )
         finally:
             conn.close()
+
+
+    def record_simulation_outcome(
+        self,
+        *,
+        expression: str,
+        settings: dict | None = None,
+        metrics: dict | None = None,
+        alpha_id: str | None = None,
+        parent_expression: str | None = None,
+        dataset_id: str = "",
+        hypothesis_family: str = "general",
+    ) -> dict:
+        from worldquant_brain.shadow_writeback import record_simulation_shadow
+        self.mark_expression_tried(expression)
+        return record_simulation_shadow(
+            self._dedup_db_path(),
+            expression=expression,
+            settings=settings,
+            metrics=metrics,
+            alpha_id=alpha_id,
+            parent_expression=parent_expression,
+            dataset_id=dataset_id,
+            hypothesis_family=hypothesis_family,
+        )
 
     def _count_recent_skeleton(self, skeleton: str) -> int:
         import sqlite3

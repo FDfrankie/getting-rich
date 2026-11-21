@@ -22,13 +22,16 @@ def scheduled_job(session_type: str = "盤前晨報"):
     print(f"\n[{now_str}] ⏰ 觸發台股【{session_type}】自動產出任務 (Asia/Taipei)...")
     try:
         generator = ReportGenerator()
-        generator.generate(session_type=session_type)
+        md_content = generator.generate(session_type=session_type)
         generator.generate_html_report(session_type=session_type)
         print(f"[✓] 【{session_type}】產出成功！(含 Markdown 與視覺化 HTML/PDF)")
 
-        # 檢查是否啟用外部推播 (例如 LINE Notify 或 Discord Webhook)
-        if WEBHOOK_SETTINGS.get("enable_push"):
-            print(f"[i] 推播功能已配置，若需通知可在此發送 Webhook【{session_type}】。")
+        webhook_url = WEBHOOK_SETTINGS.get("webhook_url") or WEBHOOK_SETTINGS.get("discord_webhook_url")
+        if WEBHOOK_SETTINGS.get("enable_push") and webhook_url:
+            from notifications.alert_manager import send_webhook_notification
+
+            ok = send_webhook_notification(webhook_url, f"台股【{session_type}】", str(md_content or "")[:1500])
+            print(f"[{'✓' if ok else '!'}] Webhook 推播{'成功' if ok else '失敗'}")
     except Exception as e:
         print(f"[!] 執行【{session_type}】任務時發生異常: {e}")
 

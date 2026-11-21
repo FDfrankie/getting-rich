@@ -63,6 +63,90 @@ def _is_rate_or_auth_cooldown(text: str) -> bool:
     return "429" in low or "rate" in low or "captcha" in low or "authentication" in low
 
 
+
+def sync_vault_snapshot_to_drive(
+    vault_db_path: str | Path,
+    *,
+    mirror_dir: str | Path | None = None,
+    status_json_path: str | Path | None = None,
+    miner_stats: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    """Safely mirror local SQLite vault to Google Drive via sqlite3.backup() and write atomic pending status JSON."""
+    import json
+    import sqlite3
+    from datetime import datetime, timezone, timedelta
+
+    src = Path(vault_db_path)
+    out: dict[str, Any] = {"db_mirrored": False, "status_written": False, "pending_count": 0}
+    if str(vault_db_path) == ":memory:" or not src.exists():
+        return out
+
+    target_dir = Path(mirror_dir) if mirror_dir is not None else (BASE_DIR / "worldquant_brain")
+    target_db = target_dir / "alpha_vault.db"
+    try:
+        if src.resolve() != target_db.resolve():
+            from data_persistence.state_paths import backup_sqlite_to_drive
+            mirrored = backup_sqlite_to_drive(src, target_dir, filename="alpha_vault.db")
+            out["db_mirrored"] = bool(mirrored)
+    except Exception as exc:
+        print(f"[DRIVE_SYNC_WARN] SQLite mirror failed: {exc}")
+
+    # Build lightweight atomic JSON snapshot of candidate pool & pending alphas
+    counts: dict[str, int] = {}
+    pending_alphas: list[dict[str, Any]] = []
+    try:
+        conn = sqlite3.connect(str(src), timeout=5.0)
+        try:
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if "brain_candidate_pool" in tables:
+                for st, cnt in conn.execute(
+                    "SELECT status, COUNT(*) FROM brain_candidate_pool GROUP BY status"
+                ).fetchall():
+                    counts[str(st)] = int(cnt)
+                rows = conn.execute(
+                    "SELECT alpha_id, sharpe, fitness, turnover, margin, score, candidate_date, created_at "
+                    "FROM brain_candidate_pool WHERE UPPER(status)='PENDING' ORDER BY score DESC"
+                ).fetchall()
+                for r in rows:
+                    pending_alphas.append({
+                        "alpha_id": r[0],
+                        "sharpe": r[1],
+                        "fitness": r[2],
+                        "turnover": r[3],
+                        "margin": r[4],
+                        "score": r[5],
+                        "candidate_date": r[6],
+                        "created_at": r[7],
+                    })
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"[DRIVE_SYNC_WARN] Status query failed: {exc}")
+
+    now_utc = datetime.now(timezone.utc)
+    now_tpe = now_utc.astimezone(timezone(timedelta(hours=8)))
+    payload = {
+        "updated_at_utc": now_utc.isoformat(),
+        "updated_at_taipei": now_tpe.strftime("%Y-%m-%d %H:%M:%S+08:00"),
+        "source_db": str(src),
+        "pending_count": len(pending_alphas),
+        "candidate_pool_counts": counts,
+        "pending_alphas": pending_alphas,
+        "miner_stats": dict(miner_stats or {}),
+    }
+    status_path = Path(status_json_path) if status_json_path is not None else (BASE_DIR / "data_persistence" / "brain_pending_status.json")
+    try:
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_json = status_path.parent / f".{status_path.name}.tmp"
+        tmp_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp_json, status_path)
+        out["status_written"] = True
+        out["pending_count"] = len(pending_alphas)
+    except Exception as exc:
+        print(f"[DRIVE_SYNC_WARN] Status JSON write failed: {exc}")
+    return out
+
+
 def run_headless_miner(
     *,
     duration_minutes: float = 38.0,
@@ -144,6 +228,22 @@ def run_headless_miner(
         f"local_pv_screener={enable_local_pv} pv_panel_ready={pv_panel_ready}"
     )
     _last_flush_wait_hour: dict[str, int | None] = {"hour": None}
+    _sync_interval = max(30.0, float(os.getenv("BRAIN_DRIVE_SYNC_INTERVAL_SEC", "180") or "180"))
+    _sync_enabled = os.getenv("BRAIN_DRIVE_SYNC_ENABLED", "true").lower() == "true" and vault_db_path is None
+    _last_drive_sync: dict[str, float] = {"ts": 0.0}
+
+    def _maybe_sync_to_drive(force: bool = False) -> None:
+        if not _sync_enabled:
+            return
+        now_ts = time.monotonic()
+        if not force and (now_ts - _last_drive_sync["ts"]) < _sync_interval:
+            return
+        _last_drive_sync["ts"] = now_ts
+        res = sync_vault_snapshot_to_drive(vault.db_path, miner_stats=stats)
+        if res.get("status_written"):
+            print(f"[DRIVE_SYNC] Mirrored vault={res.get('db_mirrored')} pending={res.get('pending_count')}")
+
+    _maybe_sync_to_drive(force=True)
 
     def _remove_from_app_list(alpha_id: str) -> None:
         for a in vault.list_alphas():
@@ -247,14 +347,18 @@ def run_headless_miner(
                 _remove_from_app_list(aid)
                 print(f"[FLUSH_SUBMITTED] Alpha {aid} submitted & removed from pending list")
             else:
-                st = str(sr.get("status") or "SUBMIT_FAILED")
-                if st in ("DAILY_QUOTA_REACHED", "OFFLINE"):
-                    continue
+                st = str(sr.get("status") or "SUBMIT_ERROR")
                 reason = str(sr.get("error") or ", ".join(sr.get("failed_checks") or []) or st)
+                permanent_fail = st in ("SUBMIT_REJECTED", "SUBMISSION_CHECK_FAILED")
+                if not permanent_fail:
+                    print(f"[FLUSH_TRANSIENT_KEEP] Alpha {aid} kept PENDING ({st}: {reason})")
+                    if st in ("DAILY_QUOTA_REACHED", "OFFLINE", "AUTH_FAILED"):
+                        break
+                    continue
                 funnel.mark_submit_failed(alpha_id=aid, reason=f"{st}:{reason}")
                 _remove_from_app_list(aid)
                 stats["submit_failed_deleted"] += 1
-                print(f"[FLUSH_FAILED_REMOVED] Alpha {aid} removed from app list ({reason})")
+                print(f"[FLUSH_FAILED_REMOVED] Alpha {aid} permanently rejected ({reason})")
 
     in_flight: list[Future[list[dict[str, Any]]]] = []
     cooldown_until = 0.0
@@ -316,7 +420,9 @@ def run_headless_miner(
                         print(f"[MULTI_SIM] Dispatching {stage_tag} batch #{stats['batches']} ({len(batch)} alphas, ds={ds_tag})")
                         in_flight.append(pool.submit(simulate_multi_alpha, client, batch))
 
+                prev_sub = stats["submitted"]
                 _flush_pending_if_due()
+                _maybe_sync_to_drive(force=(stats["submitted"] != prev_sub))
 
                 if exhausted and not in_flight:
                     print("[DONE] All configured dataset fields and seeds exhausted.")
@@ -334,6 +440,7 @@ def run_headless_miner(
                     pass
             if not auth_blocked:
                 _flush_pending_if_due()
+            _maybe_sync_to_drive(force=True)
 
     print(f"[SUMMARY] {stats} | funnel={funnel.summary()}")
     return stats
