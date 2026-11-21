@@ -155,6 +155,47 @@ class TestBrainSubmitAndProtocolE2E(unittest.TestCase):
             m_post.assert_called_once()
             self.assertIn("content", m_post.call_args.kwargs["json"])
 
+    def test_sync_vault_snapshot_to_drive_mirrors_sqlite_and_pending_json(self) -> None:
+        import json
+        from scripts.headless_brain_miner import sync_vault_snapshot_to_drive
+
+        with tempfile.TemporaryDirectory() as td:
+            td_p = Path(td)
+            local_db = td_p / "local_state" / "alpha_vault.db"
+            local_db.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(str(local_db))
+            conn.execute(
+                "CREATE TABLE brain_candidate_pool ("
+                "alpha_id TEXT PRIMARY KEY, expression TEXT, sharpe REAL, fitness REAL, "
+                "turnover REAL, margin REAL, score REAL, candidate_date TEXT, status TEXT, created_at TEXT)"
+            )
+            conn.execute(
+                "INSERT INTO brain_candidate_pool VALUES "
+                "('A_P1', 'rank(close)', 1.5, 1.2, 0.1, 0.002, 82.0, '2026-11-21', 'PENDING', '2026-11-21T01:00:00Z'),"
+                "('A_S1', 'rank(open)', 1.4, 1.1, 0.1, 0.002, 75.0, '2026-11-21', 'SUBMITTED', '2026-11-21T00:00:00Z')"
+            )
+            conn.commit()
+            conn.close()
+
+            mirror_dir = td_p / "drive_mirror"
+            status_json = td_p / "drive_status" / "brain_pending_status.json"
+            res = sync_vault_snapshot_to_drive(
+                local_db,
+                mirror_dir=mirror_dir,
+                status_json_path=status_json,
+                miner_stats={"mined": 10, "accepted": 1},
+            )
+            self.assertTrue(res["db_mirrored"])
+            self.assertTrue(res["status_written"])
+            self.assertEqual(res["pending_count"], 1)
+            self.assertTrue((mirror_dir / "alpha_vault.db").is_file())
+
+            data = json.loads(status_json.read_text(encoding="utf-8"))
+            self.assertEqual(data["pending_count"], 1)
+            self.assertEqual(data["candidate_pool_counts"]["PENDING"], 1)
+            self.assertEqual(data["candidate_pool_counts"]["SUBMITTED"], 1)
+            self.assertEqual(data["pending_alphas"][0]["alpha_id"], "A_P1")
+
 
 if __name__ == "__main__":
     unittest.main()
