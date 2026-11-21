@@ -247,14 +247,18 @@ def run_headless_miner(
                 _remove_from_app_list(aid)
                 print(f"[FLUSH_SUBMITTED] Alpha {aid} submitted & removed from pending list")
             else:
-                st = str(sr.get("status") or "SUBMIT_FAILED")
-                if st in ("DAILY_QUOTA_REACHED", "OFFLINE"):
-                    continue
+                st = str(sr.get("status") or "SUBMIT_ERROR")
                 reason = str(sr.get("error") or ", ".join(sr.get("failed_checks") or []) or st)
+                permanent_fail = st in ("SUBMIT_REJECTED", "SUBMISSION_CHECK_FAILED")
+                if not permanent_fail:
+                    print(f"[FLUSH_TRANSIENT_KEEP] Alpha {aid} kept PENDING ({st}: {reason})")
+                    if st in ("DAILY_QUOTA_REACHED", "OFFLINE", "AUTH_FAILED"):
+                        break
+                    continue
                 funnel.mark_submit_failed(alpha_id=aid, reason=f"{st}:{reason}")
                 _remove_from_app_list(aid)
                 stats["submit_failed_deleted"] += 1
-                print(f"[FLUSH_FAILED_REMOVED] Alpha {aid} removed from app list ({reason})")
+                print(f"[FLUSH_FAILED_REMOVED] Alpha {aid} permanently rejected ({reason})")
 
     in_flight: list[Future[list[dict[str, Any]]]] = []
     cooldown_until = 0.0

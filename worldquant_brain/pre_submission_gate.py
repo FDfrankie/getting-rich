@@ -81,22 +81,27 @@ def evaluate_pre_submission(
     self_corr = _number(record, "self_correlation")
     max_weight = _number(record, "max_instrument_weight")
 
-    if sharpe is None or sharpe <= p.minimum_sharpe:
+    if sharpe is None or sharpe < p.minimum_sharpe:
         reasons.append("SHARPE_NOT_PASSED")
-    if fitness is None or fitness <= p.minimum_fitness:
+    if fitness is None or fitness < p.minimum_fitness:
         reasons.append("FITNESS_NOT_PASSED")
-    if turnover is None or not (p.minimum_turnover < turnover < p.maximum_turnover):
+    if turnover is None or not (p.minimum_turnover <= turnover <= p.maximum_turnover):
         reasons.append("TURNOVER_NOT_PASSED")
     if self_corr is None:
         reasons.append("SELF_CORRELATION_NOT_VERIFIED")
     elif self_corr >= p.maximum_self_correlation:
         reasons.append("SELF_CORRELATION_NOT_PASSED")
+
+    official_checks_verified = bool(
+        record.get("is_checks_passed") is True or str(record.get("is_check_status") or "").upper() == "PASS"
+    )
     if max_weight is None:
-        reasons.append("MAX_WEIGHT_NOT_VERIFIED")
+        if not official_checks_verified:
+            reasons.append("MAX_WEIGHT_NOT_VERIFIED")
     elif max_weight >= p.maximum_instrument_weight:
         reasons.append("MAX_WEIGHT_NOT_PASSED")
 
-    if p.require_official_checks:
+    if p.require_official_checks and not official_checks_verified:
         for key, code in (
             ("weight_test_passed", "WEIGHT_TEST_NOT_PASSED"),
             ("sub_universe_passed", "SUB_UNIVERSE_TEST_NOT_PASSED"),

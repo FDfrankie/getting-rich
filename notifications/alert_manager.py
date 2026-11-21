@@ -70,3 +70,21 @@ class AlertManager:
     def recent_alerts(self, limit: int = 50) -> list[AlertEvent]:
         items = list(self._history)
         return items[-max(1, int(limit)) :]
+
+
+def send_webhook_notification(
+    webhook_url: str,
+    title: str,
+    content: str,
+    *,
+    timeout: float = 10.0,
+) -> bool:
+    """Send Discord/Slack-compatible JSON webhook notification with safe failure handling."""
+    if not webhook_url or not str(webhook_url).strip():
+        return False
+    import requests
+
+    text = f"**{title}**\n{content}"[:1900]
+    payload = {"content": text, "text": text}
+    resp = requests.post(webhook_url.strip(), json=payload, timeout=timeout)
+    return 200 <= resp.status_code < 300
