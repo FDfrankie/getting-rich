@@ -658,7 +658,10 @@ class BrainClient:
         f_score = max(0.0, min(1.0, (float(fitness) - 0.7) / 1.3))
         m_score = max(0.0, min(1.0, (m_bps - 5.0) / 20.0)) if m_bps > 0 else 0.30
         t_val = max(0.005, min(1.0, float(turnover) / 100.0 if float(turnover) > 2.0 else float(turnover)))
-        t_bell = math.exp(-((math.log(t_val) - math.log(0.20)) ** 2) / (2.0 * (0.65 ** 2)))
+        # Official KB 5968273187735: target Turnover < 30% for low transaction cost
+        t_bell = math.exp(-((math.log(t_val) - math.log(0.18)) ** 2) / (2.0 * (0.55 ** 2)))
+        if t_val <= 0.30:
+            t_bell = min(1.0, t_bell + 0.08)
         _expr_low = str(expression).lower()
         _is_high_yield_domain = any(
             k in _expr_low

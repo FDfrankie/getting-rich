@@ -41,7 +41,7 @@ STAGE1_PROBES: tuple[tuple[str, str], ...] = (
     ("spow_rank", "signed_power(rank(ts_backfill({f}, 20)) - 0.5, 2)"),
     ("cap_norm_gauss", "quantile(divide(ts_backfill({f}, 20), cap), driver=\"gaussian\")"),
     ("cap_bucket_neut", "group_neutralize(rank(ts_backfill({f}, 20)), bucket(rank(cap), range=\"0, 1, 0.1\"))"),
-    ("last_revision", "rank(ts_backfill({f}, 20) - last_diff_value(ts_backfill({f}, 20), 252))"),
+    ("last_revision", "ts_decay_linear(winsorize(rank(ts_backfill({f}, 20) - last_diff_value(ts_backfill({f}, 20), 252)), std=4), 5)"),
     ("ts_av_diff60", "quantile(ts_av_diff(ts_backfill({f}, 20), 60), driver=\"gaussian\")"),
     ("reg_resid60", "rank(ts_regression(ts_backfill({f}, 20), returns, 60, lag=0, rettype=0))"),
     ("reg_neut_cap", "regression_neut(rank(ts_backfill({f}, 20)), log(cap + 1.0))"),
@@ -308,7 +308,7 @@ def classify_verdict(
         min_nm_fit = min(base_nm_fit, 0.72)
     else:
         min_nm_fit = max(0.82, base_nm_fit - 0.06) if abs(sh) >= eff_min_sharpe else base_nm_fit
-    if eff_fit < min_nm_fit:
+    if eff_fit < min_nm_fit and not ((abs(sh) >= 1.50) and (to > 0.70) and (to < 1.50) and (eff_fit >= 0.45)):
         return "REJECTED", ";".join(reasons)
     nm_min_to = float(
         os.getenv("BRAIN_NEAR_MISS_MIN_TO", "0.008") or "0.008"
@@ -320,7 +320,10 @@ def classify_verdict(
         if near_miss_max_turnover is None
         else near_miss_max_turnover
     )
-    if not (nm_min_to <= to <= nm_max_to):
+    # P26: High-Sharpe / High-Turnover rescue fast-track (e.g., P05M7vpq Sharpe=2.06, TO=100.95%, Fit=0.58):
+    # Cutting 100% turnover -> 25% via decay=10/hump/trade_when lifts Fitness by ~2x.
+    high_sharpe_high_to_rescue = (abs(sh) >= 1.50) and (to > nm_max_to) and (to < 1.50) and (eff_fit >= 0.45)
+    if not high_sharpe_high_to_rescue and not (nm_min_to <= to <= nm_max_to):
         return "REJECTED", ";".join(reasons)
     base_nm_margin = float(
         os.getenv("BRAIN_NEAR_MISS_MIN_MARGIN", "0.0007") or "0.0007"
@@ -328,7 +331,7 @@ def classify_verdict(
         else near_miss_min_margin
     )
     eff_nm_margin = min(base_nm_margin, 0.0005) if abs(sh) >= eff_min_sharpe else base_nm_margin
-    if eff_margin is not None and eff_margin < eff_nm_margin:
+    if not high_sharpe_high_to_rescue and eff_margin is not None and eff_margin < eff_nm_margin:
         return "REJECTED", ";".join(reasons)
 
     return "NEAR_MISS", ";".join(reasons)
@@ -611,7 +614,15 @@ class TwoStageAlphaFunnel:
             else (float(src_margin) if src_margin is not None else None)
         )
         # Diagnostic tuning: target the specific bottleneck instead of blind grid search
-        if "TURNOVER" in reason or ("FITNESS" in reason and (src_to is None or float(src_to) > 0.25)) or (src_to is not None and float(src_to) > 0.40):
+        _norm_src_to = (
+            float(src_to) / 100.0 if (src_to is not None and 2.0 < float(src_to) <= 150.0) else (float(src_to) if src_to is not None else None)
+        )
+        if _norm_src_to is not None and _norm_src_to > 0.70:
+            # P26 aggressive turnover crush for >70% turnover gems (e.g., P05M7vpq 100.95%)
+            candidates.append((f"ts_decay_linear({expr}, 10)", dict(base_sett, decay=10)))
+            candidates.append((f"hump(winsorize({expr}, std=4), hump=0.02)", dict(base_sett, decay=8)))
+            candidates.append((f"trade_when(volume > adv20, {expr}, -1)", dict(base_sett, decay=6)))
+        if "TURNOVER" in reason or ("FITNESS" in reason and (_norm_src_to is None or _norm_src_to > 0.25)) or (_norm_src_to is not None and _norm_src_to > 0.40):
             for lw_expr in _log_window_variants(expr, prefer_larger=True):
                 candidates.append((lw_expr, dict(base_sett)))
             candidates.append((f"hump(winsorize({expr}, std=4), hump=0.01)", dict(base_sett, decay=4)))

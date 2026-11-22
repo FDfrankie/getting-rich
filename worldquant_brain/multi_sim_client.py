@@ -208,20 +208,11 @@ def _request_with_retry(
     for attempt in range(max_retries + 1):
         try:
             resp = client.session.request(method, url, json=json_body, params=params, timeout=timeout)
-        except Exception as req_exc:
-            if attempt >= max_retries:
-                raise
-            logger.warning(
-                "_request_with_retry transient %s on %s %s (attempt %d/%d): %s",
-                type(req_exc).__name__,
-                method,
-                url,
-                attempt + 1,
-                max_retries + 1,
-                req_exc,
-            )
-            time.sleep(min(15.0, 2.0 * (attempt + 1)))
-            continue
+        except (OSError, TimeoutError):
+            if attempt < max_retries:
+                time.sleep(min(1.0 * (2**attempt), 15.0))
+                continue
+            raise
         code = int(getattr(resp, "status_code", 0) or 0)
         if code in (204, 401) and attempt == 0:
             if _ensure_authenticated(client, force_refresh=True):
@@ -325,7 +316,7 @@ def fetch_available_datasets(
         )
 
     # Sort: highest valueScore first, then lowest alpha_count (least crowded), deprioritize pv (>1M alphas)
-    items.sort(key=lambda d: (d["alpha_count"] > 1_000_000, -d["value_score"], d["alpha_count"]))
+    items.sort(key=lambda d: (d["alpha_count"] > 1_000_000, float(d.get("coverage", 1.0)) < 0.70, -d["value_score"], d["alpha_count"]))
     return items[:max_datasets]
 
 
@@ -455,7 +446,8 @@ def _simulate_single_fallback(
             out.setdefault("settings", sett)
             out["stage"] = stage
             out["dataset_id"] = dataset_id
-            out["probe"] = str(it.get("probe") or "")
+            if it.get("probe") is not None:
+                out.setdefault("probe", it.get("probe"))
             results.append(out)
             err_text = str(out.get("error") or "")
             for m_neut in _UNAVAILABLE_NEUT_RE.finditer(err_text):
@@ -569,7 +561,6 @@ def simulate_multi_alpha(
         out.setdefault("settings", dict(it.get("settings") or DEFAULT_SIM_SETTINGS))
         out["stage"] = it.get("stage", "STAGE1")
         out["dataset_id"] = it.get("dataset_id", "")
-        out["probe"] = str(it.get("probe") or "")
         return [out]
 
     if not _ensure_authenticated(client, force_refresh=False):
@@ -604,7 +595,6 @@ def simulate_multi_alpha(
                 "settings": payloads[idx]["settings"],
                 "stage": items[idx].get("stage", "STAGE1"),
                 "dataset_id": items[idx].get("dataset_id", ""),
-                "probe": str(items[idx].get("probe") or ""),
                 "error": err_msg,
             }
             for idx in range(len(items))
@@ -619,7 +609,6 @@ def simulate_multi_alpha(
                 "settings": payloads[idx]["settings"],
                 "stage": items[idx].get("stage", "STAGE1"),
                 "dataset_id": items[idx].get("dataset_id", ""),
-                "probe": str(items[idx].get("probe") or ""),
                 "error": err_msg,
             }
             for idx in range(len(items))
@@ -655,7 +644,6 @@ def simulate_multi_alpha(
                 "settings": payloads[idx]["settings"],
                 "stage": items[idx].get("stage", "STAGE1"),
                 "dataset_id": items[idx].get("dataset_id", ""),
-                "probe": str(items[idx].get("probe") or ""),
                 "error": err_msg,
             }
             for idx in range(len(items))
@@ -691,7 +679,6 @@ def simulate_multi_alpha(
                 "settings": payloads[idx]["settings"],
                 "stage": items[idx].get("stage", "STAGE1"),
                 "dataset_id": items[idx].get("dataset_id", ""),
-                "probe": str(items[idx].get("probe") or ""),
                 "error": err_msg,
             }
             for idx in range(len(items))

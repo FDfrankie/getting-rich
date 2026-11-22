@@ -171,7 +171,7 @@ class AlphaVault:
                 from worldquant_brain.alpha_miner import extract_expression_skeleton
                 new_skel = extract_expression_skeleton(expr_clean)
                 existing_rows = cursor.execute(
-                    "SELECT id, expression, expression_hash, sharpe FROM alphas"
+                    "SELECT id, expression, expression_hash, sharpe, status, brain_alpha_id FROM alphas"
                 ).fetchall()
                 for er in existing_rows:
                     if str(er["expression_hash"] or "") == expr_hash:
@@ -184,7 +184,8 @@ class AlphaVault:
                                 "alpha_id": er["id"],
                                 "message": "同結構骨架 Alpha 已存在且 Sharpe 更高，已略過重複入庫",
                             }
-                        cursor.execute("DELETE FROM alphas WHERE id = ?", (er["id"],))
+                        if str(er["status"] or "").upper() not in {"SUBMITTED", "ACTIVE"} and not er["brain_alpha_id"]:
+                            cursor.execute("DELETE FROM alphas WHERE id = ?", (er["id"],))
             except Exception:
                 pass
             norm_margin = round(float(margin), 6) if margin is not None else None

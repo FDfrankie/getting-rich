@@ -543,7 +543,7 @@ class LocalPersistenceService:
                     src_conn = sqlite3.connect(self.db_path, timeout=30.0)
                     dst_conn = sqlite3.connect(backup_file, timeout=30.0)
                     try:
-                        src_conn.backup(dst_conn)
+                        src_conn.backup(dst_conn, pages=200, sleep=0.1)
                     finally:
                         dst_conn.close()
                         src_conn.close()
