@@ -50,17 +50,21 @@ def generate_smart_settings(domain: str = "") -> dict[str, Any]:
     """Rotate less-crowded universes (TOP3000/TOP1000/TOP500) and domain-matched decay/neutralization."""
     dom = (domain or "").upper()
     if "FUND" in dom or "ANALYST" in dom or "COMBO" in dom:
-        decays = [0, 2, 4]
-        universes = ["TOP3000", "TOP1000", "TOP500"]
-        neuts = ["SUBINDUSTRY", "INDUSTRY", "SECTOR"]
-    elif "SENTIMENT" in dom or "OPT" in dom:
-        decays = [4, 6, 8]
-        universes = ["TOP1000", "TOP3000", "TOP500"]
+        decays = [0, 0, 2, 4]  # Official v7 tip: prefer natural low turnover at decay=0
+        universes = ["TOP3000", "TOP1000", "TOP500", "TOPSP500"]
         neuts = ["INDUSTRY", "SUBINDUSTRY", "SECTOR"]
+    elif "OPT" in dom:
+        decays = [0, 2, 4, 6]
+        universes = ["TOP1000", "TOP3000", "TOP500", "TOPSP500"]
+        neuts = ["SECTOR", "MARKET", "INDUSTRY"]
+    elif "SENTIMENT" in dom or "NEWS" in dom:
+        decays = [2, 4, 6]
+        universes = ["TOP1000", "TOP3000", "TOP500"]
+        neuts = ["SUBINDUSTRY", "INDUSTRY", "SECTOR"]
     else:
-        decays = [4, 6, 8, 10]
-        universes = ["TOP1000", "TOP500", "TOP3000"]
-        neuts = ["SUBINDUSTRY", "INDUSTRY", "MARKET"]
+        decays = [0, 2, 4, 6]
+        universes = ["TOP1000", "TOP500", "TOPSP500", "TOP3000"]
+        neuts = ["MARKET", "SECTOR", "SUBINDUSTRY", "INDUSTRY"]
 
     _delay = random.choice([0, 1]) if os.getenv("IQC_ENABLE_DELAY0", "false").lower() == "true" else 1
     _cfg = {
@@ -89,7 +93,7 @@ def generate_orthogonal_combo_candidate() -> dict[str, str]:
     atom_b = random.choice(_HIGH_YIELD_ATOMS[dom_b])
     grp = random.choice(["subindustry", "industry", "sector"])
     h = random.choice([0.008, 0.01, 0.012])
-    mode = random.choice(["BLEND", "GATED", "VOL_SCALED", "VOL_SPIKE_EVENT", "GRADUAL_EVENT_DECAY", "ORTHOG_RESID"])
+    mode = random.choice(["BLEND", "GATED", "VOL_SCALED", "VOL_SPIKE_EVENT", "GRADUAL_EVENT_DECAY", "LIQ_BUCKET_DOUBLE_NEUT", "ORTHOG_RESID"])
 
     if mode == "BLEND":
         w_a = random.choice([0.5, 0.6, 0.4])
@@ -113,6 +117,10 @@ def generate_orthogonal_combo_candidate() -> dict[str, str]:
         sig = f"group_neutralize(0.5 * winsorize(rank(ts_backfill({atom_a}, 5)), std=4) + 0.5 * winsorize(rank(ts_backfill({atom_b}, 5)), std=4), {grp})"
         evt_held = f"ts_backfill(trade_when(rank(volume / ts_mean(volume, 20)) > 0.5, {sig}, -1), 5)"
         expr = f"hump(0.5 * {sig} + 0.5 * {evt_held}, hump={h})"
+    elif mode == "LIQ_BUCKET_DOUBLE_NEUT":
+        # Official v7 BRAIN Tip: liquidity-bucket double neutralization using Bronze-unlocked densify(bucket(...))
+        sig = f"0.5 * winsorize(rank(ts_backfill({atom_a}, 5)), std=4) + 0.5 * winsorize(rank(ts_backfill({atom_b}, 5)), std=4)"
+        expr = f"hump(group_neutralize({sig}, densify(bucket(rank(volume), range=\"0, 1, 0.1\"))), hump={h})"
     else:
         expr = f"hump(group_neutralize(ts_regression(rank(ts_backfill({atom_a}, 5)), rank(ts_backfill({atom_b}, 5)), 60, rettype=0), {grp}), hump={h})"
 
@@ -272,14 +280,21 @@ def precision_repair_near_miss(
             "reason": "CONCENTRATED_WEIGHT_RANK_BACKFILL_TRUNC05",
         })
 
-    if any("2Y_SHARPE" in c for c in failed):
+    if any("2Y_SHARPE" in c or "LADDER" in c for c in failed):
         s_2y = dict(base)
-        s_2y["decay"] = min(10, max(4, int(base.get("decay", 4) or 4) + 2))
+        s_2y["decay"] = min(6, max(0, int(base.get("decay", 2) or 2)))
+        # Official v7 BRAIN Tip: Bronze-unlocked IS-Ladder Self-Boosting + hump smoothing (replaces locked jump_decay)
         repairs.append({
-            "name": "Repair_Low2YSharpe_JumpDecay",
-            "expression": f"jump_decay(group_neutralize(winsorize(rank({expr}), std=3.5), subindustry), 10, sensitivity=0.5)",
+            "name": "Repair_Low2YSharpe_ISLadderBoost",
+            "expression": f"hump(group_neutralize(rank({expr}) / (1.5 - rank({expr})), subindustry), hump=0.015)",
             "settings": s_2y,
-            "reason": "LOW_2Y_SHARPE_JUMP_DECAY_STABILIZE",
+            "reason": "LOW_2Y_SHARPE_IS_LADDER_SELF_BOOST",
+        })
+        repairs.append({
+            "name": "Repair_Low2YSharpe_SmoothDecay",
+            "expression": f"hump(ts_decay_linear(group_neutralize(winsorize(rank({expr}), std=3.5), subindustry), 5), hump=0.015)",
+            "settings": s_2y,
+            "reason": "LOW_2Y_SHARPE_HUMP_DECAY_STABILIZE",
         })
 
     if any("CORR" in c for c in failed):
@@ -403,3 +418,32 @@ def generate_decorrelation_variants(
         "CORR_ORTHOG_COMBO",
     )
     return out[:max_variants]
+
+
+def build_overfitting_robustness_probes(expression: str) -> dict[str, str]:
+    """Build official BRAIN Community Rank Test and Binary Test expressions."""
+    expr = str(expression or "").strip()
+    return {
+        "rank_test": f"rank({expr})",
+        "binary_test": f"sign({expr})",
+    }
+
+
+def evaluate_overfitting_robustness(
+    *,
+    is_sharpe: float,
+    test_period_sharpe: float | None = None,
+    rank_test_sharpe: float | None = None,
+    binary_test_sharpe: float | None = None,
+) -> dict[str, Any]:
+    """Evaluate official BRAIN overfitting redlines (>50% Test Period drop, >70% Rank/Binary drop)."""
+    base = abs(float(is_sharpe))
+    flags: list[str] = []
+    if base > 1e-9:
+        if test_period_sharpe is not None and (base - float(test_period_sharpe)) / base > 0.50:
+            flags.append("TEST_PERIOD_DROP_OVER_50PCT")
+        if rank_test_sharpe is not None and (base - float(rank_test_sharpe)) / base > 0.70:
+            flags.append("RANK_TEST_DROP_OVER_70PCT")
+        if binary_test_sharpe is not None and (base - float(binary_test_sharpe)) / base > 0.70:
+            flags.append("BINARY_TEST_DROP_OVER_70PCT")
+    return {"robust": len(flags) == 0, "overfitting_flags": flags}

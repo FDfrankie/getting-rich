@@ -49,6 +49,9 @@ STAGE1_PROBES: tuple[tuple[str, str], ...] = (
     ("grp_scale_sub", "group_scale(ts_zscore(ts_backfill({f}, 20), 60), subindustry)"),
     ("hump_decay10", "hump(group_neutralize(ts_decay_linear(rank(ts_backfill({f}, 20)), 10), industry), hump=0.015)"),
     ("ev_cf_rank63", "group_rank(-ts_zscore(ts_backfill({f}, 20), 63), industry)"),
+    ("liq_bucket_neut", "group_neutralize(rank(ts_backfill({f}, 20)), densify(bucket(rank(volume), range=\"0, 1, 0.1\")))"),
+    ("kth_sparse90", "group_rank(kth_element({f}, 90, k=1, ignore=\"NaN 0\"), industry)"),
+    ("is_ladder_boost", "group_neutralize(rank(ts_backfill({f}, 20)) / (1.5 - rank(ts_backfill({f}, 20))), subindustry)"),
 )
 
 
