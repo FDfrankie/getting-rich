@@ -540,11 +540,13 @@ class LocalPersistenceService:
                 ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
                 backup_file = os.path.join(BACKUP_DIR, f"state_backup_{ts}.db")
                 try:
-                    src_conn = sqlite3.connect(self.db_path)
-                    dst_conn = sqlite3.connect(backup_file)
-                    src_conn.backup(dst_conn)
-                    dst_conn.close()
-                    src_conn.close()
+                    src_conn = sqlite3.connect(self.db_path, timeout=30.0)
+                    dst_conn = sqlite3.connect(backup_file, timeout=30.0)
+                    try:
+                        src_conn.backup(dst_conn)
+                    finally:
+                        dst_conn.close()
+                        src_conn.close()
                 except Exception:
                     shutil.copy2(self.db_path, backup_file)
                 existing = sorted([os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR) if f.endswith(".db")])

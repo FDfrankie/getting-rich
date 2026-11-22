@@ -218,7 +218,10 @@ class PPOAgent:
         return manifest
 
     def load(self, filepath: str):
-        checkpoint = torch.load(filepath, map_location=self.device)
+        try:
+            checkpoint = torch.load(filepath, map_location=self.device, weights_only=True)
+        except TypeError:
+            checkpoint = torch.load(filepath, map_location=self.device)
         self.policy.load_state_dict(checkpoint["policy_state_dict"])
         self.policy_old.load_state_dict(checkpoint["policy_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])

@@ -200,6 +200,19 @@ def _negate_expression(expr: str) -> str:
     return f"-({s})"
 
 
+def compute_subuniverse_sharpe_cutoff(
+    alpha_sharpe: float,
+    alpha_universe_size: int = 3000,
+    subuniverse_size: int = 2000,
+) -> float:
+    """Official WorldQuant BRAIN Sub-Universe Sharpe cutoff (KB 6568644868375):
+    subuniverse_sharpe >= 0.75 * sqrt(subuniverse_size / alpha_universe_size) * alpha_sharpe.
+    """
+    if alpha_universe_size <= 0 or subuniverse_size <= 0:
+        return 0.0
+    return round(0.75 * math.sqrt(float(subuniverse_size) / float(alpha_universe_size)) * float(alpha_sharpe), 4)
+
+
 NON_RESCUABLE_CHECKS: tuple[str, ...] = (
     "LOW_UNIVERSE",
     "COVERAGE",
@@ -238,6 +251,7 @@ def classify_verdict(
         return "REJECTED", str(result.get("error") or "MISSING_METRICS")
 
     eff_min_sharpe = 2.00 if delay == 0 else float(min_sharpe)
+    eff_min_fitness = 1.30 if delay == 0 else float(min_fitness)  # Official BRAIN KB 14220836385687
     eff_nm_sharpe = max(float(near_miss_sharpe), 1.80) if delay == 0 else float(near_miss_sharpe)
 
     sh = float(sharpe)
@@ -253,8 +267,8 @@ def classify_verdict(
     reasons: list[str] = []
     if sh < eff_min_sharpe:
         reasons.append(f"LOW_SHARPE({sh:.2f}<{eff_min_sharpe:.2f})")
-    if fit < min_fitness:
-        reasons.append(f"LOW_FITNESS({fit:.2f}<{min_fitness:.2f})")
+    if fit < eff_min_fitness:
+        reasons.append(f"LOW_FITNESS({fit:.2f}<{eff_min_fitness:.2f})")
     if not (min_turnover <= to <= max_turnover):
         reasons.append(f"TURNOVER_OUT_OF_RANGE({to:.3f})")
     if norm_margin is not None and norm_margin < 0.0010:

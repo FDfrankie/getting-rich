@@ -4,8 +4,10 @@ on:
   schedule:
     # 每小時第 15 分鐘執行一次多幣種策略掃描 (BTC/USDT, ETH/USDT, SOL/USDT)
     - cron: "15 * * * *"
-    # 台北時間週一至週五 08:00 (UTC 00:00) 盤前晨報 與 14:00 (UTC 06:00) 盤後報告
-    - cron: "0 0,6 * * 1-5"
+    # 台北時間週一至週五 08:00 (UTC 00:00) 盤前晨報
+    - cron: "0 0 * * 1-5"
+    # 台北時間週一至週五 16:40 (UTC 08:40) 盤後報告（確保 TWSE T86/融資融券已公布）
+    - cron: "40 8 * * 1-5"
   workflow_dispatch:
     inputs:
       run_crypto:
@@ -69,14 +71,27 @@ jobs:
               adapter = BinanceTestnetClient(settlement="USDC")
 
           recon = ReconciliationService()
-          recon.reconcile(
-              local_positions={},
-              remote_positions=[],
-              local_orders=[],
-              remote_orders=[],
-              local_balance=10000.0,
-              remote_balance=10000.0,
-          )
+          if adapter is not None:
+              remote_positions = adapter.fetch_positions()
+              bal_info = adapter.fetch_balance()
+              remote_bal = float(bal_info.get("free") or bal_info.get("total") or 0.0) if isinstance(bal_info, dict) else 0.0
+              recon.reconcile(
+                  local_positions={},
+                  remote_positions=remote_positions,
+                  local_orders=[],
+                  remote_orders=[],
+                  local_balance=remote_bal,
+                  remote_balance=remote_bal,
+              )
+          else:
+              recon.reconcile(
+                  local_positions={},
+                  remote_positions=[],
+                  local_orders=[],
+                  remote_orders=[],
+                  local_balance=10000.0,
+                  remote_balance=10000.0,
+              )
           mgr = MultiSymbolBotManager(exchange_adapter=adapter, reconciliation_service=recon)
           res = mgr.step_all()
           print("MODE:", mode)
@@ -87,7 +102,7 @@ jobs:
   taiwan-stock-report:
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.run_taiwan) ||
-      (github.event_name == 'schedule' && github.event.schedule == '0 0,6 * * 1-5')
+      (github.event_name == 'schedule' && (github.event.schedule == '0 0 * * 1-5' || github.event.schedule == '40 8 * * 1-5'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

@@ -43,23 +43,32 @@ jobs:
           BRAIN_EMAIL: ${{ secrets.BRAIN_EMAIL }}
           BRAIN_PASSWORD: ${{ secrets.BRAIN_PASSWORD }}
           BRAIN_SIMULATION_ENABLED: "true"
-          BRAIN_AUTO_SUBMIT_ENABLED: "false"
-          BRAIN_QUEUE_WORKERS: "2"
-          BRAIN_HIGH_BAR_SHARPE: "1.80"
+          BRAIN_AUTO_SUBMIT_ENABLED: "true"
+          BRAIN_MULTI_SIM_WORKERS: "2"
+          BRAIN_MULTI_SIM_BATCH_SIZE: "5"
           BRAIN_DAILY_FLUSH_HOUR: "22"
         run: |
           DURATION="${{ github.event.inputs.duration_minutes || '38' }}"
-          python scripts/headless_brain_miner.py --duration-minutes "$DURATION" --queue-depth 6 --workers 2
+          python scripts/headless_brain_miner.py --duration-minutes "$DURATION" --workers 2 --batch-size 5
 
-      - name: Persist updated Alpha Vault to main
+      - name: Upload Alpha Vault DB Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brain-alpha-vault-db
+          path: worldquant_brain/alpha_vault.db
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Persist Verified Alphas JSON to main
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add worldquant_brain/alpha_vault.db worldquant_brain/verified_alphas.json || true
+          git add worldquant_brain/verified_alphas.json || true
           if ! git diff --cached --quiet; then
-            git commit -m "chore(brain): persist headless miner results"
+            git commit -m "chore(brain): update verified_alphas.json snapshot"
             git pull --rebase origin main || true
             git push origin main
           else
-            echo "No new vault changes to commit."
+            echo "No new verified_alphas.json changes to commit."
           fi

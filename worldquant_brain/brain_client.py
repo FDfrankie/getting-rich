@@ -989,10 +989,15 @@ class BrainClient:
         except (TypeError, ValueError):
             delay_val = 1
         min_sharpe = 2.00 if delay_val == 0 else 1.25
+        min_fitness = 1.30 if delay_val == 0 else 1.00  # Official BRAIN KB 14220836385687
         if sharpe is not None and sharpe < min_sharpe:
             reasons.append(f"Sharpe {sharpe:.2f} < {min_sharpe:.2f} (delay={delay_val})")
-        if fitness is not None and fitness < 1.0:
-            reasons.append(f"Fitness {fitness:.2f} < 1.00")
+        if fitness is not None and fitness < min_fitness:
+            reasons.append(f"Fitness {fitness:.2f} < {min_fitness:.2f} (delay={delay_val})")
+        neut_val = str(settings_blk.get("neutralization") or "").strip().upper()
+        reg_expr = str((data.get("regular") or {}).get("code") or data.get("expression") or "").lower()
+        if neut_val == "NONE" and "group_neutralize(" not in reg_expr and "group_normalize(" not in reg_expr:
+            reasons.append("NEUTRALIZATION_NONE_WITHOUT_GROUP_NEUTRALIZE (Official BRAIN KB 13306223024151)")
         if turnover is not None:
             norm_to = turnover / 100.0 if 1.0 < turnover <= 70.0 else turnover
             if not (0.01 <= norm_to <= 0.70):
