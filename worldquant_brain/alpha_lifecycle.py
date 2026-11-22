@@ -103,7 +103,7 @@ def submission_eligibility(alpha: Mapping[str, Any]) -> SubmissionEligibility:
     if turnover is None or not 0.01 <= float(turnover) <= 0.70:
         reasons.append("TURNOVER_GATE_FAILED")
     margin_bps = alpha.get("margin_bps")
-    if margin_bps is None or float(margin_bps) <= 10.0:
+    if margin_bps is None or float(margin_bps) < 5.0:
         reasons.append("MARGIN_GATE_FAILED")
     drawdown = alpha.get("drawdown")
     if drawdown is None or float(drawdown) >= 0.10:

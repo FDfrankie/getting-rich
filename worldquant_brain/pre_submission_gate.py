@@ -57,7 +57,7 @@ def evaluate_pre_submission(
     if policy is not None:
         p = policy
     elif str(record.get("delay", "")).strip() == "0" or record.get("delay") == 0:
-        p = SubmissionGatePolicy(minimum_sharpe=2.0)
+        p = SubmissionGatePolicy(minimum_sharpe=2.0, minimum_fitness=1.30)
     else:
         p = SubmissionGatePolicy()
     reasons: list[str] = []
@@ -96,7 +96,7 @@ def evaluate_pre_submission(
     if turnover is None:
         reasons.append("TURNOVER_NOT_PASSED")
     else:
-        norm_to = turnover / 100.0 if 1.0 < turnover <= 70.0 else turnover
+        norm_to = turnover / 100.0 if 2.0 < turnover <= 70.0 else turnover
         if not (p.minimum_turnover <= norm_to <= p.maximum_turnover):
             reasons.append("TURNOVER_NOT_PASSED")
     corr_cap = 0.50 if bool(record.get("is_power_pool")) else p.maximum_self_correlation

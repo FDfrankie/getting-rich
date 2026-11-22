@@ -77,7 +77,7 @@ class BrainAutoSubmitGate:
         self,
         min_sharpe: float = 1.25,
         min_fitness: float = 1.0,
-        min_margin: float = 0.0010,
+        min_margin: float = 0.0005,
         min_turnover: float = 0.01,
         max_turnover: float = 0.70,
         max_self_correlation: float = 0.70,

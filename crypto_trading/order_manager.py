@@ -1,5 +1,6 @@
 from decimal import Decimal
 import hashlib
+from contextlib import closing
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -49,9 +50,17 @@ class OrderManager:
         self.db_path = db_path
         self._init_db()
 
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=15.0)
+        if str(self.db_path) != ":memory:":
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=15000")
+        return conn
+
     def _init_db(self):
         with _DB_LOCK:
-            conn = sqlite3.connect(self.db_path, timeout=15.0)
+            conn = self._connect()
             cur = conn.cursor()
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS idempotent_orders (
@@ -95,7 +104,7 @@ class OrderManager:
         ikey = generate_idempotency_key(symbol, side, order_type, amount, price, client_tag)
 
         with _DB_LOCK:
-            conn = sqlite3.connect(self.db_path, timeout=15.0)
+            conn = self._connect()
             cur = conn.cursor()
             try:
                 cur.execute(
@@ -152,7 +161,7 @@ class OrderManager:
     ) -> bool:
         now = datetime.now(timezone.utc).isoformat()
         with _DB_LOCK:
-            conn = sqlite3.connect(self.db_path, timeout=15.0)
+            conn = self._connect()
             cur = conn.cursor()
             try:
                 cur.execute(
@@ -176,7 +185,7 @@ class OrderManager:
 
     def get_order(self, client_order_id: str) -> dict[str, Any] | None:
         with _DB_LOCK:
-            conn = sqlite3.connect(self.db_path, timeout=15.0)
+            conn = self._connect()
             cur = conn.cursor()
             cur.execute(
                 "SELECT client_order_id, idempotency_key, exchange_order_id, symbol, side, order_type, amount, price, state, error_message, created_at, updated_at FROM idempotent_orders WHERE client_order_id = ?",
