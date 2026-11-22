@@ -112,9 +112,11 @@ def sync_vault_snapshot_to_drive(
                     "SELECT status, COUNT(*) FROM brain_candidate_pool GROUP BY status"
                 ).fetchall():
                     counts[str(st)] = int(cnt)
+                _order_mode = os.getenv("BRAIN_SUBMIT_ORDER", "worst_first").strip().lower()
+                _order_sql = "ORDER BY fitness ASC, sharpe ASC, score ASC" if _order_mode == "worst_first" else "ORDER BY score DESC, sharpe DESC"
                 rows = conn.execute(
                     "SELECT alpha_id, sharpe, fitness, turnover, margin, score, candidate_date, created_at "
-                    "FROM brain_candidate_pool WHERE UPPER(status)='PENDING' ORDER BY score DESC"
+                    f"FROM brain_candidate_pool WHERE UPPER(status)='PENDING' {_order_sql}"
                 ).fetchall()
                 for r in rows:
                     pending_alphas.append({
@@ -134,11 +136,41 @@ def sync_vault_snapshot_to_drive(
 
     now_utc = datetime.now(timezone.utc)
     now_tpe = now_utc.astimezone(timezone(timedelta(hours=8)))
+    archived_formulas_total = 0
+    consultant_reserve_count = int(counts.get("CONSULTANT_RESERVE", 0))
+    try:
+        from worldquant_brain.brain_client import WorldQuantBrainClient
+        _exp_client = WorldQuantBrainClient()
+        _exp_client._quota_db_override = str(src)
+        vault_json_path = (
+            (Path(status_json_path).parent / "qualified_alpha_formulas_vault.json")
+            if status_json_path is not None
+            else (BASE_DIR / "data_persistence" / "qualified_alpha_formulas_vault.json")
+        )
+        # Ensure _quota_db() points to src during export
+        _orig_quota_db = _exp_client._quota_db
+        _exp_client._quota_db = lambda: str(src)
+        try:
+            _vault_exp = _exp_client.export_qualified_formula_vault(output_path=vault_json_path)
+            archived_formulas_total = int((_vault_exp.get("summary") or {}).get("total_archived", 0))
+            consultant_reserve_count = max(
+                consultant_reserve_count,
+                int((_vault_exp.get("summary") or {}).get("consultant_reserve_count", 0)),
+            )
+            out["formula_vault_written"] = True
+        finally:
+            _exp_client._quota_db = _orig_quota_db
+    except Exception as _vexc:
+        print(f"[DRIVE_SYNC_WARN] Formula vault JSON export failed: {_vexc}")
+
     payload = {
         "updated_at_utc": now_utc.isoformat(),
         "updated_at_taipei": now_tpe.strftime("%Y-%m-%d %H:%M:%S+08:00"),
         "source_db": str(src),
+        "submit_order": os.getenv("BRAIN_SUBMIT_ORDER", "worst_first").strip().lower() or "worst_first",
         "pending_count": len(pending_alphas),
+        "consultant_reserve_count": consultant_reserve_count,
+        "archived_formulas_total": archived_formulas_total,
         "candidate_pool_counts": counts,
         "historical_tried_total": historical_tried_total,
         "historical_reference_counts": historical_ref_counts,
@@ -367,16 +399,39 @@ def run_headless_miner(
                                     print(f"[DECORR_RESCUE_QUEUED] Enqueued {_dc_n} de-correlation variant(s) for {alpha_id}")
                     except Exception:
                         pass
-                if not _skip_local_corr:
-                    client.stage_candidate_for_daily_selection(
+                if _skip_local_corr:
+                    # P37: Even if skipped due to local corr, permanently archive its formula!
+                    if hasattr(client, "archive_qualified_alpha"):
+                        client.archive_qualified_alpha(
+                            str(alpha_id),
+                            str(r.get("expression") or ""),
+                            float(sharpe),
+                            float(fitness),
+                            float(turnover),
+                            float(margin or 0.0),
+                            settings=r.get("settings") if isinstance(r.get("settings"), dict) else None,
+                            returns=float(r.get("returns") or 0.0),
+                            drawdown=float(r.get("drawdown") or 0.0),
+                            submit_status="LOCAL_CORR_ARCHIVED",
+                            source="MINER_LOCAL_CORR",
+                        )
+                else:
+                    _st_res = client.stage_candidate_for_daily_selection(
                         str(alpha_id),
                         str(r.get("expression") or ""),
                         float(sharpe),
                         float(fitness),
                         float(turnover),
                         float(margin or 0.0),
+                        settings=r.get("settings") if isinstance(r.get("settings"), dict) else None,
+                        returns=float(r.get("returns") or 0.0),
+                        drawdown=float(r.get("drawdown") or 0.0),
+                        source="MINER",
                     )
-            print(f"[PENDING_STAGED] Alpha {alpha_id} ({r.get('stage')}) Sharpe={sharpe:.2f} Fitness={fitness:.2f}")
+                    if _st_res == "CONSULTANT_RESERVE":
+                        print(f"[CONSULTANT_RESERVE_SAVED] Alpha {alpha_id} ({r.get('stage')}) Sharpe={sharpe:.2f} Fitness={fitness:.2f} protected for Consultant")
+                    else:
+                        print(f"[PENDING_STAGED] Alpha {alpha_id} ({r.get('stage')}) Sharpe={sharpe:.2f} Fitness={fitness:.2f}")
 
         err_suffix = f" | sample_err={sample_error}" if (batch_failed > 0 and sample_error) else ""
         print(

@@ -637,6 +637,196 @@ class BrainClient:
         finally:
             conn.close()
 
+    # ------------------------------------------------------------------
+    # P37: Qualified Formula Permanent Archive + Bronze Reverse-Order Submit
+    #      + Consultant Reserve Protection (Sharpe >= 1.50 / Fitness >= 1.20)
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _submit_order_mode() -> str:
+        """Return 'worst_first' (Bronze default) or 'best_first' (Consultant mode)."""
+        if os.getenv("BRAIN_CONSULTANT_MODE", "false").strip().lower() in ("1", "true", "yes"):
+            return os.getenv("BRAIN_SUBMIT_ORDER", "best_first").strip().lower() or "best_first"
+        mode = os.getenv("BRAIN_SUBMIT_ORDER", "worst_first").strip().lower()
+        return mode if mode in ("worst_first", "best_first") else "worst_first"
+
+    @staticmethod
+    def _consultant_reserve_thresholds() -> tuple[bool, float, float]:
+        """Return (enabled, min_sharpe, min_fitness) for Consultant Reserve protection."""
+        if os.getenv("BRAIN_CONSULTANT_MODE", "false").strip().lower() in ("1", "true", "yes"):
+            return False, 0.0, 0.0
+        min_sh = float(os.getenv("BRAIN_RESERVE_MIN_SHARPE", "1.50") or "1.50")
+        min_fit = float(os.getenv("BRAIN_RESERVE_MIN_FITNESS", "1.20") or "1.20")
+        enabled = (min_sh > 0.0) or (min_fit > 0.0)
+        return enabled, min_sh, min_fit
+
+    @classmethod
+    def _is_consultant_reserve(cls, sharpe: float, fitness: float) -> bool:
+        """Protect high-scoring alphas from being wasted during unpaid Bronze/Challenge submissions."""
+        enabled, min_sh, min_fit = cls._consultant_reserve_thresholds()
+        if not enabled:
+            return False
+        if min_sh > 0.0 and float(sharpe) >= min_sh:
+            return True
+        if min_fit > 0.0 and float(fitness) >= min_fit:
+            return True
+        return False
+
+    @staticmethod
+    def _ensure_qualified_archive_table(conn: Any) -> None:
+        ddl = (
+            "CREATE TABLE IF NOT EXISTS qualified_alpha_archive ("
+            "alpha_id TEXT PRIMARY KEY, "
+            "expression TEXT NOT NULL, "
+            "settings_json TEXT NOT NULL DEFAULT '{}', "
+            "sharpe REAL NOT NULL, "
+            "fitness REAL NOT NULL, "
+            "turnover REAL NOT NULL, "
+            "margin REAL NOT NULL DEFAULT 0.0, "
+            "returns REAL NOT NULL DEFAULT 0.0, "
+            "drawdown REAL NOT NULL DEFAULT 0.0, "
+            "sub_universe_sharpe REAL, "
+            "tier TEXT NOT NULL DEFAULT 'BRONZE_SUBMITTABLE', "
+            "submit_status TEXT NOT NULL DEFAULT 'ARCHIVED', "
+            "source TEXT NOT NULL DEFAULT 'MINER', "
+            "archived_at TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL)"
+        )
+        conn.execute(ddl)
+        ensure_schema_from_ddl(conn, ddl)
+
+    def archive_qualified_alpha(
+        self,
+        alpha_id: str,
+        expression: str,
+        sharpe: float,
+        fitness: float,
+        turnover: float,
+        margin: float = 0.0,
+        *,
+        settings: dict[str, Any] | None = None,
+        returns: float = 0.0,
+        drawdown: float = 0.0,
+        sub_universe_sharpe: float | None = None,
+        submit_status: str | None = None,
+        source: str = "MINER",
+    ) -> str:
+        """Permanently save every passing alpha's full FastExpr formula, settings, and metrics."""
+        import json as _json
+        import sqlite3
+        from datetime import datetime, timezone
+
+        if not alpha_id or not str(expression or "").strip():
+            return "SKIPPED"
+        tier = "CONSULTANT_RESERVE" if self._is_consultant_reserve(float(sharpe), float(fitness)) else "BRONZE_SUBMITTABLE"
+        st_val = str(submit_status or ("CONSULTANT_RESERVE" if tier == "CONSULTANT_RESERVE" else "ARCHIVED"))
+        now_iso = datetime.now(timezone.utc).isoformat()
+        sett_json = _json.dumps(settings or {}, ensure_ascii=False, sort_keys=True)
+        db_p = self._quota_db()
+        os.makedirs(os.path.dirname(os.path.abspath(db_p)), exist_ok=True)
+        conn = sqlite3.connect(db_p, timeout=10.0)
+        try:
+            with conn:
+                self._ensure_qualified_archive_table(conn)
+                existing = conn.execute(
+                    "SELECT archived_at, submit_status, settings_json FROM qualified_alpha_archive WHERE alpha_id = ?",
+                    (str(alpha_id),),
+                ).fetchone()
+                archived_at = str(existing[0]) if existing and existing[0] else now_iso
+                if existing and not submit_status and str(existing[1] or "") == "SUBMITTED":
+                    st_val = "SUBMITTED"
+                if existing and (not settings) and existing[2] and existing[2] != "{}":
+                    sett_json = str(existing[2])
+                conn.execute(
+                    "INSERT OR REPLACE INTO qualified_alpha_archive "
+                    "(alpha_id, expression, settings_json, sharpe, fitness, turnover, margin, returns, drawdown, "
+                    "sub_universe_sharpe, tier, submit_status, source, archived_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        str(alpha_id),
+                        str(expression).strip(),
+                        sett_json,
+                        float(sharpe),
+                        float(fitness),
+                        float(turnover),
+                        float(margin or 0.0),
+                        float(returns or 0.0),
+                        float(drawdown or 0.0),
+                        float(sub_universe_sharpe) if sub_universe_sharpe is not None else None,
+                        tier,
+                        st_val,
+                        str(source or "MINER"),
+                        archived_at,
+                        now_iso,
+                    ),
+                )
+        finally:
+            conn.close()
+        return tier
+
+    def export_qualified_formula_vault(self, output_path: str | Path | None = None) -> dict[str, Any]:
+        """Atomically export all permanently archived passing alpha formulas to JSON."""
+        import json as _json
+        import sqlite3
+        from datetime import datetime, timezone, timedelta
+        from pathlib import Path as _Path
+
+        db_p = self._quota_db()
+        rows: list[dict[str, Any]] = []
+        if os.path.exists(db_p):
+            conn = sqlite3.connect(db_p, timeout=10.0)
+            conn.row_factory = sqlite3.Row
+            try:
+                tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+                if "qualified_alpha_archive" in tables:
+                    for r in conn.execute(
+                        "SELECT * FROM qualified_alpha_archive ORDER BY sharpe DESC, fitness DESC"
+                    ).fetchall():
+                        d = dict(r)
+                        try:
+                            d["settings"] = _json.loads(d.pop("settings_json", "{}") or "{}")
+                        except Exception:
+                            d["settings"] = {}
+                        rows.append(d)
+            finally:
+                conn.close()
+
+        reserve = [r for r in rows if r.get("tier") == "CONSULTANT_RESERVE" and r.get("submit_status") != "SUBMITTED"]
+        submittable = sorted(
+            [r for r in rows if r.get("tier") != "CONSULTANT_RESERVE" and r.get("submit_status") != "SUBMITTED"],
+            key=lambda x: (float(x.get("fitness") or 0.0), float(x.get("sharpe") or 0.0)),
+        )
+        submitted = [r for r in rows if r.get("submit_status") == "SUBMITTED"]
+
+        enabled, min_sh, min_fit = self._consultant_reserve_thresholds()
+        now_utc = datetime.now(timezone.utc)
+        now_tpe = now_utc.astimezone(timezone(timedelta(hours=8)))
+        payload = {
+            "updated_at_utc": now_utc.isoformat(),
+            "updated_at_taipei": now_tpe.strftime("%Y-%m-%d %H:%M:%S+08:00"),
+            "policy": {
+                "submit_order": self._submit_order_mode(),
+                "consultant_reserve_enabled": enabled,
+                "reserve_min_sharpe": min_sh,
+                "reserve_min_fitness": min_fit,
+            },
+            "summary": {
+                "total_archived": len(rows),
+                "consultant_reserve_count": len(reserve),
+                "bronze_submittable_count": len(submittable),
+                "submitted_count": len(submitted),
+            },
+            "consultant_reserve": reserve,
+            "bronze_submittable_worst_first": submittable,
+            "submitted": submitted,
+        }
+        if output_path is not None:
+            out_p = _Path(output_path)
+            out_p.parent.mkdir(parents=True, exist_ok=True)
+            tmp_p = out_p.parent / f".{out_p.name}.tmp"
+            tmp_p.write_text(_json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp_p, out_p)
+        return payload
+
     def stage_candidate_for_daily_selection(
         self,
         alpha_id: str,
@@ -647,11 +837,33 @@ class BrainClient:
         margin: float = 0.0,
         day_str: str | None = None,
         self_correlation: float | None = None,
-    ) -> None:
+        *,
+        settings: dict[str, Any] | None = None,
+        returns: float = 0.0,
+        drawdown: float = 0.0,
+        sub_universe_sharpe: float | None = None,
+        source: str = "MINER",
+    ) -> str:
         import sqlite3
         from datetime import datetime, timezone
         day = day_str or self._today_taipei()
         import math
+
+        # P37: Always permanently archive every passing alpha's full FastExpr formula first!
+        tier = self.archive_qualified_alpha(
+            alpha_id=str(alpha_id),
+            expression=str(expression),
+            sharpe=float(sharpe),
+            fitness=float(fitness),
+            turnover=float(turnover),
+            margin=float(margin or 0.0),
+            settings=settings,
+            returns=float(returns or 0.0),
+            drawdown=float(drawdown or 0.0),
+            sub_universe_sharpe=sub_universe_sharpe,
+            source=source,
+        )
+
         norm_m = float(margin) / 10000.0 if float(margin) > 0.5 else float(margin)
         m_bps = norm_m * 10000.0
         s_score = max(0.0, min(1.0, (float(sharpe) - 1.0) / 1.5))
@@ -677,6 +889,7 @@ class BrainClient:
         db_p = self._quota_db()
         os.makedirs(os.path.dirname(os.path.abspath(db_p)), exist_ok=True)
         conn = sqlite3.connect(db_p, timeout=10.0)
+        pool_status = "CONSULTANT_RESERVE" if tier == "CONSULTANT_RESERVE" else "PENDING"
         try:
             with conn:
                 conn.execute(
@@ -684,6 +897,16 @@ class BrainClient:
                 )
                 ensure_schema_from_ddl(conn, "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)")
                 self.ensure_novelty_survey_tables(conn)
+                if pool_status == "CONSULTANT_RESERVE":
+                    conn.execute(
+                        "INSERT OR REPLACE INTO brain_candidate_pool (alpha_id, expression, sharpe, fitness, turnover, margin, score, candidate_date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CONSULTANT_RESERVE', ?)",
+                        (str(alpha_id), str(expression), float(sharpe), float(fitness), float(turnover), float(margin), score, day, now_iso),
+                    )
+                    logger.info(
+                        "[CONSULTANT_RESERVE_PROTECTED] Alpha %s (Sharpe=%.2f, Fitness=%.2f) archived & protected from Bronze submit",
+                        alpha_id, float(sharpe), float(fitness),
+                    )
+                    return "CONSULTANT_RESERVE"
                 _all_existing = conn.execute(
                     "SELECT alpha_id, expression FROM brain_candidate_pool WHERE status IN ('PENDING', 'SUBMITTED')"
                 ).fetchall()
@@ -691,18 +914,27 @@ class BrainClient:
                 from worldquant_brain.alpha_novelty import find_duplicate
                 dup_chk = find_duplicate(expression, _existing_exprs)
                 if dup_chk.blocked:
-                    return
+                    return "DUPLICATE_ARCHIVED"
                 from worldquant_brain.alpha_miner import extract_expression_skeleton
                 new_skel = extract_expression_skeleton(expression)
                 existing_rows = conn.execute("SELECT alpha_id, expression, score FROM brain_candidate_pool WHERE candidate_date = ? AND status = 'PENDING'", (day,)).fetchall()
+                worst_first = self._submit_order_mode() == "worst_first"
                 skip_clone = False
                 for er in existing_rows:
                     if extract_expression_skeleton(er[1]) == new_skel and er[0] != str(alpha_id):
-                        if float(er[2]) >= float(score):
-                            skip_clone = True
-                            break
+                        if worst_first:
+                            # Keep the lower-scoring qualifying clone for Bronze submission (both remain archived)
+                            if float(er[2]) <= float(score):
+                                skip_clone = True
+                                break
+                            else:
+                                conn.execute("DELETE FROM brain_candidate_pool WHERE alpha_id = ?", (er[0],))
                         else:
-                            conn.execute("DELETE FROM brain_candidate_pool WHERE alpha_id = ?", (er[0],))
+                            if float(er[2]) >= float(score):
+                                skip_clone = True
+                                break
+                            else:
+                                conn.execute("DELETE FROM brain_candidate_pool WHERE alpha_id = ?", (er[0],))
                 if not skip_clone:
                     conn.execute(
                         "INSERT OR REPLACE INTO brain_candidate_pool (alpha_id, expression, sharpe, fitness, turnover, margin, score, candidate_date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)",
@@ -710,6 +942,7 @@ class BrainClient:
                     )
         finally:
             conn.close()
+        return pool_status
 
     def harvest_unsubmitted_candidates(
         self,
@@ -717,7 +950,11 @@ class BrainClient:
         limit: int = 50,
         day_str: str | None = None,
     ) -> int:
-        """Scan BRAIN /users/self/alphas?status=UNSUBMITTED (sorted by -is.fitness) and stage qualified alphas into brain_candidate_pool."""
+        """Scan BRAIN /users/self/alphas?status=UNSUBMITTED:
+        - In Bronze worst_first mode: harvest lowest-fitness qualifying alphas (is.fitness ASC) for submission,
+          AND run a second pass (-is.fitness DESC) to permanently archive top gems as CONSULTANT_RESERVE.
+        - In Consultant best_first mode: harvest highest-fitness qualifying alphas (-is.fitness DESC).
+        """
         if self.offline_mode:
             return 0
         if not self.is_authenticated and not self.authenticate():
@@ -726,30 +963,12 @@ class BrainClient:
 
         min_margin = float(os.getenv("BRAIN_MIN_MARGIN", "0.0005") or "0.0005")
         url = f"{self.BASE_URL}/users/self/alphas"
-        params = {
-            "status": "UNSUBMITTED",
-            "limit": int(max(10, min(100, limit))),
-            "offset": 0,
-            "order": "-is.fitness",
-        }
-        try:
-            resp = self.session.get(url, params=params, timeout=min(self.timeout, 20.0))
-            if resp.status_code == 401:
-                self.authenticated = False
-                if self.authenticate():
-                    resp = self.session.get(url, params=params, timeout=min(self.timeout, 20.0))
-            if resp.status_code != 200 or not resp.content:
-                return 0
-            payload = resp.json()
-        except Exception as exc:
-            logger.debug("harvest_unsubmitted_candidates fetch failed: %s", exc)
-            return 0
+        worst_first = self._submit_order_mode() == "worst_first"
+        pass_orders = [
+            ("is.fitness", True),   # Pass 1: worst qualifying first for Bronze submit
+            ("-is.fitness", False), # Pass 2: archive top UNSUBMITTED gems into CONSULTANT_RESERVE
+        ] if worst_first else [("-is.fitness", True)]
 
-        items = payload.get("results") if isinstance(payload, dict) else (payload if isinstance(payload, list) else [])
-        if not isinstance(items, list) or not items:
-            return 0
-
-        # Skip any alpha_id already processed (SUBMITTED / FAILED_CHECKS / FAILED_CORR / PENDING)
         existing_ids: set[str] = set()
         db_p = self._quota_db()
         if os.path.exists(db_p):
@@ -764,56 +983,110 @@ class BrainClient:
                 pass
 
         staged = 0
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            aid = str(item.get("id") or "").strip()
-            if not aid or aid in existing_ids:
-                continue
-            is_blk = item.get("is") if isinstance(item.get("is"), dict) else {}
-            sett = item.get("settings") if isinstance(item.get("settings"), dict) else {}
-            sh = self._number(is_blk, "sharpe")
-            fit = self._number(is_blk, "fitness")
-            to = self._number(is_blk, "turnover")
-            mg = self._number(is_blk, "margin")
-            if sh is None or fit is None or to is None:
-                continue
-            delay = int(sett.get("delay", 1) or 1)
-            min_sh = 2.00 if delay == 0 else 1.25
-            min_fit = 1.30 if delay == 0 else 1.00
-            norm_to = to / 100.0 if 2.0 < to <= 70.0 else to
-            if sh < min_sh or fit < min_fit or not (0.01 <= norm_to <= 0.70):
-                continue
-            if mg is not None:
-                norm_mg = mg / 10000.0 if mg > 0.5 else mg
-                if norm_mg < min_margin:
+        for order_val, allow_pending_stage in pass_orders:
+            params: dict[str, Any] = {
+                "status": "UNSUBMITTED",
+                "limit": int(max(10, min(100, limit))),
+                "offset": 0,
+                "order": order_val,
+                "is.sharpe>=": 1.25,
+                "is.fitness>=": 1.0,
+            }
+            try:
+                resp = self.session.get(url, params=params, timeout=min(self.timeout, 20.0))
+                if resp.status_code == 401:
+                    self.authenticated = False
+                    if self.authenticate():
+                        resp = self.session.get(url, params=params, timeout=min(self.timeout, 20.0))
+                if resp.status_code != 200 or not resp.content:
                     continue
-            checks = is_blk.get("checks") if isinstance(is_blk.get("checks"), list) else []
-            if any(
-                isinstance(ch, dict) and str(ch.get("result") or "").upper() in ("FAIL", "FAILED", "ERROR")
-                for ch in checks
-            ):
+                payload = resp.json()
+            except Exception as exc:
+                logger.debug("harvest_unsubmitted_candidates (%s) fetch failed: %s", order_val, exc)
                 continue
-            reg = item.get("regular") if isinstance(item.get("regular"), dict) else {}
-            expr = str(reg.get("code") or item.get("expression") or "").strip()
-            if not expr:
+
+            items = payload.get("results") if isinstance(payload, dict) else (payload if isinstance(payload, list) else [])
+            if not isinstance(items, list) or not items:
                 continue
-            self.stage_candidate_for_daily_selection(
-                aid,
-                expr,
-                float(sh),
-                float(fit),
-                float(norm_to),
-                float(mg or 0.0),
-                day_str=day_str,
-            )
-            existing_ids.add(aid)
-            staged += 1
+
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                aid = str(item.get("id") or "").strip()
+                if not aid:
+                    continue
+                is_blk = item.get("is") if isinstance(item.get("is"), dict) else {}
+                sett = item.get("settings") if isinstance(item.get("settings"), dict) else {}
+                sh = self._number(is_blk, "sharpe")
+                fit = self._number(is_blk, "fitness")
+                to = self._number(is_blk, "turnover")
+                mg = self._number(is_blk, "margin")
+                ret = self._number(is_blk, "returns") or 0.0
+                dd = self._number(is_blk, "drawdown") or 0.0
+                if sh is None or fit is None or to is None:
+                    continue
+                delay = int(sett.get("delay", 1) or 1)
+                min_sh = 2.00 if delay == 0 else 1.25
+                min_fit = 1.30 if delay == 0 else 1.00
+                norm_to = to / 100.0 if 2.0 < to <= 70.0 else to
+                if sh < min_sh or fit < min_fit or not (0.01 <= norm_to <= 0.70):
+                    continue
+                if mg is not None:
+                    norm_mg = mg / 10000.0 if mg > 0.5 else mg
+                    if norm_mg < min_margin:
+                        continue
+                checks = is_blk.get("checks") if isinstance(is_blk.get("checks"), list) else []
+                if any(
+                    isinstance(ch, dict) and str(ch.get("result") or "").upper() in ("FAIL", "FAILED", "ERROR")
+                    for ch in checks
+                ):
+                    continue
+                reg = item.get("regular") if isinstance(item.get("regular"), dict) else {}
+                expr = str(reg.get("code") or item.get("expression") or "").strip()
+                if not expr:
+                    continue
+
+                if not allow_pending_stage:
+                    # Pass 2: archive-only pass (protects top gems without putting them into PENDING)
+                    self.archive_qualified_alpha(
+                        aid, expr, float(sh), float(fit), float(norm_to), float(mg or 0.0),
+                        settings=sett, returns=float(ret), drawdown=float(dd), source="BACKLOG_ARCHIVE",
+                    )
+                    continue
+
+                if aid in existing_ids:
+                    # Still ensure its formula is permanently archived
+                    self.archive_qualified_alpha(
+                        aid, expr, float(sh), float(fit), float(norm_to), float(mg or 0.0),
+                        settings=sett, returns=float(ret), drawdown=float(dd), source="BACKLOG_SYNC",
+                    )
+                    continue
+
+                res_status = self.stage_candidate_for_daily_selection(
+                    aid,
+                    expr,
+                    float(sh),
+                    float(fit),
+                    float(norm_to),
+                    float(mg or 0.0),
+                    day_str=day_str,
+                    settings=sett,
+                    returns=float(ret),
+                    drawdown=float(dd),
+                    source="BACKLOG_HARVEST",
+                )
+                existing_ids.add(aid)
+                if res_status == "PENDING":
+                    staged += 1
         return staged
 
     def flush_daily_candidates(self, day_str: str | None = None, max_daily_submissions: int | None = None) -> list[dict[str, Any]]:
-        """Submit top-scoring pending candidates from today's pool up to the remaining daily quota."""
+        """Submit pending candidates up to the remaining daily quota.
+        P37: Defaults to reverse order ('worst_first': fitness ASC, sharpe ASC, score ASC)
+        and enforces defense-in-depth Consultant Reserve protection (Sharpe >= 1.50 or Fitness >= 1.20).
+        """
         import sqlite3
+        from datetime import datetime, timezone
         day = day_str or self._today_taipei()
         limit = int(max_daily_submissions if max_daily_submissions is not None else os.getenv("BRAIN_MAX_DAILY_SUBMISSIONS", "2"))
         remaining = max(0, limit - self.get_daily_submission_count(day))
@@ -822,6 +1095,8 @@ class BrainClient:
         db_p = self._quota_db()
         if not os.path.exists(db_p):
             return []
+        order_mode = self._submit_order_mode()
+        order_sql = "ORDER BY fitness ASC, sharpe ASC, score ASC" if order_mode == "worst_first" else "ORDER BY score DESC, sharpe DESC"
         conn = sqlite3.connect(db_p, timeout=10.0)
         conn.row_factory = sqlite3.Row
         try:
@@ -829,8 +1104,9 @@ class BrainClient:
                 "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)"
             )
             ensure_schema_from_ddl(conn, "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)")
+            self._ensure_qualified_archive_table(conn)
             all_pending = conn.execute(
-                "SELECT alpha_id, expression, score, sharpe FROM brain_candidate_pool WHERE candidate_date <= ? AND status = 'PENDING' ORDER BY score DESC, sharpe DESC",
+                f"SELECT alpha_id, expression, score, sharpe, fitness, turnover, margin FROM brain_candidate_pool WHERE candidate_date <= ? AND status = 'PENDING' {order_sql}",
                 (day,),
             ).fetchall()
             from worldquant_brain.alpha_miner import extract_expression_skeleton
@@ -839,15 +1115,68 @@ class BrainClient:
         finally:
             conn.close()
 
+        # P37 Upfront Reserve Sweep: immediately protect & archive ANY legacy PENDING gems (>=1.50 Sharpe or >=1.20 Fitness)
+        eligible_rows = []
+        for row in rows:
+            _aid = str(row["alpha_id"])
+            _expr = str(row["expression"] or "")
+            _sh = float(row["sharpe"] or 0.0)
+            _fit = float(row["fitness"] or 0.0)
+            _to = float(row["turnover"] or 0.0)
+            _mg = float(row["margin"] or 0.0)
+            if self._is_consultant_reserve(_sh, _fit):
+                self.archive_qualified_alpha(
+                    _aid, _expr, _sh, _fit, _to, _mg,
+                    submit_status="CONSULTANT_RESERVE", source="FLUSH_RESERVE_SWEEP",
+                )
+                try:
+                    c_res = sqlite3.connect(db_p, timeout=10.0)
+                    c_res.execute("UPDATE brain_candidate_pool SET status = 'CONSULTANT_RESERVE' WHERE alpha_id = ?", (_aid,))
+                    c_res.commit()
+                    c_res.close()
+                except Exception as _res_exc:
+                    logger.debug("Could not move %s to CONSULTANT_RESERVE: %s", _aid, _res_exc)
+                logger.info(
+                    "[CONSULTANT_RESERVE_BLOCKED_SUBMIT] Protected Alpha %s (Sharpe=%.2f, Fitness=%.2f) from Bronze submit",
+                    _aid, _sh, _fit,
+                )
+            else:
+                eligible_rows.append(row)
+
         results: list[dict[str, Any]] = []
         submitted_count = 0
         submitted_skels: set[str] = set()
         failed_corr_skels: set[str] = set()
-        for row in rows:
+        for row in eligible_rows:
             if submitted_count >= remaining:
                 break
             aid = str(row["alpha_id"])
-            skel = extract_expression_skeleton(str(row["expression"] or ""))
+            expr = str(row["expression"] or "")
+            sh_val = float(row["sharpe"] or 0.0)
+            fit_val = float(row["fitness"] or 0.0)
+            to_val = float(row["turnover"] or 0.0)
+            mg_val = float(row["margin"] or 0.0)
+
+            # P37 Defense-in-Depth: NEVER submit Consultant Reserve gems during Bronze mode
+            if self._is_consultant_reserve(sh_val, fit_val):
+                self.archive_qualified_alpha(
+                    aid, expr, sh_val, fit_val, to_val, mg_val,
+                    submit_status="CONSULTANT_RESERVE", source="FLUSH_PROTECTED",
+                )
+                try:
+                    c_res = sqlite3.connect(db_p, timeout=10.0)
+                    c_res.execute("UPDATE brain_candidate_pool SET status = 'CONSULTANT_RESERVE' WHERE alpha_id = ?", (aid,))
+                    c_res.commit()
+                    c_res.close()
+                except Exception as _res_exc:
+                    logger.debug("Could not move %s to CONSULTANT_RESERVE: %s", aid, _res_exc)
+                logger.info(
+                    "[CONSULTANT_RESERVE_BLOCKED_SUBMIT] Protected Alpha %s (Sharpe=%.2f, Fitness=%.2f) from Bronze submit",
+                    aid, sh_val, fit_val,
+                )
+                continue
+
+            skel = extract_expression_skeleton(expr)
             if skel in submitted_skels:
                 continue  # Skip same skeleton only AFTER a sibling succeeded this round
             if skel and skel in failed_corr_skels:
@@ -860,15 +1189,24 @@ class BrainClient:
                 except Exception as _skip_exc:
                     logger.debug("Could not mark clone FAILED_CORR for %s: %s", aid, _skip_exc)
                 continue
+
+            # Ensure formula is permanently archived before submitting
+            self.archive_qualified_alpha(aid, expr, sh_val, fit_val, to_val, mg_val, source="PRE_SUBMIT")
+
             res = self.submit_alpha(aid, max_daily_submissions=limit, enforce_checks=True, day_str=day)
             results.append(res)
             status_val = str(res.get("status") or "")
+            now_iso = datetime.now(timezone.utc).isoformat()
             if res.get("success"):
                 submitted_count += 1
                 submitted_skels.add(skel)
                 try:
                     c_ok = sqlite3.connect(db_p, timeout=10.0)
                     c_ok.execute("UPDATE brain_candidate_pool SET status = 'SUBMITTED' WHERE alpha_id = ?", (aid,))
+                    c_ok.execute(
+                        "UPDATE qualified_alpha_archive SET submit_status = 'SUBMITTED', updated_at = ? WHERE alpha_id = ?",
+                        (now_iso, aid),
+                    )
                     c_ok.commit()
                     c_ok.close()
                 except Exception as _ok_exc:
@@ -884,6 +1222,10 @@ class BrainClient:
                 try:
                     c2 = sqlite3.connect(db_p, timeout=10.0)
                     c2.execute("UPDATE brain_candidate_pool SET status = ? WHERE alpha_id = ?", (new_status, aid))
+                    c2.execute(
+                        "UPDATE qualified_alpha_archive SET submit_status = ?, updated_at = ? WHERE alpha_id = ?",
+                        (new_status, now_iso, aid),
+                    )
                     c2.commit()
                     c2.close()
                 except Exception as _silent_exc:
