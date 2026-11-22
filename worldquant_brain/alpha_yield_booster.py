@@ -98,7 +98,7 @@ def generate_orthogonal_combo_candidate() -> dict[str, str]:
     atom_a = random.choice(_HIGH_YIELD_ATOMS[dom_a])
     atom_b = random.choice(_HIGH_YIELD_ATOMS[dom_b])
     grp = random.choice(["subindustry", "industry", "sector"])
-    h = random.choice([0.008, 0.01, 0.012])
+    h = random.choice([0.0005, 0.0008, 0.001])
     mode = random.choice(["BLEND", "GATED", "VOL_SCALED", "VOL_SPIKE_EVENT", "GRADUAL_EVENT_DECAY", "LIQ_BUCKET_DOUBLE_NEUT", "ORTHOG_RESID"])
 
     if mode == "BLEND":
@@ -165,7 +165,7 @@ def precision_repair_near_miss(
         s["truncation"] = 0.05
         repairs.append({
             "name": "Repair_LowMargin_LiqDecayHump",
-            "expression": f"hump(ts_decay_linear(ts_backfill({expr}, 5), 5) * rank(volume * close) + ts_decay_linear(ts_backfill({expr}, 5), 10) * (1 - rank(volume * close)), hump=0.015)",
+            "expression": f"hump(ts_decay_linear(ts_backfill({expr}, 5), 5) * rank(volume * close) + ts_decay_linear(ts_backfill({expr}, 5), 10) * (1 - rank(volume * close)), hump=0.0008)",
             "settings": s,
             "reason": "LOW_MARGIN_LIQ_DECAY_HUMP",
         })
@@ -207,7 +207,7 @@ def precision_repair_near_miss(
         s["decay"] = min(10, max(6, int(base.get("decay", 4) or 4) + 2))
         repairs.append({
             "name": "Repair_WastefulTurnover_Hump",
-            "expression": expr if expr.startswith("hump(") else f"hump({expr}, hump=0.01)",
+            "expression": expr if expr.startswith("hump(") else f"hump({expr}, hump=0.0008)",
             "settings": s,
             "reason": "WASTEFUL_TURNOVER_APPLY_HUMP",
         })
@@ -290,13 +290,13 @@ def precision_repair_near_miss(
         s_2y["decay"] = min(6, max(0, int(base.get("decay", 2) or 2)))
         repairs.append({
             "name": "Repair_Low2YSharpe_ISLadderBoost",
-            "expression": f"hump(group_neutralize(rank({expr}) / (1.5 - rank({expr})), subindustry), hump=0.015)",
+            "expression": f"hump(group_neutralize(rank({expr}) / (1.5 - rank({expr})), subindustry), hump=0.0008)",
             "settings": s_2y,
             "reason": "LOW_2Y_SHARPE_IS_LADDER_SELF_BOOST",
         })
         repairs.append({
             "name": "Repair_Low2YSharpe_SmoothDecay",
-            "expression": f"hump(ts_decay_linear(group_neutralize(winsorize(rank({expr}), std=3.5), subindustry), 5), hump=0.015)",
+            "expression": f"hump(ts_decay_linear(group_neutralize(winsorize(rank({expr}), std=3.5), subindustry), 5), hump=0.0008)",
             "settings": s_2y,
             "reason": "LOW_2Y_SHARPE_HUMP_DECAY_STABILIZE",
         })
@@ -390,22 +390,29 @@ def generate_decorrelation_variants(
         _add("Decorr_FieldSub_Vwap", _re.sub(r"\bclose\b", "vwap", expr), dict(base), "CORR_FIELD_SUBSTITUTION_VWAP")
         _add("Decorr_FieldSub_Open", _re.sub(r"\bclose\b", "open", expr), dict(base), "CORR_FIELD_SUBSTITUTION_OPEN")
 
-    # Pillar 2: Similar operator substitution (median vs mean, zscore vs rank, ts_rank vs ts_zscore)
+    # Pillar 2: Similar operator substitution (Bronze-unlocked: ts_decay_linear vs ts_mean, zscore vs rank, ts_rank vs ts_zscore)
     if _re.search(r"\bts_mean\s*\(", expr):
-        _add("Decorr_OpSub_TsMedian", _re.sub(r"\bts_mean\s*\(", "ts_median(", expr, count=1), dict(base), "CORR_OP_SUBSTITUTION_TS_MEDIAN")
+        _add("Decorr_OpSub_TsDecay", _re.sub(r"\bts_mean\s*\(", "ts_decay_linear(", expr, count=1), dict(base), "CORR_OP_SUBSTITUTION_TS_DECAY")
     elif _re.search(r"\bts_zscore\s*\(", expr):
         _add("Decorr_OpSub_TsRank", _re.sub(r"\bts_zscore\s*\(", "ts_rank(", expr, count=1), dict(base), "CORR_OP_SUBSTITUTION_TS_RANK")
     elif _re.search(r"\brank\s*\(", expr):
         _add("Decorr_OpSub_Zscore", _re.sub(r"\brank\s*\(", "winsorize(zscore(", expr, count=1).replace(")", "), std=4)", 1) if expr.count(")") >= 1 else expr, dict(base), "CORR_OP_SUBSTITUTION_ZSCORE")
 
-    # Pillar 3: Meaningful grouping & neutralization rotation (no arbitrary groups)
+    # Pillar 3: Meaningful Bronze-safe grouping & neutralization rotation (including verified pv13_h2_sector group)
     cur_neut = str(base.get("neutralization") or "SUBINDUSTRY").upper()
-    for alt_neut in ("INDUSTRY", "SECTOR", "CROWDING", "MARKET"):
+    for alt_neut in ("INDUSTRY", "SECTOR", "SUBINDUSTRY", "MARKET"):
         if alt_neut != cur_neut and alt_neut not in unavail:
             s_neut = dict(base)
             s_neut["neutralization"] = alt_neut
             _add(f"Decorr_Neut_{alt_neut}", expr, s_neut, f"CORR_NEUTRALIZATION_{alt_neut}")
             break
+    if "pv13_h2_sector" not in expr:
+        _add(
+            "Decorr_Group_Pv13H2Sector",
+            f"group_neutralize({expr}, pv13_h2_sector)",
+            dict(base),
+            "CORR_EXTRA_GROUP_PV13_H2_SECTOR",
+        )
 
     # Pillar 4: Orthogonal conditioning / cross-domain blend
     _add(
@@ -417,7 +424,7 @@ def generate_decorrelation_variants(
     atom = random.choice(_HIGH_YIELD_ATOMS["FUND_QUALITY"] + _HIGH_YIELD_ATOMS["ANALYST_REV"])
     _add(
         "Decorr_Orthog_Combo",
-        f"hump(group_neutralize(0.5 * winsorize(rank({expr}), std=4) + 0.5 * winsorize(rank({atom}), std=4), industry), hump=0.01)",
+        f"hump(group_neutralize(0.5 * winsorize(rank({expr}), std=4) + 0.5 * winsorize(rank({atom}), std=4), industry), hump=0.0008)",
         dict(base),
         "CORR_ORTHOG_COMBO",
     )

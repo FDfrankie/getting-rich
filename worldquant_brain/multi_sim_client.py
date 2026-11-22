@@ -88,69 +88,128 @@ DEFAULT_SIM_SETTINGS: dict[str, Any] = {
 }
 
 # Curated high-coverage non-PV fallback fields when /data-fields is unavailable or offline
+# Live-verified USA TOP3000 D1 fields across all 14 Data Explorer datasets (audited 2026-11-22)
 CURATED_DATASET_FIELDS: dict[str, tuple[str, ...]] = {
-    "analyst4": (
-        "anl4_afv4_eps_mean",
-        "anl4_afv4_eps_high",
-        "anl4_afv4_eps_low",
-        "anl4_afv4_eps_std",
-        "anl4_afv4_eps_number",
-        "anl4_afv4_sales_mean",
-        "anl4_afv4_ebitda_mean",
-        "anl4_afv4_cfps_mean",
-        "anl4_tot_assets_mean",
-        "anl4_netprofit_mean",
-        "anl4_bvps_mean",
-        "anl4_roe_mean",
-    ),
-    "fundamental6": (
-        "fnd6_ebit",
-        "fnd6_ebitda",
-        "fnd6_oancf",
-        "fnd6_sale",
-        "fnd6_ni",
-        "fnd6_at",
-        "fnd6_lt",
-        "fnd6_ceq",
-        "fnd6_che",
-        "fnd6_capx",
-        "fnd6_invt",
-        "fnd6_rect",
-        "fnd6_cogs",
-        "fnd6_xsga",
-    ),
     "model16": (
-        "mdl16_value",
-        "mdl16_momentum",
-        "mdl16_quality",
-        "mdl16_growth",
-        "mdl16_earnings_quality",
-        "mdl16_analyst_revisions",
-        "mdl16_price_momentum",
-        "mdl16_short_interest",
+        "analyst_revision_rank_derivative",
+        "cashflow_efficiency_rank_derivative",
+        "composite_factor_score_derivative",
+        "earnings_certainty_rank_derivative",
+        "fscore_bfl_growth",
+        "fscore_bfl_momentum",
+        "fscore_bfl_profitability",
+        "fscore_bfl_quality",
+        "fscore_bfl_value",
+        "fscore_bfl_total",
+    ),
+    "model51": (
+        "beta_last_30_days_spy",
+        "beta_last_60_days_spy",
+        "beta_last_90_days_spy",
+        "beta_last_360_days_spy",
+        "correlation_last_30_days_spy",
+        "correlation_last_90_days_spy",
+        "correlation_last_360_days_spy",
+        "systematic_risk_last_30_days",
+        "systematic_risk_last_90_days",
+        "unsystematic_risk_last_30_days",
+        "unsystematic_risk_last_90_days",
+        "unsystematic_risk_last_360_days",
+    ),
+    "socialmedia8": (
+        "snt_social_value",
+        "snt_social_value_fast_d1",
+        "snt_social_volume",
+        "snt_social_volume_fast_d1",
+    ),
+    "socialmedia12": (
+        "scl12_buzz",
+        "scl12_buzz_fast_d1",
+        "scl12_sentiment",
+        "scl12_sentiment_fast_d1",
+        "snt_buzz",
+        "snt_buzz_bfl",
+        "snt_buzz_ret",
+        "VEC:scl12_sentvec",
+        "VEC:scl12_buzzvec",
     ),
     "option8": (
-        "opt8_imp_vol_30",
-        "opt8_imp_vol_60",
-        "opt8_imp_vol_90",
-        "opt8_put_call_ratio",
-        "opt8_skew_30",
-        "opt8_call_volume",
-        "opt8_put_volume",
+        "historical_volatility_10",
+        "historical_volatility_30",
+        "historical_volatility_90",
+        "historical_volatility_180",
+        "implied_volatility_call_10",
+        "implied_volatility_call_120",
+        "implied_volatility_call_180",
+        "implied_volatility_call_1080",
+    ),
+    "option9": (
+        "pcr_oi_10",
+        "pcr_oi_30",
+        "pcr_oi_60",
+        "pcr_oi_90",
+        "pcr_oi_180",
+        "pcr_oi_360",
+        "pcr_oi_all",
+        "call_breakeven_10",
+        "call_breakeven_20",
+        "put_breakeven_10",
+    ),
+    "pv13": (
+        "pv13_custretsig_retsig",
+        "pv13_com_page_rank",
+        "pv13_com_rk_au",
+        "primary_sector_focused_company_count",
     ),
     "news12": (
-        "nws12_prez_1l",
-        "nws12_prez_5l",
-        "nws12_prez_20l",
-        "nws12_mainz_1l",
-        "nws12_mainz_5l",
-        "nws12_mainz_20l",
+        "news_max_up_ret",
+        "news_tot_ticks",
+        "news_atr14",
+        "news_pe_ratio",
+        "news_mins_20_pct_dn",
+        "VEC:nws12_prez_4l",
+        "VEC:nws12_afterhsz_sl",
     ),
-    "sentiment1": (
-        "snt1_cored1_score",
-        "snt1_d1_score",
-        "snt1_d5_score",
-        "snt1_d20_score",
+    "news18": (
+        "VEC:nws18_ghc_lna",
+        "VEC:nws18_nip",
+        "rp_css_earnings",
+        "rp_ess_earnings",
+        "rp_css_ratings",
+        "rp_ess_ratings",
+        "rp_ess_mna",
+        "rp_css_revenue",
+    ),
+    "analyst4": (
+        "est_eps",
+        "anl4_qf_az_eps_number",
+        "anl4_ebit_value",
+        "anl4_ebitda_value",
+        "anl4_adjusted_netincome_ft",
+        "anl4_epsr_flag",
+        "anl4_netdebt_flag",
+        "anl4_ptp_flag",
+        "anl4_bvps_flag",
+    ),
+    "fundamental6": (
+        "assets",
+        "assets_curr",
+        "bookvalue_ps",
+        "capex",
+        "cash",
+        "cashflow_op",
+        "cogs",
+        "current_ratio",
+        "debt",
+        "debt_lt",
+    ),
+    "fundamental2": (
+        "fn_accum_oth_income_loss_net_of_tax_a",
+        "fn_comp_not_rec_a",
+        "fn_op_lease_rent_exp_a",
+        "fn_op_lease_min_pay_due_a",
+        "fn_eff_income_tax_rate_continuing_operations_a",
+        "fn_liab_fair_val_l1_a",
     ),
 }
 
@@ -237,6 +296,36 @@ def find_locked_bronze_operators(expression: str) -> list[str]:
         return []
     calls = _FASTEXPR_CALL_RE.findall(str(expression or ""))
     return sorted({c for c in calls if c.lower() not in BRONZE_UNLOCKED_OPERATORS})
+
+
+_POWER_POOL_EXCLUDED_GROUPS: frozenset[str] = frozenset({
+    "currency", "country", "exchange", "sector", "industry", "subindustry", "market",
+    "split", "adjfactor", "pv13_1l_scibr", "pv13_h2_sector", "pv13_h_f1_sector",
+})
+_POWER_POOL_KWARGS: frozenset[str] = frozenset({
+    "std", "hump", "driver", "range", "lag", "rettype", "k", "ignore", "dense", "true", "false", "nan",
+})
+
+
+def check_power_pool_eligibility(expression: str) -> dict[str, Any]:
+    """Official BRAIN Power Pool structural check: <= 8 operators (excl. backfill) and <= 3 unique data fields."""
+    expr = str(expression or "")
+    calls = [c.lower() for c in _FASTEXPR_CALL_RE.findall(expr)]
+    counted_ops = [c for c in calls if c not in {"ts_backfill", "group_backfill"}]
+    op_set = set(calls)
+    all_idents = re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", expr)
+    unique_fields = sorted({
+        tok for tok in all_idents
+        if tok.lower() not in op_set
+        and tok.lower() not in _POWER_POOL_EXCLUDED_GROUPS
+        and tok.lower() not in _POWER_POOL_KWARGS
+    })
+    return {
+        "eligible": len(counted_ops) <= 8 and len(unique_fields) <= 3,
+        "operator_count": len(counted_ops),
+        "unique_field_count": len(unique_fields),
+        "unique_fields": unique_fields,
+    }
 
 
 def build_sim_payload(expression: str, settings: Mapping[str, Any] | None = None) -> dict[str, Any]:

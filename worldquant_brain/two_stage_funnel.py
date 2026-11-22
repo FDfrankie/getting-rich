@@ -32,39 +32,88 @@ from worldquant_brain.multi_sim_client import DEFAULT_SIM_SETTINGS, default_neut
 # Curated v8 multi-field economic hypothesis seeds grounded in official BRAIN Data Explorer & Research Papers 01-14.
 # Every expression uses strictly verified Bronze-unlocked operators (66-op whitelist) and live USA TOP3000 D1 fields.
 V8_ECONOMIC_HYPOTHESIS_SEEDS: tuple[dict[str, Any], ...] = (
+    # P32 LIVE-EVIDENCE PRIORITY SEEDS (un-frozen from 9ql2kwdx Sharpe=0.98@0.47%TO, P05M7vpq Sharpe=2.06@101%TO, blaKrN1p Sharpe=-0.91@11.9%TO)
+    {
+        "name": "p32_rescue_9ql2kwdx_pcr_slope_d0",
+        "dataset_id": "option9",
+        "expression": "group_neutralize(-rank(ts_backfill(pcr_oi_30, 5) - ts_backfill(pcr_oi_360, 5)), sector)",
+        "neutralization": "SECTOR",
+        "universe": "TOP3000",
+        "decay": 0,
+    },
+    {
+        "name": "p32_rescue_9ql2kwdx_pcr_slope_top1000",
+        "dataset_id": "option9",
+        "expression": "group_neutralize(-rank(ts_backfill(pcr_oi_30, 5) - ts_backfill(pcr_oi_360, 5)), sector)",
+        "neutralization": "SECTOR",
+        "universe": "TOP1000",
+        "decay": 0,
+    },
+    {
+        "name": "p32_rescue_P05M7vpq_idio_decay4",
+        "dataset_id": "model51",
+        "expression": "ts_decay_linear(rank(ts_backfill(unsystematic_risk_last_360_days, 20) - last_diff_value(ts_backfill(unsystematic_risk_last_360_days, 20), 1)), 4)",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP3000",
+        "decay": 4,
+    },
+    {
+        "name": "p32_rescue_P05M7vpq_idio_decay8",
+        "dataset_id": "model51",
+        "expression": "ts_decay_linear(rank(ts_backfill(unsystematic_risk_last_360_days, 20) - last_diff_value(ts_backfill(unsystematic_risk_last_360_days, 20), 1)), 8)",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP3000",
+        "decay": 6,
+    },
+    {
+        "name": "p32_rescue_blaKrN1p_corr360_flip",
+        "dataset_id": "model51",
+        "expression": "-winsorize(ts_rank(ts_backfill(correlation_last_360_days_spy, 5), 120), std=4)",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP1000",
+        "decay": 2,
+    },
+    {
+        "name": "p32_rescue_Jj82WNl2_corr60_flip",
+        "dataset_id": "model51",
+        "expression": "-winsorize(ts_rank(ts_backfill(correlation_last_60_days_spy, 5), 120), std=4)",
+        "neutralization": "INDUSTRY",
+        "universe": "TOP1000",
+        "decay": 2,
+    },
     # model51 (Systematic Risk Metrics, 96% coverage — P05M7vpq family)
     {
         "name": "v8_model51_beta_term_slope",
         "dataset_id": "model51",
-        "expression": "hump(group_neutralize(rank(ts_backfill(beta_last_30_days_spy, 5) - ts_backfill(beta_last_360_days_spy, 5)), industry), hump=0.015)",
+        "expression": "group_neutralize(rank(ts_backfill(beta_last_30_days_spy, 5) - ts_backfill(beta_last_360_days_spy, 5)), industry)",
         "neutralization": "INDUSTRY",
         "decay": 2,
     },
     {
         "name": "v8_model51_beta_term_rev",
         "dataset_id": "model51",
-        "expression": "hump(group_neutralize(-rank(ts_backfill(beta_last_30_days_spy, 5) - ts_backfill(beta_last_360_days_spy, 5)), subindustry), hump=0.015)",
+        "expression": "group_neutralize(-rank(ts_backfill(beta_last_30_days_spy, 5) - ts_backfill(beta_last_360_days_spy, 5)), subindustry)",
         "neutralization": "SUBINDUSTRY",
         "decay": 4,
     },
     {
         "name": "v8_model51_idio_risk_shift",
         "dataset_id": "model51",
-        "expression": "hump(group_neutralize(rank(ts_backfill(unsystematic_risk_last_30_days, 5) - ts_backfill(unsystematic_risk_last_360_days, 5)), industry), hump=0.015)",
+        "expression": "group_neutralize(rank(ts_backfill(unsystematic_risk_last_30_days, 5) - ts_backfill(unsystematic_risk_last_360_days, 5)), industry)",
         "neutralization": "INDUSTRY",
         "decay": 4,
     },
     {
         "name": "v8_model51_idio_rev_low_to",
         "dataset_id": "model51",
-        "expression": "hump(ts_decay_linear(rank(ts_backfill(unsystematic_risk_last_360_days, 20) - last_diff_value(ts_backfill(unsystematic_risk_last_360_days, 20), 5)), 8), hump=0.02)",
+        "expression": "ts_decay_linear(rank(ts_backfill(unsystematic_risk_last_360_days, 20) - last_diff_value(ts_backfill(unsystematic_risk_last_360_days, 20), 5)), 8)",
         "neutralization": "SUBINDUSTRY",
         "decay": 6,
     },
     {
         "name": "v8_model51_corr_regime_shift",
         "dataset_id": "model51",
-        "expression": "hump(group_neutralize(rank(ts_backfill(correlation_last_30_days_spy, 5) - ts_backfill(correlation_last_360_days_spy, 5)), sector), hump=0.015)",
+        "expression": "group_neutralize(rank(ts_backfill(correlation_last_30_days_spy, 5) - ts_backfill(correlation_last_360_days_spy, 5)), sector)",
         "neutralization": "SECTOR",
         "decay": 2,
     },
@@ -72,21 +121,21 @@ V8_ECONOMIC_HYPOTHESIS_SEEDS: tuple[dict[str, Any], ...] = (
     {
         "name": "v8_option9_pcr_term_slope",
         "dataset_id": "option9",
-        "expression": "hump(group_neutralize(-rank(ts_backfill(pcr_oi_30, 5) - ts_backfill(pcr_oi_360, 5)), sector), hump=0.015)",
+        "expression": "group_neutralize(-rank(ts_backfill(pcr_oi_30, 5) - ts_backfill(pcr_oi_360, 5)), sector)",
         "neutralization": "SECTOR",
         "decay": 2,
     },
     {
         "name": "v8_option9_pcr_short_vs_all",
         "dataset_id": "option9",
-        "expression": "hump(group_neutralize(-ts_zscore(ts_backfill(pcr_oi_30, 5) / (ts_backfill(pcr_oi_all, 5) + 0.01), 60), sector), hump=0.015)",
+        "expression": "group_neutralize(-ts_zscore(ts_backfill(pcr_oi_30, 5) / (ts_backfill(pcr_oi_all, 5) + 0.01), 60), sector)",
         "neutralization": "SECTOR",
         "decay": 4,
     },
     {
         "name": "v8_option9_breakeven_skew",
         "dataset_id": "option9",
-        "expression": "hump(group_neutralize(rank((ts_backfill(call_breakeven_10, 2) - close) / (close + 0.001) - (close - ts_backfill(put_breakeven_10, 2)) / (close + 0.001)), sector), hump=0.015)",
+        "expression": "group_neutralize(rank((ts_backfill(call_breakeven_10, 2) - close) / (close + 0.001) - (close - ts_backfill(put_breakeven_10, 2)) / (close + 0.001)), sector)",
         "neutralization": "SECTOR",
         "decay": 4,
     },
@@ -94,14 +143,14 @@ V8_ECONOMIC_HYPOTHESIS_SEEDS: tuple[dict[str, Any], ...] = (
     {
         "name": "v8_social8_sent_vol_divergence",
         "dataset_id": "socialmedia8",
-        "expression": "hump(group_neutralize(rank(ts_backfill(snt_social_value_fast_d1, 5)) - rank(ts_backfill(snt_social_volume_fast_d1, 5)), industry), hump=0.015)",
+        "expression": "group_neutralize(rank(ts_backfill(snt_social_value_fast_d1, 5)) - rank(ts_backfill(snt_social_volume_fast_d1, 5)), industry)",
         "neutralization": "INDUSTRY",
         "decay": 4,
     },
     {
         "name": "v8_social8_value_zscore_smooth",
         "dataset_id": "socialmedia8",
-        "expression": "hump(group_neutralize(ts_decay_linear(ts_zscore(ts_backfill(snt_social_value, 5), 60), 5), subindustry), hump=0.015)",
+        "expression": "group_neutralize(ts_decay_linear(ts_zscore(ts_backfill(snt_social_value, 5), 60), 5), subindustry)",
         "neutralization": "SUBINDUSTRY",
         "decay": 2,
     },
@@ -109,14 +158,14 @@ V8_ECONOMIC_HYPOTHESIS_SEEDS: tuple[dict[str, Any], ...] = (
     {
         "name": "v8_social12_slow_news_paper02",
         "dataset_id": "socialmedia12",
-        "expression": "hump(group_neutralize(ts_decay_linear(rank(ts_backfill(scl12_sentiment, 5)) - rank(returns), 5), subindustry), hump=0.015)",
+        "expression": "group_neutralize(ts_decay_linear(rank(ts_backfill(scl12_sentiment, 5)) - rank(returns), 5), subindustry)",
         "neutralization": "SUBINDUSTRY",
         "decay": 2,
     },
     {
         "name": "v8_social12_vec_sent_stability",
         "dataset_id": "socialmedia12",
-        "expression": "hump(group_neutralize(ts_mean(vec_avg(scl12_sentvec), 20) / (ts_std_dev(vec_avg(scl12_sentvec), 20) + 0.05), industry), hump=0.015)",
+        "expression": "group_neutralize(ts_mean(vec_avg(scl12_sentvec), 20) / (ts_std_dev(vec_avg(scl12_sentvec), 20) + 0.05), industry)",
         "neutralization": "INDUSTRY",
         "decay": 2,
     },
@@ -131,14 +180,14 @@ V8_ECONOMIC_HYPOTHESIS_SEEDS: tuple[dict[str, Any], ...] = (
     {
         "name": "v8_news18_vec_analyst_rec_chg",
         "dataset_id": "news18",
-        "expression": "hump(group_neutralize(ts_decay_linear(rank(ts_backfill(vec_avg(nws18_ghc_lna), 5)), 8), subindustry), hump=0.015)",
+        "expression": "group_neutralize(ts_decay_linear(rank(ts_backfill(vec_avg(nws18_ghc_lna), 5)), 8), subindustry)",
         "neutralization": "SUBINDUSTRY",
         "decay": 4,
     },
     {
         "name": "v8_news18_vec_narrative_impact",
         "dataset_id": "news18",
-        "expression": "hump(group_neutralize(ts_decay_linear(rank(ts_backfill(vec_avg(nws18_nip), 5)), 8), subindustry), hump=0.015)",
+        "expression": "group_neutralize(ts_decay_linear(rank(ts_backfill(vec_avg(nws18_nip), 5)), 8), subindustry)",
         "neutralization": "SUBINDUSTRY",
         "decay": 4,
     },
@@ -160,7 +209,7 @@ V8_ECONOMIC_HYPOTHESIS_SEEDS: tuple[dict[str, Any], ...] = (
     {
         "name": "v8_paper08_good_bad_semivar",
         "dataset_id": "pv1",
-        "expression": "hump(group_neutralize(rank(ts_mean(if_else(returns > 0, returns * returns, 0), 20) - ts_mean(if_else(returns < 0, returns * returns, 0), 20)), subindustry), hump=0.015)",
+        "expression": "group_neutralize(rank(ts_mean(if_else(returns > 0, returns * returns, 0), 20) - ts_mean(if_else(returns < 0, returns * returns, 0), 20)), subindustry)",
         "neutralization": "MARKET",
         "decay": 2,
     },
@@ -175,6 +224,95 @@ V8_ECONOMIC_HYPOTHESIS_SEEDS: tuple[dict[str, Any], ...] = (
         "name": "v8_liq_bucket_cashflow_assets",
         "dataset_id": "fundamental6",
         "expression": "group_neutralize(rank(ts_backfill(cashflow_op / (abs(assets) + 0.001), 60)), densify(bucket(rank(volume), range=\"0, 1, 0.1\")))",
+        "neutralization": "INDUSTRY",
+        "decay": 0,
+    },
+    # v9 model16 100%-coverage derivative fields
+    {
+        "name": "v9_model16_analyst_rev_deriv",
+        "dataset_id": "model16",
+        "expression": "group_neutralize(ts_decay_linear(rank(analyst_revision_rank_derivative), 5), industry)",
+        "neutralization": "INDUSTRY",
+        "decay": 2,
+    },
+    {
+        "name": "v9_model16_cashflow_eff_deriv",
+        "dataset_id": "model16",
+        "expression": "group_rank(cashflow_efficiency_rank_derivative, industry)",
+        "neutralization": "INDUSTRY",
+        "decay": 0,
+    },
+    {
+        "name": "v9_model16_earnings_cert_spread",
+        "dataset_id": "model16",
+        "expression": "group_neutralize(rank(earnings_certainty_rank_derivative) + rank(cashflow_efficiency_rank_derivative), subindustry)",
+        "neutralization": "INDUSTRY",
+        "decay": 0,
+    },
+    {
+        "name": "v9_model16_composite_delta20",
+        "dataset_id": "model16",
+        "expression": "group_neutralize(ts_zscore(composite_factor_score_derivative, 60), industry)",
+        "neutralization": "INDUSTRY",
+        "decay": 2,
+    },
+    # v9 pv13 supply-chain & competitor network centrality + pv13 extra grouping
+    {
+        "name": "v9_pv13_customer_return_sig",
+        "dataset_id": "pv13",
+        "expression": "group_neutralize(ts_decay_linear(rank(ts_backfill(pv13_custretsig_retsig, 5)), 5), pv13_h2_sector)",
+        "neutralization": "SECTOR",
+        "decay": 2,
+    },
+    {
+        "name": "v9_pv13_competitor_pagerank_rev",
+        "dataset_id": "pv13",
+        "expression": "group_neutralize(-rank(ts_backfill(pv13_com_page_rank, 20)) * rank(ts_delta(close, 5) / (close + 0.001)), pv13_1l_scibr)",
+        "neutralization": "INDUSTRY",
+        "decay": 4,
+    },
+    {
+        "name": "v9_pv13_hits_authority_mom",
+        "dataset_id": "pv13",
+        "expression": "group_neutralize(rank(ts_backfill(pv13_com_rk_au, 20)) * rank(ts_zscore(returns, 20)), pv13_h2_sector)",
+        "neutralization": "SECTOR",
+        "decay": 4,
+    },
+    # v9 option8 97-98% IV/HV volatility risk premium & term structure
+    {
+        "name": "v9_option8_iv_hv_risk_premium",
+        "dataset_id": "option8",
+        "expression": "group_neutralize(rank(ts_backfill(implied_volatility_call_120, 2) / (ts_backfill(historical_volatility_90, 2) + 0.001)), sector)",
+        "neutralization": "SECTOR",
+        "decay": 2,
+    },
+    {
+        "name": "v9_option8_iv_term_structure",
+        "dataset_id": "option8",
+        "expression": "group_neutralize(-rank(ts_backfill(implied_volatility_call_10, 2) / (ts_backfill(implied_volatility_call_180, 2) + 0.001)), sector)",
+        "neutralization": "SECTOR",
+        "decay": 4,
+    },
+    # v9 news12 85-97% event signals
+    {
+        "name": "v9_news12_max_up_ret_smooth",
+        "dataset_id": "news12",
+        "expression": "group_neutralize(ts_decay_linear(rank(ts_backfill(news_max_up_ret, 5)), 8), subindustry)",
+        "neutralization": "SUBINDUSTRY",
+        "decay": 4,
+    },
+    {
+        "name": "v9_news12_vec_prez4l_speed",
+        "dataset_id": "news12",
+        "expression": "group_neutralize(ts_decay_linear(-rank(ts_backfill(vec_avg(nws12_prez_4l), 5)), 8), subindustry)",
+        "neutralization": "SUBINDUSTRY",
+        "decay": 4,
+    },
+    # v9 fundamental2 65% XBRL footnote hidden compensation signal
+    {
+        "name": "v9_fnd2_unrec_sbc_ratio",
+        "dataset_id": "fundamental2",
+        "expression": "group_rank(-ts_backfill(fn_comp_not_rec_a / (abs(assets) + 0.001), 60), industry)",
         "neutralization": "INDUSTRY",
         "decay": 0,
     },
@@ -198,7 +336,7 @@ STAGE1_PROBES: tuple[tuple[str, str], ...] = (
     ("cap_resid60", "rank(ts_regression(rank(ts_backfill({f}, 20)), log(cap + 1.0), 60, lag=0, rettype=0))"),
     ("trade_when_vol", "trade_when(volume > ts_mean(volume, 20), group_neutralize(winsorize(rank(ts_backfill({f}, 20)), std=4), industry), -1)"),
     ("grp_scale_sub", "group_scale(ts_zscore(ts_backfill({f}, 20), 60), subindustry)"),
-    ("hump_decay10", "hump(group_neutralize(ts_decay_linear(rank(ts_backfill({f}, 20)), 10), industry), hump=0.015)"),
+    ("hump_decay10", "hump(group_neutralize(ts_decay_linear(rank(ts_backfill({f}, 20)), 10), industry), hump=0.0008)"),
     ("ev_cf_rank63", "group_rank(-ts_zscore(ts_backfill({f}, 20), 63), industry)"),
     ("liq_bucket_neut", "group_neutralize(rank(ts_backfill({f}, 20)), densify(bucket(rank(volume), range=\"0, 1, 0.1\")))"),
     ("kth_sparse90", "group_rank(kth_element({f}, 90, k=1, ignore=\"NaN 0\"), industry)"),
@@ -441,13 +579,14 @@ def classify_verdict(
         return "REJECTED", ";".join(reasons)
     _early_eff_fit = -fit if sh < 0 else fit
     _early_high_sh_to = (abs(sh) >= 1.50) and (0.70 < to < 1.50) and (_early_eff_fit >= 0.45)
-    if not _early_high_sh_to and len(failed_checks) > max_fc:
+    _early_low_to_frozen = (abs(sh) >= 0.90) and (0.0 < to < 0.015) and (_early_eff_fit >= 0.35)
+    if not (_early_high_sh_to or _early_low_to_frozen) and len(failed_checks) > max_fc:
         return "REJECTED", ";".join(reasons)
     # P22 turnover-aware rescue: high-turnover raw signals (0.25 < to <= 0.78) have strong decay leverage
     # (decay reduces turnover and lifts Fitness by ~1.3x-1.6x), so allow slightly lower Stage-1 Sharpe/Fitness.
     high_to_leverage = (to > 0.25) and (delay != 0) and (near_miss_min_fitness is None)
     adaptive_nm_sharpe = min(eff_nm_sharpe, 1.05) if high_to_leverage else eff_nm_sharpe
-    if abs(sh) < adaptive_nm_sharpe:
+    if not _early_low_to_frozen and abs(sh) < adaptive_nm_sharpe:
         return "REJECTED", ";".join(reasons)
     # When Sharpe is strongly negative (e.g. -1.48), BRAIN Fitness and Margin are also negative;
     # evaluate their sign-flipped magnitude so Stage-2 negation (-1 * expr) can rescue them.
@@ -462,7 +601,7 @@ def classify_verdict(
         min_nm_fit = min(base_nm_fit, 0.72)
     else:
         min_nm_fit = max(0.82, base_nm_fit - 0.06) if abs(sh) >= eff_min_sharpe else base_nm_fit
-    if eff_fit < min_nm_fit and not ((abs(sh) >= 1.50) and (to > 0.70) and (to < 1.50) and (eff_fit >= 0.45)):
+    if eff_fit < min_nm_fit and not (_early_high_sh_to or _early_low_to_frozen):
         return "REJECTED", ";".join(reasons)
     nm_min_to = float(
         os.getenv("BRAIN_NEAR_MISS_MIN_TO", "0.008") or "0.008"
@@ -477,7 +616,7 @@ def classify_verdict(
     # P26: High-Sharpe / High-Turnover rescue fast-track (e.g., P05M7vpq Sharpe=2.06, TO=100.95%, Fit=0.58):
     # Cutting 100% turnover -> 25% via decay=10/hump/trade_when lifts Fitness by ~2x.
     high_sharpe_high_to_rescue = (abs(sh) >= 1.50) and (0.70 < to < 1.50) and (eff_fit >= 0.45)
-    if not high_sharpe_high_to_rescue and not (nm_min_to <= to <= nm_max_to):
+    if not (high_sharpe_high_to_rescue or _early_low_to_frozen) and not (nm_min_to <= to <= nm_max_to):
         return "REJECTED", ";".join(reasons)
     base_nm_margin = float(
         os.getenv("BRAIN_NEAR_MISS_MIN_MARGIN", "0.0007") or "0.0007"
@@ -774,12 +913,12 @@ class TwoStageAlphaFunnel:
         if _norm_src_to is not None and _norm_src_to > 0.70:
             # P26 aggressive turnover crush for >70% turnover gems (e.g., P05M7vpq 100.95%)
             candidates.append((f"ts_decay_linear({expr}, 10)", dict(base_sett, decay=10)))
-            candidates.append((f"hump(winsorize({expr}, std=4), hump=0.02)", dict(base_sett, decay=8)))
+            candidates.append((f"hump(winsorize({expr}, std=4), hump=0.0015)", dict(base_sett, decay=8)))
             candidates.append((f"trade_when(volume > adv20, {expr}, -1)", dict(base_sett, decay=6)))
         if "TURNOVER" in reason or ("FITNESS" in reason and (_norm_src_to is None or _norm_src_to > 0.25)) or (_norm_src_to is not None and _norm_src_to > 0.40):
             for lw_expr in _log_window_variants(expr, prefer_larger=True):
                 candidates.append((lw_expr, dict(base_sett)))
-            candidates.append((f"hump(winsorize({expr}, std=4), hump=0.01)", dict(base_sett, decay=4)))
+            candidates.append((f"hump(winsorize({expr}, std=4), hump=0.0008)", dict(base_sett, decay=4)))
             candidates.append((f"ts_decay_linear({expr}, 8)", dict(base_sett, decay=6)))
         if "MARGIN" in reason or (norm_margin is not None and norm_margin < 0.0010):
             candidates.append((f"signed_power(rank({expr}) - 0.5, 2)", dict(base_sett, decay=0)))
@@ -787,7 +926,7 @@ class TwoStageAlphaFunnel:
             # Official BRAIN Weight/Coverage FAQ: rank/group_rank balances long-short counts + lower truncation
             candidates.append((f"group_rank({expr}, subindustry)", dict(base_sett, truncation=0.05)))
             candidates.append((f"winsorize({expr}, std=3)", dict(base_sett, truncation=0.05)))
-            candidates.append((f"hump({expr}, hump=0.01)", dict(base_sett, truncation=0.06)))
+            candidates.append((f"hump({expr}, hump=0.0008)", dict(base_sett, truncation=0.06)))
         if src_to is not None and float(src_to) < 0.08 and ("FITNESS" in reason or "SHARPE" in reason or "TURNOVER" in reason):
             # Official BRAIN Returns/Turnover FAQ: boost stale low-turnover signals via lower decay, liquid TOP1000, shorter window
             candidates.append((expr, dict(base_sett, decay=0, universe="TOP1000")))
@@ -795,7 +934,7 @@ class TwoStageAlphaFunnel:
                 candidates.append((sw_expr, dict(base_sett, decay=0)))
         if "2Y_SHARPE" in reason or "LOW_2Y" in reason or "SHARPE" in reason:
             # Official v7 BRAIN Tip: IS-Ladder Self-Boosting + liquidity-bucket double neutralization (100% Bronze-unlocked)
-            candidates.append((f"hump(group_neutralize(rank({expr}) / (1.5 - rank({expr})), subindustry), hump=0.015)", dict(base_sett, decay=2)))
+            candidates.append((f"hump(group_neutralize(rank({expr}) / (1.5 - rank({expr})), subindustry), hump=0.0008)", dict(base_sett, decay=2)))
             candidates.append((f"group_neutralize(rank({expr}), densify(bucket(rank(volume), range=\"0, 1, 0.1\")))", dict(base_sett, decay=0)))
             for sw_expr in _log_window_variants(expr, prefer_larger=False):
                 candidates.append((sw_expr, dict(base_sett, decay=2)))
@@ -941,7 +1080,7 @@ class TwoStageAlphaFunnel:
             submitted_skels, failure_toks = self._load_reference_guards(conn)
             # P30: Inject up to 2 untried curated v8 multi-field economic hypothesis seeds per Stage-1 batch
             active_ds_low = {str(k).lower() for k in datasets_fields.keys()}
-            max_econ = min(2, max(1, batch_size // 2))
+            max_econ = min(3, max(1, batch_size))
             econ_added = 0
             for seed in V8_ECONOMIC_HYPOTHESIS_SEEDS:
                 if econ_added >= max_econ or len(out) >= batch_size:
@@ -953,6 +1092,8 @@ class TwoStageAlphaFunnel:
                 s_sett = dict(self.base_settings)
                 s_sett["neutralization"] = str(seed.get("neutralization") or default_neutralization_for_dataset(s_ds))
                 s_sett["decay"] = int(seed.get("decay", s_sett.get("decay", 2)))
+                if seed.get("universe"):
+                    s_sett["universe"] = str(seed["universe"])
                 if s_ds.lower() != "pv1":
                     s_sett["nanHandling"] = "ON"
                 sh_e = _sim_hash(s_expr, s_sett)
