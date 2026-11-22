@@ -155,10 +155,92 @@ CURATED_DATASET_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def build_sim_payload(expression: str, settings: Mapping[str, Any] | None = None) -> dict[str, Any]:
+# Verified live Bronze account constraints (platform.worldquantbrain.com/simulate & /learn/operators, 2026-11-22)
+BRONZE_ALLOWED_NEUTRALIZATIONS: frozenset[str] = frozenset({
+    "NONE", "MARKET", "SECTOR", "INDUSTRY", "SUBINDUSTRY",
+})
+CONSULTANT_ONLY_NEUTRALIZATIONS: frozenset[str] = frozenset({
+    "SLOW", "FAST", "SLOW_AND_FAST", "CROWDING", "STATISTICAL", "REVERSION_AND_MOMENTUM",
+})
+DEPRECATED_DATA_FIELDS: frozenset[str] = frozenset({
+    "opt6_nexterntod", "opt6_lasterntod",
+})
+# Exact 66 unlocked operators on Bronze accounts (Arithmetic 15, Logical 11, TS 24, CS 6, Vector 2, Transform 2, Group 6)
+BRONZE_UNLOCKED_OPERATORS: frozenset[str] = frozenset({
+    # Arithmetic (15)
+    "abs", "add", "densify", "divide", "inverse", "log", "max", "min", "multiply",
+    "power", "reverse", "sign", "signed_power", "sqrt", "subtract",
+    # Logical (11) -> named functions
+    "and", "if_else", "is_nan", "not", "or",
+    # Time Series (24)
+    "days_from_last_change", "hump", "kth_element", "last_diff_value",
+    "ts_arg_max", "ts_arg_min", "ts_av_diff", "ts_backfill", "ts_corr",
+    "ts_count_nans", "ts_covariance", "ts_decay_linear", "ts_delay", "ts_delta",
+    "ts_mean", "ts_product", "ts_quantile", "ts_rank", "ts_regression",
+    "ts_scale", "ts_std_dev", "ts_step", "ts_sum", "ts_zscore",
+    # Cross Sectional (6)
+    "normalize", "quantile", "rank", "scale", "winsorize", "zscore",
+    # Vector (2)
+    "vec_avg", "vec_sum",
+    # Transformational (2)
+    "bucket", "trade_when",
+    # Group (6)
+    "group_backfill", "group_mean", "group_neutralize", "group_rank", "group_scale", "group_zscore",
+})
+# Official BRAIN Neutralization doc dataset-to-neutralization defaults
+DATASET_NEUTRALIZATION_DEFAULTS: dict[str, str] = {
+    "fundamental": "INDUSTRY",
+    "analyst": "INDUSTRY",
+    "earnings": "INDUSTRY",
+    "short": "INDUSTRY",
+    "option": "SECTOR",
+    "pv": "MARKET",
+    "news": "SUBINDUSTRY",
+    "social": "INDUSTRY",
+    "sentiment": "SUBINDUSTRY",
+    "model": "INDUSTRY",
+    "institution": "SECTOR",
+}
+_FASTEXPR_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+
+
+def is_consultant_mode() -> bool:
+    return os.getenv("BRAIN_CONSULTANT_MODE", "false").strip().lower() in {"1", "true", "yes"}
+
+
+def default_neutralization_for_dataset(dataset_id: str = "") -> str:
+    ds = (dataset_id or "").strip().lower()
+    for prefix, neut in DATASET_NEUTRALIZATION_DEFAULTS.items():
+        if prefix in ds:
+            return neut
+    return "SUBINDUSTRY"
+
+
+def sanitize_sim_settings(settings: Mapping[str, Any] | None = None, *, dataset_id: str = "") -> dict[str, Any]:
+    """Ensure simulation settings never send Consultant-only neutralizations on Bronze accounts."""
     merged = dict(DEFAULT_SIM_SETTINGS)
     if settings:
         merged.update(dict(settings))
+    neut = str(merged.get("neutralization") or "SUBINDUSTRY").strip().upper()
+    if not is_consultant_mode() and neut not in BRONZE_ALLOWED_NEUTRALIZATIONS:
+        fallback = default_neutralization_for_dataset(dataset_id)
+        logger.debug("Mapping unavailable neutralization %s -> %s (Bronze mode)", neut, fallback)
+        merged["neutralization"] = fallback
+    else:
+        merged["neutralization"] = neut
+    return merged
+
+
+def find_locked_bronze_operators(expression: str) -> list[str]:
+    """Return sorted list of function-call operators in expression not unlocked on Bronze accounts."""
+    if is_consultant_mode():
+        return []
+    calls = _FASTEXPR_CALL_RE.findall(str(expression or ""))
+    return sorted({c for c in calls if c.lower() not in BRONZE_UNLOCKED_OPERATORS})
+
+
+def build_sim_payload(expression: str, settings: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    merged = sanitize_sim_settings(settings)
     return {
         "type": "REGULAR",
         "settings": merged,

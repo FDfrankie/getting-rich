@@ -10,7 +10,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from contextlib import closing
 import sqlite3
+from statistics import NormalDist
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -321,15 +323,31 @@ def compute_deflated_sharpe_and_pbo(
     best_sr = float(sharpes[best_idx])
     best_r = mat[:, best_idx]
 
-    # Expected maximum Sharpe under null across N independent trials
-    euler_gamma = 0.5772156649
+    # Exact Bailey & Lopez de Prado (2014) expected max Sharpe with correlated effective trials N_eff
+    nd = NormalDist()
+    euler_gamma = 0.5772156649015329
     if n_trials <= 1:
         sr_benchmark = 0.0
+        n_eff = 1.0
     else:
-        # Theoretical null standard error of annualized Sharpe across N independent random-walk trials
-        null_sr_std = math.sqrt(annualization_factor / max(1.0, float(n_obs)))
-        z1 = math.sqrt(2.0 * math.log(max(2, n_trials)))
-        sr_benchmark = float(null_sr_std * ((1.0 - euler_gamma) * z1 + euler_gamma * math.sqrt(2.0 * math.log(max(2, n_trials) * math.e))))
+        with np.errstate(all="ignore"):
+            corr_mat = np.corrcoef(mat, rowvar=False)
+        if np.ndim(corr_mat) == 2 and corr_mat.shape[0] == n_trials:
+            off_diag = corr_mat[~np.eye(n_trials, dtype=bool)]
+            finite_corr = off_diag[np.isfinite(off_diag)]
+            avg_corr = float(np.clip(np.mean(finite_corr), 0.0, 1.0)) if finite_corr.size else 0.0
+        else:
+            avg_corr = 0.0
+        n_eff = max(1.0, avg_corr + (1.0 - avg_corr) * float(n_trials))
+        if n_eff <= 1.0 + 1e-9:
+            sr_benchmark = 0.0
+        else:
+            null_sr_std = math.sqrt(annualization_factor / max(1.0, float(n_obs)))
+            emp_sr_std = float(np.std(sharpes, ddof=1)) if n_trials >= 2 else 0.0
+            sr_std = emp_sr_std if np.isfinite(emp_sr_std) and emp_sr_std > 1e-9 else null_sr_std
+            p1 = min(1.0 - 1e-12, max(1e-12, 1.0 - 1.0 / n_eff))
+            p2 = min(1.0 - 1e-12, max(1e-12, 1.0 - 1.0 / (n_eff * math.e)))
+            sr_benchmark = max(0.0, float(sr_std * ((1.0 - euler_gamma) * nd.inv_cdf(p1) + euler_gamma * nd.inv_cdf(p2))))
 
     # Deflated Sharpe test statistic
     r_centered = (best_r - np.mean(best_r)) / (np.std(best_r, ddof=1) + 1e-12)

@@ -8,6 +8,7 @@ Enforces:
 """
 from __future__ import annotations
 
+from contextlib import closing
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,8 @@ class BrainFeatureBridge:
         self.lag = pd.Timedelta(lag)
 
     def daily_context(self) -> pd.DataFrame:
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path, timeout=15.0)) as conn:
+            conn.execute("PRAGMA busy_timeout=15000")
             try:
                 df = pd.read_sql_query(
                     """
@@ -40,7 +42,7 @@ class BrainFeatureBridge:
         if df.empty:
             return df
         df["available_at"] = pd.to_datetime(df["completed_at"], utc=True) + self.lag
-        df["date"] = df["available_at"].dt.floor("D")
+        df["date"] = df["available_at"].dt.ceil("D")
         df["passed"] = df["simulation_status"].isin(["BRAIN_COMPLETE", "IS_CHECK_PASSED", "SUBMITTED"]).astype(int)
         df["near_miss"] = (
             (df["passed"] == 0)
@@ -73,9 +75,12 @@ class BrainFeatureBridge:
         base_cols: list[str],
         brain_cols: list[str],
         target_col: str = "target_ret",
+        purge_bars: int = 1,
     ) -> dict[str, Any]:
         """Compare Crypto base features vs Crypto + BRAIN aggregate features on chronological OOS split."""
         clean = df.dropna(subset=base_cols + [target_col]).copy()
+        if "timestamp" in clean.columns:
+            clean = clean.sort_values("timestamp")
         for c in brain_cols:
             if c in clean.columns:
                 clean[c] = clean[c].fillna(0.0)
@@ -85,14 +90,18 @@ class BrainFeatureBridge:
         if n < 40:
             return {"retain_brain_features": False, "reason": "INSUFFICIENT_ROWS"}
         split = int(n * 0.70)
-        tr, te = clean.iloc[:split], clean.iloc[split:]
+        purge = max(0, int(purge_bars))
+        tr, te = clean.iloc[: max(10, split - purge)], clean.iloc[split:]
 
         def fit_pred(cols: list[str]) -> np.ndarray:
             X_tr = tr[cols].to_numpy(dtype=float)
             y_tr = tr[target_col].to_numpy(dtype=float)
             X_te = te[cols].to_numpy(dtype=float)
-            mu = np.nanmean(X_tr, axis=0)
-            sd = np.nanstd(X_tr, axis=0) + 1e-8
+            with np.errstate(all="ignore"):
+                mu = np.nan_to_num(np.nanmean(X_tr, axis=0), nan=0.0)
+                sd = np.nan_to_num(np.nanstd(X_tr, axis=0), nan=1.0) + 1e-8
+            X_tr = np.where(np.isfinite(X_tr), X_tr, mu)
+            X_te = np.where(np.isfinite(X_te), X_te, mu)
             Xz_tr = np.clip((X_tr - mu) / sd, -3.5, 3.5)
             Xz_te = np.clip((X_te - mu) / sd, -3.5, 3.5)
             A = Xz_tr.T @ Xz_tr + 50.0 * np.eye(len(cols))

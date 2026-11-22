@@ -44,11 +44,11 @@ STAGE1_PROBES: tuple[tuple[str, str], ...] = (
     ("last_revision", "ts_decay_linear(winsorize(rank(ts_backfill({f}, 20) - last_diff_value(ts_backfill({f}, 20), 252)), std=4), 5)"),
     ("ts_av_diff60", "quantile(ts_av_diff(ts_backfill({f}, 20), 60), driver=\"gaussian\")"),
     ("reg_resid60", "rank(ts_regression(ts_backfill({f}, 20), returns, 60, lag=0, rettype=0))"),
-    ("reg_neut_cap", "regression_neut(rank(ts_backfill({f}, 20)), log(cap + 1.0))"),
+    ("cap_resid60", "rank(ts_regression(rank(ts_backfill({f}, 20)), log(cap + 1.0), 60, lag=0, rettype=0))"),
     ("trade_when_vol", "trade_when(volume > ts_mean(volume, 20), group_neutralize(winsorize(rank(ts_backfill({f}, 20)), std=4), industry), -1)"),
-    ("cartesian_cap_sub", "group_neutralize(rank(ts_backfill({f}, 20)), group_cartesian_product(subindustry, bucket(rank(cap), range=\"0, 1, 0.25\")))"),
-    ("jump_decay_neut", "group_neutralize(jump_decay(rank(ts_backfill({f}, 20)), 5, sensitivity=0.5), subindustry)"),
-    ("target_tvr_decay", "ts_target_tvr_decay(group_neutralize(rank(ts_backfill({f}, 20)), industry), lambda_min=0, lambda_max=1, target_tvr=0.15)"),
+    ("grp_scale_sub", "group_scale(ts_zscore(ts_backfill({f}, 20), 60), subindustry)"),
+    ("hump_decay10", "hump(group_neutralize(ts_decay_linear(rank(ts_backfill({f}, 20)), 10), industry), hump=0.015)"),
+    ("ev_cf_rank63", "group_rank(-ts_zscore(ts_backfill({f}, 20), 63), industry)"),
 )
 
 
@@ -60,12 +60,9 @@ def _format_probe(template: str, raw_field: str) -> str:
     return template.format(f=base_f)
 
 _DEFAULT_STAGE2_NEUTRALIZATIONS: tuple[str, ...] = (
-    "SUBINDUSTRY",
-    "INDUSTRY",
-    "SECTOR",
-    "SLOW",
-    "FAST",
-    "MARKET",
+    ("SUBINDUSTRY", "INDUSTRY", "SECTOR", "SLOW", "FAST", "MARKET")
+    if os.getenv("BRAIN_CONSULTANT_MODE", "false").strip().lower() in {"1", "true", "yes"}
+    else ("SUBINDUSTRY", "INDUSTRY", "SECTOR", "MARKET")
 )
 _env_neuts = [
     tok.strip().upper()

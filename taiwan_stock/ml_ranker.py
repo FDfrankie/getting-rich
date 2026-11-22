@@ -23,6 +23,9 @@ except ImportError:
     xgb = None
 
 
+TWSE_STANDARD_ROUND_TRIP_COST: float = 0.00585
+
+
 class TaiwanStockMLRanker:
     TARGET_COLUMN = "target_fwd_5d"
     EMBARGO_TRADING_DAYS = 5
@@ -282,8 +285,23 @@ class TaiwanStockMLRanker:
         actual = test[self.TARGET_COLUMN].to_numpy(dtype=float)
         rank_ic = pd.Series(pred).corr(pd.Series(actual), method="spearman")
         rmse = float(np.sqrt(np.mean((pred - actual) ** 2)))
+        eval_df = pd.DataFrame(
+            {"pred": pred, "actual": actual},
+            index=pd.DatetimeIndex(test.index).normalize(),
+        )
+        daily_ics: list[float] = []
+        for _, grp in eval_df.groupby(level=0):
+            if len(grp) >= 3 and grp["pred"].nunique() > 1 and grp["actual"].nunique() > 1:
+                ic_d = grp["pred"].corr(grp["actual"], method="spearman")
+                if pd.notna(ic_d):
+                    daily_ics.append(float(ic_d))
+        daily_mean_ic = float(np.mean(daily_ics)) if daily_ics else 0.0
+        daily_std_ic = float(np.std(daily_ics, ddof=1)) if len(daily_ics) >= 2 else 0.0
+        rank_icir = float(daily_mean_ic / daily_std_ic) if daily_std_ic > 1e-12 else 0.0
         return {
             "rank_ic": 0.0 if pd.isna(rank_ic) else float(rank_ic),
+            "daily_mean_rank_ic": daily_mean_ic,
+            "rank_icir": rank_icir,
             "rmse": rmse,
             **self.last_split_info,
         }
@@ -309,6 +327,10 @@ class TaiwanStockMLRanker:
                     "bias_ma20": float(latest.get("bias_ma20", np.nan)) * 100.0,
                     "rsi_14": float(latest.get("rsi_14", np.nan)),
                 }
+            )
+        if not rows:
+            return pd.DataFrame(
+                columns=["symbol", "current_price", "predicted_fwd_5d_ret_pct", "bias_ma20", "rsi_14", "rank"]
             )
         result = pd.DataFrame(rows).sort_values("predicted_fwd_5d_ret_pct", ascending=False).reset_index(drop=True)
         if not result.empty:

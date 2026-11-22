@@ -76,6 +76,8 @@ class ASTNode:
             return f"{self.value}{child.to_canonical()}"
         if self.kind == "binop":
             left, right = self.children[0].to_canonical(), self.children[1].to_canonical()
+            if self.value in {"+", "*"} and left > right:
+                left, right = right, left
             return f"({left}{self.value}{right})"
         if self.kind == "ternary":
             c, t, f_node = (x.to_canonical() for x in self.children)
@@ -87,8 +89,12 @@ class ASTNode:
         if self.kind == "seq":
             return ";".join(c.to_canonical() for c in self.children)
         if self.kind == "call":
-            args = ",".join(c.to_canonical() for c in self.children)
-            return f"{self.value.lower()}({args})"
+            op_low = self.value.lower()
+            rendered = [c.to_canonical() for c in self.children]
+            if op_low in {"add", "multiply", "min", "max"} and all(c.kind != "kwarg" for c in self.children):
+                rendered = sorted(rendered)
+            args = ",".join(rendered)
+            return f"{op_low}({args})"
         return self.value
 
     def to_normalized(self) -> str:
@@ -106,6 +112,8 @@ class ASTNode:
             return f"{self.value}{child.to_normalized()}"
         if self.kind == "binop":
             left, right = self.children[0].to_normalized(), self.children[1].to_normalized()
+            if self.value in {"+", "*"} and left > right:
+                left, right = right, left
             return f"({left}{self.value}{right})"
         if self.kind == "ternary":
             c, t, f_node = (x.to_normalized() for x in self.children)
@@ -117,8 +125,12 @@ class ASTNode:
         if self.kind == "seq":
             return ";".join(c.to_normalized() for c in self.children)
         if self.kind == "call":
-            args = ",".join(c.to_normalized() for c in self.children)
-            return f"{self.value.lower()}({args})"
+            op_low = self.value.lower()
+            rendered = [c.to_normalized() for c in self.children]
+            if op_low in {"add", "multiply", "min", "max"} and all(c.kind != "kwarg" for c in self.children):
+                rendered = sorted(rendered)
+            args = ",".join(rendered)
+            return f"{op_low}({args})"
         return self.value
 
     def to_structural(self) -> str:

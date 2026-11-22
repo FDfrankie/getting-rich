@@ -5,6 +5,7 @@ import json
 import math
 import sqlite3
 import uuid
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,19 +55,22 @@ def deflated_sharpe_ratio(
     skewness: float = 0.0,
     kurtosis: float = 3.0,
     threshold: float = 0.95,
+    avg_trial_corr: float = 0.0,
 ) -> DSRResult:
-    """Bailey & Lopez de Prado (2014) Deflated Sharpe Ratio accounting for multiple-testing trial count."""
+    """Bailey & Lopez de Prado (2014) Deflated Sharpe Ratio accounting for correlated effective trials N_eff."""
     n_trials = max(1, int(trial_count))
     n_obs = max(10, int(n_observations))
     sr = float(observed_sharpe)
     sr_daily = sr / math.sqrt(252.0)
+    rho = min(max(float(avg_trial_corr), 0.0), 1.0)
+    n_eff = max(1.0, rho + (1.0 - rho) * float(n_trials))
 
-    if n_trials == 1:
+    if n_eff <= 1.0 + 1e-9:
         sr0 = 0.0
     else:
         euler_gamma = 0.5772156649
-        z1 = _norm_ppf(1.0 - 1.0 / n_trials)
-        z2 = _norm_ppf(1.0 - 1.0 / (n_trials * math.e))
+        z1 = _norm_ppf(1.0 - 1.0 / n_eff)
+        z2 = _norm_ppf(1.0 - 1.0 / (n_eff * math.e))
         sr0_annual = float(sharpe_std_across_trials) * ((1.0 - euler_gamma) * z1 + euler_gamma * z2)
         sr0 = sr0_annual / math.sqrt(252.0)
 
@@ -92,8 +96,11 @@ class TrialRegistry:
     def _init_db(self) -> None:
         if self.db_path != ":memory:":
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.db_path, timeout=15.0)
-        try:
+        with closing(sqlite3.connect(self.db_path, timeout=15.0)) as conn:
+            if self.db_path != ":memory:":
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA busy_timeout=15000")
             with conn:
                 conn.execute(
                     """CREATE TABLE IF NOT EXISTS alpha_trial_registry (
@@ -112,8 +119,7 @@ class TrialRegistry:
                     )"""
                 )
                 ensure_schema_from_ddl(conn, 'CREATE TABLE IF NOT EXISTS alpha_trial_registry (\n                        trial_id TEXT PRIMARY KEY,\n                        parent_trial_id TEXT,\n                        blueprint_id TEXT,\n                        expression_hash TEXT NOT NULL,\n                        settings_hash TEXT NOT NULL,\n                        objective TEXT NOT NULL,\n                        sharpe REAL,\n                        fitness REAL,\n                        turnover REAL,\n                        accepted INTEGER NOT NULL DEFAULT 0,\n                        metrics_json TEXT,\n                        created_at TEXT NOT NULL\n                    )')
-        finally:
-            conn.close()
+
 
     def record_trial(
         self,

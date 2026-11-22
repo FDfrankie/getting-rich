@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+from contextlib import closing
 import sqlite3
 import threading
 import uuid
@@ -39,7 +40,7 @@ class SQLiteRepository:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = str(db_path)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        with self.connect() as conn:
+        with closing(self.connect()) as conn, conn:
             conn.execute("CREATE TABLE IF NOT EXISTS advisory_locks (lock_id INTEGER PRIMARY KEY, owner TEXT NOT NULL, acquired_at TEXT NOT NULL)")
             apply_sqlite_migrations(conn)
 
@@ -47,6 +48,7 @@ class SQLiteRepository:
         conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA busy_timeout=10000")
         return conn
 
@@ -57,7 +59,7 @@ class SQLiteRepository:
         now = now_dt.isoformat()
         cutoff = (now_dt - timedelta(seconds=max(1, int(ttl_seconds)))).isoformat()
         with self._lock_guard:
-            with self.connect() as conn:
+            with closing(self.connect()) as conn, conn:
                 conn.execute("DELETE FROM advisory_locks WHERE lock_id=? AND acquired_at < ?", (lock_id, cutoff))
                 try:
                     conn.execute(
@@ -71,7 +73,7 @@ class SQLiteRepository:
     def release_advisory_lock(self, namespace: str, key: str, owner: str) -> None:
         lock_id = advisory_lock_key(namespace, key)
         with self._lock_guard:
-            with self.connect() as conn:
+            with closing(self.connect()) as conn, conn:
                 conn.execute("DELETE FROM advisory_locks WHERE lock_id=? AND owner=?", (lock_id, owner))
 
     def upsert_alpha(self, alpha: Mapping[str, Any]) -> dict[str, Any]:
@@ -79,7 +81,7 @@ class SQLiteRepository:
         expr_hash = str(alpha.get("expression_hash") or hashlib.sha256(expr.encode("utf-8")).hexdigest())
         alpha_id = str(alpha.get("alpha_id") or alpha.get("name") or f"alpha_{expr_hash[:12]}")
         now = datetime.now(timezone.utc).isoformat()
-        with self.connect() as conn:
+        with closing(self.connect()) as conn, conn:
             existing = conn.execute("SELECT * FROM alphas WHERE expression_hash=?", (expr_hash,)).fetchone()
             if existing:
                 return dict(existing) | {"idempotent_duplicate": True}
@@ -123,7 +125,7 @@ class SQLiteRepository:
             return False, None
         run_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
-        with self.connect() as conn:
+        with closing(self.connect()) as conn, conn:
             try:
                 conn.execute(
                     """
@@ -148,7 +150,7 @@ class SQLiteRepository:
     ) -> str:
         event_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
-        with self.connect() as conn:
+        with closing(self.connect()) as conn, conn:
             conn.execute(
                 """
                 INSERT INTO audit_events (event_id, event_type, actor, entity_id, previous_state, next_state, reason, payload_json, created_at)

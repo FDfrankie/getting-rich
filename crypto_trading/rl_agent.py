@@ -8,6 +8,7 @@ Architecture:
 - Continuous action space [-1.0, 1.0] for position sizing
 """
 
+import math
 import os
 
 import numpy as np
@@ -79,20 +80,22 @@ class PPOAgent:
         Returns (action, log_prob, value)
         If evaluate=True, takes deterministic action (distribution mean).
         """
-        state_t = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+        arr = np.asarray(state, dtype=np.float32)
+        arr = np.nan_to_num(arr, nan=0.0, posinf=5.0, neginf=-5.0)
+        state_t = torch.as_tensor(arr, dtype=torch.float32, device=self.device).unsqueeze(0)
         with torch.no_grad():
             dist, value = self.policy_old(state_t)
-            if evaluate:
-                action = dist.mean
-            else:
-                action = dist.sample()
-            action = torch.clamp(action, -1.0, 1.0)
-            log_prob = dist.log_prob(action).sum(dim=-1)
+            raw_action = dist.mean if evaluate else dist.sample()
+            log_prob = dist.log_prob(raw_action).sum(dim=-1)
+            action = torch.clamp(raw_action, -1.0, 1.0)
 
+        act_v = float(action.cpu().numpy()[0, 0])
+        lp_v = float(log_prob.cpu().numpy()[0])
+        val_v = float(value.cpu().numpy()[0, 0])
         return (
-            float(action.cpu().numpy()[0, 0]),
-            float(log_prob.cpu().numpy()[0]),
-            float(value.cpu().numpy()[0, 0]),
+            act_v if math.isfinite(act_v) else 0.0,
+            lp_v if math.isfinite(lp_v) else 0.0,
+            val_v if math.isfinite(val_v) else 0.0,
         )
 
     def compute_gae(
@@ -129,7 +132,8 @@ class PPOAgent:
         old_log_probs_t = torch.FloatTensor(np.array(old_log_probs)).unsqueeze(-1).to(self.device)
 
         # Normalize advantages
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        if advantages.numel() > 1:
+            advantages = (advantages - advantages.mean()) / (advantages.std(unbiased=False) + 1e-8)
         advantages = advantages.unsqueeze(-1)
         returns = returns.unsqueeze(-1)
 

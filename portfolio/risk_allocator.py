@@ -24,11 +24,17 @@ class PortfolioRiskAllocator:
         max_open_positions: int = 3,
         max_total_exposure_pct: float = 1.50,
         max_single_symbol_pct: float = 0.50,
+        trading_state: str = "ACTIVE",
+        soft_drawdown_pct: float = 0.08,
+        hard_drawdown_pct: float = 0.15,
     ) -> None:
         self.total_equity_usdt = max(0.0, float(total_equity_usdt))
         self.max_open_positions = max(1, int(max_open_positions))
         self.max_total_exposure_pct = max(0.1, float(max_total_exposure_pct))
         self.max_single_symbol_pct = max(0.05, float(max_single_symbol_pct))
+        self.trading_state = str(trading_state or "ACTIVE").strip().upper()
+        self.soft_drawdown_pct = max(0.0, float(soft_drawdown_pct))
+        self.hard_drawdown_pct = max(self.soft_drawdown_pct, float(hard_drawdown_pct))
 
     def update_equity(self, new_equity_usdt: float) -> None:
         val = float(new_equity_usdt)
@@ -44,23 +50,33 @@ class PortfolioRiskAllocator:
         *,
         is_reduce_only: bool = False,
         min_notional_usdt: float = 0.0,
+        current_drawdown_pct: float = 0.0,
     ) -> PortfolioAllocationDecision:
-        if not math.isfinite(float(requested_notional_usdt)):
+        if not math.isfinite(float(requested_notional_usdt)) or not math.isfinite(float(current_drawdown_pct)):
             return PortfolioAllocationDecision(False, symbol, 0.0, "NON_FINITE_INPUT")
+        state = str(self.trading_state or "ACTIVE").strip().upper()
+        if state == "HALTED":
+            return PortfolioAllocationDecision(False, symbol, 0.0, "TRADING_STATE_HALTED")
+        current_sym = abs(float(active_positions_notional.get(symbol, 0.0)))
+        req = max(0.0, float(requested_notional_usdt))
         if is_reduce_only:
+            if current_sym <= 0.0:
+                return PortfolioAllocationDecision(False, symbol, 0.0, "REDUCE_ONLY_NO_POSITION")
             return PortfolioAllocationDecision(
                 allowed=True,
                 symbol=symbol,
-                approved_notional_usdt=max(0.0, float(requested_notional_usdt)),
+                approved_notional_usdt=round(min(req, current_sym), 2),
                 reason="REDUCE_ONLY_EXEMPT",
             )
+
+        if state == "REDUCING" or float(current_drawdown_pct) >= self.hard_drawdown_pct:
+            return PortfolioAllocationDecision(False, symbol, 0.0, "DRAWDOWN_OR_REDUCING_BLOCK_NEW_RISK")
 
         if self.total_equity_usdt <= 0:
             return PortfolioAllocationDecision(False, symbol, 0.0, "ZERO_EQUITY")
 
-        if not math.isfinite(float(requested_notional_usdt)) or not math.isfinite(self.total_equity_usdt):
+        if not math.isfinite(self.total_equity_usdt):
             return PortfolioAllocationDecision(False, symbol, 0.0, "NON_FINITE_INPUT")
-        req = max(0.0, float(requested_notional_usdt))
         open_syms = {k for k, v in active_positions_notional.items() if abs(float(v)) > 0}
         if symbol not in open_syms and len(open_syms) >= self.max_open_positions:
             return PortfolioAllocationDecision(
@@ -71,9 +87,9 @@ class PortfolioRiskAllocator:
             )
 
         current_total = sum(abs(float(v)) for v in active_positions_notional.values())
-        current_sym = abs(float(active_positions_notional.get(symbol, 0.0)))
-        max_total_cap = self.total_equity_usdt * self.max_total_exposure_pct
-        max_sym_cap = self.total_equity_usdt * self.max_single_symbol_pct
+        dd_scale = 0.5 if float(current_drawdown_pct) >= self.soft_drawdown_pct else 1.0
+        max_total_cap = self.total_equity_usdt * self.max_total_exposure_pct * dd_scale
+        max_sym_cap = self.total_equity_usdt * self.max_single_symbol_pct * dd_scale
 
         remaining_total = max(0.0, max_total_cap - current_total)
         remaining_sym = max(0.0, max_sym_cap - current_sym)

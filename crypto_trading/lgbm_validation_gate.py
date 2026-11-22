@@ -98,6 +98,15 @@ class ICStabilityLinearWrapper:
         self.mean_: np.ndarray | None = None
         self.std_: np.ndarray | None = None
         self.coef_: np.ndarray | None = None
+        self.linear_scale_: float = 1.0
+        self.base_scale_: float = 1.0
+
+    def _transform(self, X: np.ndarray) -> np.ndarray:
+        X_arr = np.asarray(X, dtype=float)
+        if X_arr.ndim == 1:
+            X_arr = X_arr.reshape(1, -1)
+        X_imp = np.where(np.isfinite(X_arr), X_arr, self.mean_)
+        return np.clip((X_imp - self.mean_) / self.std_, -3.5, 3.5)
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> "ICStabilityLinearWrapper":
         X_arr = np.asarray(X, dtype=float)
@@ -107,9 +116,12 @@ class ICStabilityLinearWrapper:
         X1, y1 = X_arr[:split], y_arr[:split]
         X2, y2 = X_arr[split:], y_arr[split:]
 
-        self.mean_ = np.nanmean(X_arr, axis=0)
-        self.std_ = np.nanstd(X_arr, axis=0) + 1e-8
-        Xz = np.clip((np.nan_to_num(X_arr) - self.mean_) / self.std_, -3.5, 3.5)
+        with np.errstate(all="ignore"):
+            raw_mean = np.nanmean(X_arr, axis=0)
+            raw_std = np.nanstd(X_arr, axis=0)
+        self.mean_ = np.where(np.isfinite(raw_mean), raw_mean, 0.0)
+        self.std_ = np.where(np.isfinite(raw_std) & (raw_std > 1e-12), raw_std, 1.0)
+        Xz = self._transform(X_arr)
 
         weights = np.zeros(X_arr.shape[1], dtype=float)
         for j in range(X_arr.shape[1]):
@@ -123,24 +135,32 @@ class ICStabilityLinearWrapper:
         norm = np.linalg.norm(weights) + 1e-8
         self.coef_ = weights / norm
 
+        tr_lin = Xz @ self.coef_
+        l_sd = float(np.std(tr_lin))
+        self.linear_scale_ = l_sd if np.isfinite(l_sd) and l_sd > 1e-8 else 1.0
+        self.base_scale_ = 1.0
+
         if self.base_factory is not None:
             try:
                 self.base_model_ = self.base_factory()
                 self.base_model_.fit(Xz, y_arr)
+                tr_base = np.asarray(self.base_model_.predict(Xz), dtype=float)
+                b_sd = float(np.std(tr_base))
+                self.base_scale_ = b_sd if np.isfinite(b_sd) and b_sd > 1e-8 else 1.0
             except Exception:
                 self.base_model_ = None
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        X_arr = np.asarray(X, dtype=float)
-        Xz = np.clip((np.nan_to_num(X_arr) - self.mean_) / self.std_, -3.5, 3.5)
+        Xz = self._transform(X)
         linear_pred = Xz @ self.coef_
         if self.base_model_ is not None and self.blend_alpha < 1.0:
             try:
                 base_pred = np.asarray(self.base_model_.predict(Xz), dtype=float)
-                b_std = np.std(base_pred) + 1e-8
-                l_std = np.std(linear_pred) + 1e-8
-                return self.blend_alpha * (linear_pred / l_std) + (1.0 - self.blend_alpha) * (base_pred / b_std)
+                return (
+                    self.blend_alpha * (linear_pred / self.linear_scale_)
+                    + (1.0 - self.blend_alpha) * (base_pred / self.base_scale_)
+                )
             except Exception:
                 pass
         return linear_pred

@@ -18,6 +18,8 @@ class AlphaState(str, Enum):
     SUBMISSION_CANDIDATE = "SUBMISSION_CANDIDATE"
     SUBMITTING = "SUBMITTING"
     SUBMITTED = "SUBMITTED"
+    SUBMIT_FAILED = "SUBMIT_FAILED"
+    ELIGIBLE = "ELIGIBLE"
     REJECTED = "REJECTED"
     ARCHIVED = "ARCHIVED"
     LOCAL_VERIFIED = "LOCAL_VERIFIED"
@@ -42,10 +44,12 @@ _ALLOWED: dict[AlphaState, set[AlphaState]] = {
     AlphaState.IS_CHECK_PASSED: {AlphaState.CORRELATION_PASSED, AlphaState.REJECTED},
     AlphaState.CORRELATION_PASSED: {AlphaState.SUBMISSION_CANDIDATE, AlphaState.REJECTED},
     AlphaState.SUBMISSION_CANDIDATE: {AlphaState.SUBMITTING, AlphaState.REJECTED, AlphaState.ARCHIVED},
-    AlphaState.SUBMITTING: {AlphaState.SUBMITTED, AlphaState.SUBMISSION_CANDIDATE, AlphaState.REJECTED},
+    AlphaState.SUBMITTING: {AlphaState.SUBMITTED, AlphaState.SUBMIT_FAILED, AlphaState.SUBMISSION_CANDIDATE, AlphaState.REJECTED},
+    AlphaState.SUBMIT_FAILED: {AlphaState.ELIGIBLE, AlphaState.SUBMISSION_CANDIDATE, AlphaState.ARCHIVED, AlphaState.REJECTED},
+    AlphaState.ELIGIBLE: {AlphaState.SUBMISSION_CANDIDATE, AlphaState.SUBMITTING, AlphaState.ARCHIVED, AlphaState.REJECTED},
     AlphaState.SUBMITTED: {AlphaState.ARCHIVED},
     AlphaState.LOCAL_VERIFIED: {AlphaState.SIMULATION_QUEUED, AlphaState.ARCHIVED, AlphaState.REJECTED},
-    AlphaState.REJECTED: {AlphaState.ARCHIVED, AlphaState.SIMULATION_QUEUED},
+    AlphaState.REJECTED: {AlphaState.ARCHIVED},
     AlphaState.ARCHIVED: set(),
 }
 

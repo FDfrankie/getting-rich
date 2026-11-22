@@ -37,10 +37,10 @@ def _wrap_hygiene(
     inner = core
     if transform == "TS_REGRESSION_RESID" and "ts_regression" not in inner:
         inner = f"ts_regression(rank({inner}), returns, {_w_med()}, rettype=0)"
-    elif transform == "REGRESSION_NEUT_CAP" and "regression_neut" not in inner:
-        inner = f"regression_neut(rank({inner}), log(cap + 1.0))"
-    elif transform == "REGRESSION_NEUT_VOL" and "regression_neut" not in inner:
-        inner = f"regression_neut(rank({inner}), ts_std_dev(returns, 20))"
+    elif transform == "REGRESSION_NEUT_CAP" and "ts_regression" not in inner:
+        inner = f"ts_regression(rank({inner}), log(cap + 1.0), {_w_med()}, lag=0, rettype=0)"
+    elif transform == "REGRESSION_NEUT_VOL" and "ts_regression" not in inner:
+        inner = f"ts_regression(rank({inner}), ts_std_dev(returns, 20), {_w_med()}, lag=0, rettype=0)"
     elif transform == "TRADE_WHEN_VOL_EVENT" and "trade_when" not in inner:
         base_sig = f"group_neutralize(winsorize(rank({inner}), std={std_v}), {g})"
         return f"trade_when(volume > ts_mean(volume, 20), {base_sig}, -1)"
