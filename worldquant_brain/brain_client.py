@@ -1080,6 +1080,57 @@ class BrainClient:
                     staged += 1
         return staged
 
+    def sweep_consultant_reserve(self, day_str: str | None = None) -> int:
+        """P38: Immediately move any PENDING gems (>=1.50 Sharpe or >=1.20 Fitness) to CONSULTANT_RESERVE
+        and permanently archive their formulas — even BEFORE flush_hour=22!"""
+        import sqlite3
+        db_p = self._quota_db()
+        if not os.path.exists(db_p):
+            return 0
+        enabled, _, _ = self._consultant_reserve_thresholds()
+        if not enabled:
+            return 0
+        day = day_str or self._today_taipei()
+        moved = 0
+        conn = sqlite3.connect(db_p, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if "brain_candidate_pool" not in tables:
+                return 0
+            self._ensure_qualified_archive_table(conn)
+            pending_rows = conn.execute(
+                "SELECT alpha_id, expression, sharpe, fitness, turnover, margin "
+                "FROM brain_candidate_pool WHERE status = 'PENDING'"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        for row in pending_rows:
+            _aid = str(row["alpha_id"])
+            _expr = str(row["expression"] or "")
+            _sh = float(row["sharpe"] or 0.0)
+            _fit = float(row["fitness"] or 0.0)
+            _to = float(row["turnover"] or 0.0)
+            _mg = float(row["margin"] or 0.0)
+            if self._is_consultant_reserve(_sh, _fit):
+                self.archive_qualified_alpha(
+                    _aid, _expr, _sh, _fit, _to, _mg,
+                    submit_status="CONSULTANT_RESERVE", source="STARTUP_RESERVE_SWEEP",
+                )
+                c_res = sqlite3.connect(db_p, timeout=10.0)
+                try:
+                    c_res.execute("UPDATE brain_candidate_pool SET status = 'CONSULTANT_RESERVE' WHERE alpha_id = ?", (_aid,))
+                    c_res.commit()
+                finally:
+                    c_res.close()
+                moved += 1
+                logger.info(
+                    "[CONSULTANT_RESERVE_SWEPT] Alpha %s (Sharpe=%.2f, Fitness=%.2f) moved from PENDING to CONSULTANT_RESERVE",
+                    _aid, _sh, _fit,
+                )
+        return moved
+
     def flush_daily_candidates(self, day_str: str | None = None, max_daily_submissions: int | None = None) -> list[dict[str, Any]]:
         """Submit pending candidates up to the remaining daily quota.
         P37: Defaults to reverse order ('worst_first': fitness ASC, sharpe ASC, score ASC)

@@ -49,7 +49,14 @@ def _wrap_hygiene(
         inner = f"(0.5 + 0.5 * rank(ts_mean(volume * close, 21))) * rank({inner})"
     elif transform == "NONLINEAR_SIGNED_POWER" and "signed_power" not in inner:
         inner = f"signed_power(ts_zscore({inner}, {_w_short()}), 0.75)"
-    # P36: Remove no-op winsorize(rank(...)) and default TOP3000 turnover-freezing hump>=0.005
+    elif transform == "WINSORIZE_BEFORE_RANK" and "winsorize" not in inner and not inner.lstrip().lower().startswith("rank("):
+        # P38 Official KB (60-like tip): ALWAYS winsorize() BEFORE rank(), never winsorize(rank(x))
+        inner = f"winsorize({inner}, std=4)"
+    elif transform == "LIQUIDITY_TIERED_DECAY" and "ts_decay_linear" not in inner:
+        # P38 Official KB (281-like Sub-universe Sharpe fix): shorter decay for liquid names, longer for illiquid
+        _b = f"group_neutralize(rank({inner}), {g})"
+        return f"ts_decay_linear({_b}, 5) * rank(volume * close) + ts_decay_linear({_b}, 10) * (1 - rank(volume * close))"
+    # P36/P38: Never emit no-op winsorize(rank(...)) and avoid TOP3000 turnover-freezing hump>=0.005
     base = f"group_neutralize(rank({inner}), {g})"
     if h is not None and 0.0 < float(h) <= 0.0015:
         return f"hump({base}, hump={float(h)})"
@@ -280,6 +287,60 @@ _TEMPLATE_FAMILIES: dict[str, list[Callable[..., tuple[str, str]]]] = {
                 f"ts_rank(operating_income / (close + 0.001), {_w_long()})",
                 grp=grp,
                 transform=transform or "REGRESSION_NEUT_VOL",
+            ),
+        ),
+    ],
+    # P38: Official WorldQuant BRAIN KB (116 articles) verified low-correlation Bronze-safe templates
+    "OFFICIAL_KB_LOW_CORR": [
+        # Paper 09: The Invisible Burden (-goodwill / sales) with winsorize-before-rank
+        lambda grp=None, transform=None: (
+            "KB_Paper09_InvisibleBurden",
+            _wrap_hygiene(
+                "-1 * ts_backfill(goodwill, 60) / (ts_backfill(sales, 60) + 0.001)",
+                grp=grp,
+                transform=transform or "WINSORIZE_BEFORE_RANK",
+            ),
+        ),
+        # Paper 08: Good vs Bad Volatility semi-variance spread
+        lambda grp=None, transform=None: (
+            "KB_Paper08_GoodBadVol",
+            _wrap_hygiene(
+                f"ts_mean(if_else(returns > 0, returns * returns, 0), {_w_med()}) - ts_mean(if_else(returns < 0, returns * returns, 0), {_w_med()})",
+                grp=grp,
+                transform=transform,
+            ),
+        ),
+        # Taiwan Forum Exercise 3: Option Put/Call IV ratio with market/industry zscore & decay
+        lambda grp=None, transform=None: (
+            "KB_TW_OptionIVRatio",
+            f"-1 * ts_decay_linear(group_zscore(ts_backfill(implied_volatility_put_120, 10) / (ts_backfill(implied_volatility_call_120, 10) + 0.001), {grp or 'industry'}), 21)",
+        ),
+        # Taiwan Forum Exercise 2: Operating CF minus Analyst Net Debt 21d delta
+        lambda grp=None, transform=None: (
+            "KB_TW_OpCF_NetDebtDelta",
+            f"ts_decay_linear(group_zscore(ts_delta(ts_backfill(fnd6_fopo, 10) - ts_backfill(anl4_netdebt_mean, 10), 21), {grp or 'sector'}), 21)",
+        ),
+        # Intermediate Pack [3/3]: Volume-breakout conditional reversion (trade_when)
+        lambda grp=None, transform=None: (
+            "KB_IntPack3_VolBreakoutRev",
+            f"group_neutralize(rank(trade_when(volume > adv20, -1 * ts_delta(close, {_w_short()}), -1)), {grp or _grp()})",
+        ),
+        # Chapter 25 Sentiment/Price Rank Divergence
+        lambda grp=None, transform=None: (
+            "KB_SentPrice_RankDiv",
+            _wrap_hygiene(
+                f"rank(ts_mean(ts_backfill(scl12_buzz, 5), 5)) - rank(ts_delta(close, 5) / (close + 0.001))",
+                grp=grp,
+                transform=transform,
+            ),
+        ),
+        # Chapter 25 Options Volatility Spread (Call IV - Put IV & HV - IV)
+        lambda grp=None, transform=None: (
+            "KB_Opt_CallPut_HV_Spread",
+            _wrap_hygiene(
+                "rank(ts_backfill(implied_volatility_call_60 - implied_volatility_put_60, 5)) - rank(ts_backfill(historical_volatility_60 - implied_volatility_mean_60, 5))",
+                grp=grp,
+                transform=transform or "LIQUIDITY_TIERED_DECAY",
             ),
         ),
     ],

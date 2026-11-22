@@ -194,7 +194,7 @@ def run_headless_miner(
     *,
     duration_minutes: float = 38.0,
     target_queue_depth: int = 6,
-    num_workers: int = 2,
+    num_workers: int = 1,
     batch_size: int = 5,
     datasets: Sequence[str] | None = None,
     seed_sharpe_threshold: float = 1.15,
@@ -518,6 +518,15 @@ def run_headless_miner(
     in_flight: list[Future[list[dict[str, Any]]]] = []
     cooldown_until = 0.0
     auth_blocked = False
+    # P38: Immediately sweep & archive any legacy PENDING Consultant-Reserve gems (>=1.50 Sharpe / >=1.20 Fitness) on startup
+    if hasattr(client, "sweep_consultant_reserve"):
+        try:
+            _swept = int(client.sweep_consultant_reserve() or 0)
+            if _swept > 0:
+                print(f"[CONSULTANT_RESERVE_STARTUP_SWEEP] Protected & archived {_swept} high-scoring PENDING alpha(s)")
+                _maybe_sync_to_drive(force=True)
+        except Exception as _sw_exc:
+            print(f"[CONSULTANT_RESERVE_SWEEP_WARN] {_sw_exc}")
     # P34: Run immediate auto-submit flush on startup if past flush_hour (or submit_immediately=true)
     _flush_pending_if_due()
     with ThreadPoolExecutor(max_workers=eff_workers, thread_name_prefix="brain-multisim") as pool:
