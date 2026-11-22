@@ -733,6 +733,18 @@ def _simulate_single_fallback(
     return [r for r in results if r is not None]
 
 
+def bronze_max_concurrent_sims() -> int:
+    """Official BRAIN Help Center (32/32 helpful): Regular/Bronze max 3 concurrent sims, Consultants max 8."""
+    if os.getenv("BRAIN_CONSULTANT_MODE", "false").strip().lower() in ("1", "true", "yes"):
+        return int(os.getenv("BRAIN_MAX_CONCURRENT_SIMS", "8") or "8")
+    return min(3, max(1, int(os.getenv("BRAIN_MAX_CONCURRENT_SIMS", "3") or "3")))
+
+
+def api_min_spacing_seconds() -> float:
+    """Official BRAIN API rate-limit community consensus: >= 2.0s spacing between requests."""
+    return max(2.0, float(os.getenv("BRAIN_API_MIN_SPACING_SEC", "2.0") or "2.0"))
+
+
 def simulate_multi_alpha(
     client: Any,
     items: Sequence[Mapping[str, Any]],

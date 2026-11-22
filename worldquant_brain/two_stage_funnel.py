@@ -464,23 +464,45 @@ V8_ECONOMIC_HYPOTHESIS_SEEDS: tuple[dict[str, Any], ...] = (
     },
 )
 
+# P39: Filter out low-SNR obscure accounting footnotes (live platform audit 2026-11-23)
+OBSCURE_FOOTNOTE_SUBSTRINGS: tuple[str, ...] = (
+    "accumulated_amortization",
+    "antidilutive_securities",
+    "allocated_sbp",
+    "deferred_income_tax",
+    "exclusion_count",
+    "finite_intangibles",
+    "accumulated_depreciation_depletion",
+)
+
+
+def is_obscure_footnote_field(field_name: str) -> bool:
+    low = str(field_name or "").lower()
+    return any(tok in low for tok in OBSCURE_FOOTNOTE_SUBSTRINGS)
+
+
+# P39: Removed corr_ret20 (caused 6 consecutive negative Sharpes on quarterly fields) and
+# fixed all no-op winsorize(rank(...)) -> rank(winsorize(...)); promoted RReoNlgn (2.82) TS->CS patterns.
 STAGE1_PROBES: tuple[tuple[str, str], ...] = (
-    ("rank_bf", "rank(ts_backfill({f}, 20))"),
+    ("ts126_grp_rank", "group_rank(ts_rank(ts_backfill({f}, 20), 126), subindustry)"),
+    ("cap_ts126_grp_rank", "group_rank(ts_rank(ts_backfill({f}, 20) / (cap + 0.001), 126), subindustry)"),
+    ("rreonlgn_combo_eps", "group_rank(ts_rank(ts_backfill({f}, 20) / (cap + 0.001), 126), subindustry) + 0.5 * group_rank(ts_rank(est_eps / (close + 0.001), 126), industry)"),
+    ("last_diff_surprise", "group_neutralize(rank(winsorize((ts_backfill({f}, 20) - last_diff_value(ts_backfill({f}, 20), 90)) / (abs(last_diff_value(ts_backfill({f}, 20), 90)) + 0.001), std=4)), industry)"),
+    ("rank_bf", "rank(winsorize(ts_backfill({f}, 20), std=4))"),
     ("zscore60", "winsorize(ts_zscore(ts_backfill({f}, 20), 60), std=4)"),
     ("grp_zscore", "winsorize(group_zscore(ts_backfill({f}, 20), industry), std=4)"),
     ("grp_delta20", "group_rank(ts_delta(ts_backfill({f}, 20), 20), subindustry)"),
-    ("tsrank120", "winsorize(ts_rank(ts_backfill({f}, 20), 120), std=4)"),
-    ("decay5_bf", "winsorize(rank(ts_decay_linear(ts_backfill({f}, 20), 5)), std=4)"),
-    ("trade_vol", "trade_when(volume > adv20, rank(ts_backfill({f}, 20)), -1)"),
-    ("corr_ret20", "ts_corr(ts_backfill({f}, 20), returns, 20)"),
+    ("tsrank120", "group_rank(ts_rank(ts_backfill({f}, 20), 120), industry)"),
+    ("decay5_bf", "ts_decay_linear(rank(winsorize(ts_backfill({f}, 20), std=4)), 5)"),
+    ("trade_vol", "trade_when(volume > adv20, rank(winsorize(ts_backfill({f}, 20), std=4)), -1)"),
     ("spow_rank", "signed_power(rank(ts_backfill({f}, 20)) - 0.5, 2)"),
     ("cap_norm_gauss", "quantile(divide(ts_backfill({f}, 20), cap), driver=\"gaussian\")"),
-    ("cap_bucket_neut", "group_neutralize(rank(ts_backfill({f}, 20)), bucket(rank(cap), range=\"0, 1, 0.1\"))"),
-    ("last_revision", "ts_decay_linear(winsorize(rank(ts_backfill({f}, 20) - last_diff_value(ts_backfill({f}, 20), 252)), std=4), 5)"),
+    ("cap_bucket_neut", "group_neutralize(rank(ts_backfill({f}, 20)), densify(bucket(rank(cap), range=\"0, 1, 0.1\")))"),
+    ("last_revision", "ts_decay_linear(rank(winsorize(ts_backfill({f}, 20) - last_diff_value(ts_backfill({f}, 20), 252), std=4)), 5)"),
     ("ts_av_diff60", "quantile(ts_av_diff(ts_backfill({f}, 20), 60), driver=\"gaussian\")"),
     ("reg_resid60", "rank(ts_regression(ts_backfill({f}, 20), returns, 60, lag=0, rettype=0))"),
     ("cap_resid60", "rank(ts_regression(rank(ts_backfill({f}, 20)), log(cap + 1.0), 60, lag=0, rettype=0))"),
-    ("trade_when_vol", "trade_when(volume > ts_mean(volume, 20), group_neutralize(winsorize(rank(ts_backfill({f}, 20)), std=4), industry), -1)"),
+    ("trade_when_vol", "trade_when(volume > ts_mean(volume, 20), group_neutralize(rank(winsorize(ts_backfill({f}, 20), std=4)), industry), -1)"),
     ("grp_scale_sub", "group_scale(ts_zscore(ts_backfill({f}, 20), 60), subindustry)"),
     ("hump_decay10", "hump(group_neutralize(ts_decay_linear(rank(ts_backfill({f}, 20)), 10), industry), hump=0.0008)"),
     ("ev_cf_rank63", "group_rank(-ts_zscore(ts_backfill({f}, 20), 63), industry)"),
@@ -1155,7 +1177,7 @@ class TwoStageAlphaFunnel:
         synergy_exprs = [
             f"rank(ts_backfill({new_field}, 20)) - rank(ts_backfill({peer_field}, 20))",
             f"rank(ts_regression(ts_backfill({new_field}, 20), ts_backfill({peer_field}, 20), 60, lag=0, rettype=0))",
-            f"winsorize(rank(divide(ts_backfill({new_field}, 20), ts_std_dev(ts_backfill({peer_field}, 20), 20) + 1e-6)), std=4)",
+            f"rank(winsorize(divide(ts_backfill({new_field}, 20), ts_std_dev(ts_backfill({peer_field}, 20), 20) + 1e-6), std=4))",
         ]
         prio = max(new_abs_sharpe, peer_sh) + 0.05
         added = 0
