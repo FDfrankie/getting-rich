@@ -27,7 +27,158 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from worldquant_brain.multi_sim_client import DEFAULT_SIM_SETTINGS
+from worldquant_brain.multi_sim_client import DEFAULT_SIM_SETTINGS, default_neutralization_for_dataset
+
+# Curated v8 multi-field economic hypothesis seeds grounded in official BRAIN Data Explorer & Research Papers 01-14.
+# Every expression uses strictly verified Bronze-unlocked operators (66-op whitelist) and live USA TOP3000 D1 fields.
+V8_ECONOMIC_HYPOTHESIS_SEEDS: tuple[dict[str, Any], ...] = (
+    # model51 (Systematic Risk Metrics, 96% coverage — P05M7vpq family)
+    {
+        "name": "v8_model51_beta_term_slope",
+        "dataset_id": "model51",
+        "expression": "hump(group_neutralize(rank(ts_backfill(beta_last_30_days_spy, 5) - ts_backfill(beta_last_360_days_spy, 5)), industry), hump=0.015)",
+        "neutralization": "INDUSTRY",
+        "decay": 2,
+    },
+    {
+        "name": "v8_model51_beta_term_rev",
+        "dataset_id": "model51",
+        "expression": "hump(group_neutralize(-rank(ts_backfill(beta_last_30_days_spy, 5) - ts_backfill(beta_last_360_days_spy, 5)), subindustry), hump=0.015)",
+        "neutralization": "SUBINDUSTRY",
+        "decay": 4,
+    },
+    {
+        "name": "v8_model51_idio_risk_shift",
+        "dataset_id": "model51",
+        "expression": "hump(group_neutralize(rank(ts_backfill(unsystematic_risk_last_30_days, 5) - ts_backfill(unsystematic_risk_last_360_days, 5)), industry), hump=0.015)",
+        "neutralization": "INDUSTRY",
+        "decay": 4,
+    },
+    {
+        "name": "v8_model51_idio_rev_low_to",
+        "dataset_id": "model51",
+        "expression": "hump(ts_decay_linear(rank(ts_backfill(unsystematic_risk_last_360_days, 20) - last_diff_value(ts_backfill(unsystematic_risk_last_360_days, 20), 5)), 8), hump=0.02)",
+        "neutralization": "SUBINDUSTRY",
+        "decay": 6,
+    },
+    {
+        "name": "v8_model51_corr_regime_shift",
+        "dataset_id": "model51",
+        "expression": "hump(group_neutralize(rank(ts_backfill(correlation_last_30_days_spy, 5) - ts_backfill(correlation_last_360_days_spy, 5)), sector), hump=0.015)",
+        "neutralization": "SECTOR",
+        "decay": 2,
+    },
+    # option9 (Options Analytics, 98% coverage)
+    {
+        "name": "v8_option9_pcr_term_slope",
+        "dataset_id": "option9",
+        "expression": "hump(group_neutralize(-rank(ts_backfill(pcr_oi_30, 5) - ts_backfill(pcr_oi_360, 5)), sector), hump=0.015)",
+        "neutralization": "SECTOR",
+        "decay": 2,
+    },
+    {
+        "name": "v8_option9_pcr_short_vs_all",
+        "dataset_id": "option9",
+        "expression": "hump(group_neutralize(-ts_zscore(ts_backfill(pcr_oi_30, 5) / (ts_backfill(pcr_oi_all, 5) + 0.01), 60), sector), hump=0.015)",
+        "neutralization": "SECTOR",
+        "decay": 4,
+    },
+    {
+        "name": "v8_option9_breakeven_skew",
+        "dataset_id": "option9",
+        "expression": "hump(group_neutralize(rank((ts_backfill(call_breakeven_10, 2) - close) / (close + 0.001) - (close - ts_backfill(put_breakeven_10, 2)) / (close + 0.001)), sector), hump=0.015)",
+        "neutralization": "SECTOR",
+        "decay": 4,
+    },
+    # socialmedia8 (100% coverage, only 17k alphas)
+    {
+        "name": "v8_social8_sent_vol_divergence",
+        "dataset_id": "socialmedia8",
+        "expression": "hump(group_neutralize(rank(ts_backfill(snt_social_value_fast_d1, 5)) - rank(ts_backfill(snt_social_volume_fast_d1, 5)), industry), hump=0.015)",
+        "neutralization": "INDUSTRY",
+        "decay": 4,
+    },
+    {
+        "name": "v8_social8_value_zscore_smooth",
+        "dataset_id": "socialmedia8",
+        "expression": "hump(group_neutralize(ts_decay_linear(ts_zscore(ts_backfill(snt_social_value, 5), 60), 5), subindustry), hump=0.015)",
+        "neutralization": "SUBINDUSTRY",
+        "decay": 2,
+    },
+    # socialmedia12 (99% coverage, Matrix + Vector)
+    {
+        "name": "v8_social12_slow_news_paper02",
+        "dataset_id": "socialmedia12",
+        "expression": "hump(group_neutralize(ts_decay_linear(rank(ts_backfill(scl12_sentiment, 5)) - rank(returns), 5), subindustry), hump=0.015)",
+        "neutralization": "SUBINDUSTRY",
+        "decay": 2,
+    },
+    {
+        "name": "v8_social12_vec_sent_stability",
+        "dataset_id": "socialmedia12",
+        "expression": "hump(group_neutralize(ts_mean(vec_avg(scl12_sentvec), 20) / (ts_std_dev(vec_avg(scl12_sentvec), 20) + 0.05), industry), hump=0.015)",
+        "neutralization": "INDUSTRY",
+        "decay": 2,
+    },
+    {
+        "name": "v8_social12_buzz_vol_stability",
+        "dataset_id": "socialmedia12",
+        "expression": "group_neutralize(-ts_std_dev(ts_backfill(scl12_buzz, 5), 20), industry)",
+        "neutralization": "INDUSTRY",
+        "decay": 0,
+    },
+    # news18 (RavenPack 90% coverage Vectors)
+    {
+        "name": "v8_news18_vec_analyst_rec_chg",
+        "dataset_id": "news18",
+        "expression": "hump(group_neutralize(ts_decay_linear(rank(ts_backfill(vec_avg(nws18_ghc_lna), 5)), 8), subindustry), hump=0.015)",
+        "neutralization": "SUBINDUSTRY",
+        "decay": 4,
+    },
+    {
+        "name": "v8_news18_vec_narrative_impact",
+        "dataset_id": "news18",
+        "expression": "hump(group_neutralize(ts_decay_linear(rank(ts_backfill(vec_avg(nws18_nip), 5)), 8), subindustry), hump=0.015)",
+        "neutralization": "SUBINDUSTRY",
+        "decay": 4,
+    },
+    # Research Papers 04, 08, 09, 12 & Bronze Official Examples
+    {
+        "name": "v8_paper09_goodwill_burden",
+        "dataset_id": "fundamental6",
+        "expression": "group_rank(-ts_backfill(goodwill / (abs(sales) + 0.001), 60), industry)",
+        "neutralization": "INDUSTRY",
+        "decay": 0,
+    },
+    {
+        "name": "v8_paper04_bronze_ev_cashflow",
+        "dataset_id": "fundamental6",
+        "expression": "group_rank(-ts_zscore(ts_backfill(enterprise_value / (abs(cashflow) + 0.001), 60), 63), industry)",
+        "neutralization": "INDUSTRY",
+        "decay": 0,
+    },
+    {
+        "name": "v8_paper08_good_bad_semivar",
+        "dataset_id": "pv1",
+        "expression": "hump(group_neutralize(rank(ts_mean(if_else(returns > 0, returns * returns, 0), 20) - ts_mean(if_else(returns < 0, returns * returns, 0), 20)), subindustry), hump=0.015)",
+        "neutralization": "MARKET",
+        "decay": 2,
+    },
+    {
+        "name": "v8_bronze_est_ptp_fcf_corr",
+        "dataset_id": "analyst4",
+        "expression": "group_neutralize(-ts_corr(ts_backfill(est_ptp, 5), ts_backfill(est_fcf, 5), 120), industry)",
+        "neutralization": "INDUSTRY",
+        "decay": 0,
+    },
+    {
+        "name": "v8_liq_bucket_cashflow_assets",
+        "dataset_id": "fundamental6",
+        "expression": "group_neutralize(rank(ts_backfill(cashflow_op / (abs(assets) + 0.001), 60)), densify(bucket(rank(volume), range=\"0, 1, 0.1\")))",
+        "neutralization": "INDUSTRY",
+        "decay": 0,
+    },
+)
 
 STAGE1_PROBES: tuple[tuple[str, str], ...] = (
     ("rank_bf", "rank(ts_backfill({f}, 20))"),
@@ -788,6 +939,40 @@ class TwoStageAlphaFunnel:
         with self._connect() as conn:
             arms = self._ucb_rank_arms(conn, list(datasets_fields.keys()), STAGE1_PROBES)
             submitted_skels, failure_toks = self._load_reference_guards(conn)
+            # P30: Inject up to 2 untried curated v8 multi-field economic hypothesis seeds per Stage-1 batch
+            active_ds_low = {str(k).lower() for k in datasets_fields.keys()}
+            max_econ = min(2, max(1, batch_size // 2))
+            econ_added = 0
+            for seed in V8_ECONOMIC_HYPOTHESIS_SEEDS:
+                if econ_added >= max_econ or len(out) >= batch_size:
+                    break
+                s_ds = str(seed.get("dataset_id") or "")
+                if active_ds_low and s_ds.lower() not in active_ds_low and len(active_ds_low) == 1:
+                    continue
+                s_expr = str(seed["expression"])
+                s_sett = dict(self.base_settings)
+                s_sett["neutralization"] = str(seed.get("neutralization") or default_neutralization_for_dataset(s_ds))
+                s_sett["decay"] = int(seed.get("decay", s_sett.get("decay", 2)))
+                if s_ds.lower() != "pv1":
+                    s_sett["nanHandling"] = "ON"
+                sh_e = _sim_hash(s_expr, s_sett)
+                if self._is_tried(conn, sh_e):
+                    continue
+                if self._is_repelled_by_reference(s_expr, submitted_skels, failure_toks):
+                    self._mark_tried(conn, sh_e, s_expr, s_sett, "REPELLED", s_ds)
+                    continue
+                self._mark_tried(conn, sh_e, s_expr, s_sett, "STAGE1_ECON", s_ds)
+                out.append(
+                    {
+                        "expression": s_expr,
+                        "settings": s_sett,
+                        "stage": "STAGE1",
+                        "dataset_id": s_ds,
+                        "probe": str(seed["name"]),
+                        "field": str(seed["name"]),
+                    }
+                )
+                econ_added += 1
             for ds_id, probe_name, template in arms:
                 for field in datasets_fields.get(ds_id, ()):
                     if len(out) >= batch_size:
@@ -811,6 +996,7 @@ class TwoStageAlphaFunnel:
                         eff_template = template
                     expr = _format_probe(eff_template, field)
                     sett = dict(self.base_settings)
+                    sett["neutralization"] = default_neutralization_for_dataset(ds_id)
                     if any(
                         k in ds_low
                         for k in ("fundamental", "fnd", "analyst", "anl", "news", "nws", "social", "option", "opt", "model", "mdl", "sentiment")

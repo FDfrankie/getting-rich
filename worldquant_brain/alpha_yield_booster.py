@@ -14,6 +14,7 @@ _HIGH_YIELD_ATOMS: dict[str, list[str]] = {
         "operating_income / (sales + 0.001)",
         "-1 * ts_delta(debt / (assets + 0.001), 60)",
         "sales / (assets + 0.001)",
+        "-1 * ts_backfill(goodwill / (abs(sales) + 0.001), 60)",
     ],
     "ANALYST_REV": [
         "ts_zscore(est_eps, 40)",
@@ -26,6 +27,11 @@ _HIGH_YIELD_ATOMS: dict[str, list[str]] = {
         "-1 * ts_std_dev(ts_backfill(scl12_buzz, 5), 20)",
         "-1 * ts_zscore(implied_volatility_call_60 - implied_volatility_put_60, 40)",
         "ts_zscore(implied_volatility_mean_60, 40)",
+        "ts_backfill(beta_last_30_days_spy, 5) - ts_backfill(beta_last_360_days_spy, 5)",
+        "ts_backfill(unsystematic_risk_last_30_days, 5) - ts_backfill(unsystematic_risk_last_360_days, 5)",
+        "-1 * (ts_backfill(pcr_oi_30, 5) - ts_backfill(pcr_oi_360, 5))",
+        "rank(ts_backfill(snt_social_value_fast_d1, 5)) - rank(ts_backfill(snt_social_volume_fast_d1, 5))",
+        "ts_backfill(vec_avg(nws18_ghc_lna), 5)",
     ],
     "PV_LOW_CORR": [
         "-1 * ts_regression(returns, ts_mean(returns, 5), 40, rettype=0)",
