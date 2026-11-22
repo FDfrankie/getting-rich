@@ -118,7 +118,6 @@ def generate_orthogonal_combo_candidate() -> dict[str, str]:
         evt_held = f"ts_backfill(trade_when(rank(volume / ts_mean(volume, 20)) > 0.5, {sig}, -1), 5)"
         expr = f"hump(0.5 * {sig} + 0.5 * {evt_held}, hump={h})"
     elif mode == "LIQ_BUCKET_DOUBLE_NEUT":
-        # Official v7 BRAIN Tip: liquidity-bucket double neutralization using Bronze-unlocked densify(bucket(...))
         sig = f"0.5 * winsorize(rank(ts_backfill({atom_a}, 5)), std=4) + 0.5 * winsorize(rank(ts_backfill({atom_b}, 5)), std=4)"
         expr = f"hump(group_neutralize({sig}, densify(bucket(rank(volume), range=\"0, 1, 0.1\"))), hump={h})"
     else:
@@ -283,7 +282,6 @@ def precision_repair_near_miss(
     if any("2Y_SHARPE" in c or "LADDER" in c for c in failed):
         s_2y = dict(base)
         s_2y["decay"] = min(6, max(0, int(base.get("decay", 2) or 2)))
-        # Official v7 BRAIN Tip: Bronze-unlocked IS-Ladder Self-Boosting + hump smoothing (replaces locked jump_decay)
         repairs.append({
             "name": "Repair_Low2YSharpe_ISLadderBoost",
             "expression": f"hump(group_neutralize(rank({expr}) / (1.5 - rank({expr})), subindustry), hump=0.015)",

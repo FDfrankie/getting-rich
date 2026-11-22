@@ -59,6 +59,8 @@ def extract_expression_skeleton(expression: str) -> str:
 KNOWN_INVALID_BRAIN_FIELDS: frozenset[str] = frozenset({
     "opt6_slopeavg1m",
     "opt6_fcstr2imp",
+    "opt6_nexterntod",
+    "opt6_lasterntod",
     "operating_cashflow",
     "eps_consensus_mean",
 })
@@ -90,6 +92,14 @@ def validate_candidate_expression(expression: str, extra_invalid_fields: set[str
     for m in re.finditer(r"ts_(?:std_dev|zscore|regression)\([^()]*,\s*(\d+)\s*(?:,|\))", low):
         if int(m.group(1)) < 3:
             return False, f"DEGENERATE_STAT_WINDOW:{m.group(1)}"
+
+    try:
+        from worldquant_brain.multi_sim_client import find_locked_bronze_operators
+        locked_ops = find_locked_bronze_operators(expr)
+        if locked_ops:
+            return False, f"LOCKED_BRONZE_OPERATOR:{locked_ops[0]}"
+    except Exception:
+        pass
 
     return True, "OK"
 

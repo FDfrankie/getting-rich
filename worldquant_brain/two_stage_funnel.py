@@ -271,7 +271,8 @@ def classify_verdict(
         reasons.append(f"LOW_FITNESS({fit:.2f}<{eff_min_fitness:.2f})")
     if not (min_turnover <= to <= max_turnover):
         reasons.append(f"TURNOVER_OUT_OF_RANGE({to:.3f})")
-    if norm_margin is not None and norm_margin < 0.0010:
+    min_pass_margin = float(os.getenv("BRAIN_MIN_MARGIN", "0.0005") or "0.0005")
+    if norm_margin is not None and norm_margin < min_pass_margin:
         reasons.append(f"LOW_MARGIN({norm_margin:.5f})")
     if not checks_passed:
         reasons.append("FAILED_CHECKS(" + (",".join(failed_checks) if failed_checks else "UNKNOWN") + ")")
@@ -287,7 +288,9 @@ def classify_verdict(
     )
     if any(bad in chk for chk in failed_checks for bad in NON_RESCUABLE_CHECKS):
         return "REJECTED", ";".join(reasons)
-    if len(failed_checks) > max_fc:
+    _early_eff_fit = -fit if sh < 0 else fit
+    _early_high_sh_to = (abs(sh) >= 1.50) and (0.70 < to < 1.50) and (_early_eff_fit >= 0.45)
+    if not _early_high_sh_to and len(failed_checks) > max_fc:
         return "REJECTED", ";".join(reasons)
     # P22 turnover-aware rescue: high-turnover raw signals (0.25 < to <= 0.78) have strong decay leverage
     # (decay reduces turnover and lifts Fitness by ~1.3x-1.6x), so allow slightly lower Stage-1 Sharpe/Fitness.
@@ -322,7 +325,7 @@ def classify_verdict(
     )
     # P26: High-Sharpe / High-Turnover rescue fast-track (e.g., P05M7vpq Sharpe=2.06, TO=100.95%, Fit=0.58):
     # Cutting 100% turnover -> 25% via decay=10/hump/trade_when lifts Fitness by ~2x.
-    high_sharpe_high_to_rescue = (abs(sh) >= 1.50) and (to > nm_max_to) and (to < 1.50) and (eff_fit >= 0.45)
+    high_sharpe_high_to_rescue = (abs(sh) >= 1.50) and (0.70 < to < 1.50) and (eff_fit >= 0.45)
     if not high_sharpe_high_to_rescue and not (nm_min_to <= to <= nm_max_to):
         return "REJECTED", ";".join(reasons)
     base_nm_margin = float(
@@ -639,8 +642,10 @@ class TwoStageAlphaFunnel:
             candidates.append((expr, dict(base_sett, decay=0, universe="TOP1000")))
             for sw_expr in _log_window_variants(expr, prefer_larger=False):
                 candidates.append((sw_expr, dict(base_sett, decay=0)))
-        if "2Y_SHARPE" in reason or "LOW_2Y" in reason:
-            candidates.append((expr, dict(base_sett, decay=2)))
+        if "2Y_SHARPE" in reason or "LOW_2Y" in reason or "SHARPE" in reason:
+            # Official v7 BRAIN Tip: IS-Ladder Self-Boosting + liquidity-bucket double neutralization (100% Bronze-unlocked)
+            candidates.append((f"hump(group_neutralize(rank({expr}) / (1.5 - rank({expr})), subindustry), hump=0.015)", dict(base_sett, decay=2)))
+            candidates.append((f"group_neutralize(rank({expr}), densify(bucket(rank(volume), range=\"0, 1, 0.1\")))", dict(base_sett, decay=0)))
             for sw_expr in _log_window_variants(expr, prefer_larger=False):
                 candidates.append((sw_expr, dict(base_sett, decay=2)))
         base_neut = str(base_sett.get("neutralization") or "").upper()
