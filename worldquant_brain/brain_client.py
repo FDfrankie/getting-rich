@@ -711,6 +711,106 @@ class BrainClient:
         finally:
             conn.close()
 
+    def harvest_unsubmitted_candidates(
+        self,
+        *,
+        limit: int = 50,
+        day_str: str | None = None,
+    ) -> int:
+        """Scan BRAIN /users/self/alphas?status=UNSUBMITTED (sorted by -is.fitness) and stage qualified alphas into brain_candidate_pool."""
+        if self.offline_mode:
+            return 0
+        if not self.is_authenticated and not self.authenticate():
+            return 0
+        import sqlite3
+
+        min_margin = float(os.getenv("BRAIN_MIN_MARGIN", "0.0005") or "0.0005")
+        url = f"{self.BASE_URL}/users/self/alphas"
+        params = {
+            "status": "UNSUBMITTED",
+            "limit": int(max(10, min(100, limit))),
+            "offset": 0,
+            "order": "-is.fitness",
+        }
+        try:
+            resp = self.session.get(url, params=params, timeout=min(self.timeout, 20.0))
+            if resp.status_code == 401:
+                self.authenticated = False
+                if self.authenticate():
+                    resp = self.session.get(url, params=params, timeout=min(self.timeout, 20.0))
+            if resp.status_code != 200 or not resp.content:
+                return 0
+            payload = resp.json()
+        except Exception as exc:
+            logger.debug("harvest_unsubmitted_candidates fetch failed: %s", exc)
+            return 0
+
+        items = payload.get("results") if isinstance(payload, dict) else (payload if isinstance(payload, list) else [])
+        if not isinstance(items, list) or not items:
+            return 0
+
+        # Skip any alpha_id already processed (SUBMITTED / FAILED_CHECKS / FAILED_CORR / PENDING)
+        existing_ids: set[str] = set()
+        db_p = self._quota_db()
+        if os.path.exists(db_p):
+            try:
+                c = sqlite3.connect(db_p, timeout=10.0)
+                c.execute(
+                    "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)"
+                )
+                existing_ids = {str(r[0]) for r in c.execute("SELECT alpha_id FROM brain_candidate_pool").fetchall()}
+                c.close()
+            except Exception:
+                pass
+
+        staged = 0
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            aid = str(item.get("id") or "").strip()
+            if not aid or aid in existing_ids:
+                continue
+            is_blk = item.get("is") if isinstance(item.get("is"), dict) else {}
+            sett = item.get("settings") if isinstance(item.get("settings"), dict) else {}
+            sh = self._number(is_blk, "sharpe")
+            fit = self._number(is_blk, "fitness")
+            to = self._number(is_blk, "turnover")
+            mg = self._number(is_blk, "margin")
+            if sh is None or fit is None or to is None:
+                continue
+            delay = int(sett.get("delay", 1) or 1)
+            min_sh = 2.00 if delay == 0 else 1.25
+            min_fit = 1.30 if delay == 0 else 1.00
+            norm_to = to / 100.0 if 2.0 < to <= 70.0 else to
+            if sh < min_sh or fit < min_fit or not (0.01 <= norm_to <= 0.70):
+                continue
+            if mg is not None:
+                norm_mg = mg / 10000.0 if mg > 0.5 else mg
+                if norm_mg < min_margin:
+                    continue
+            checks = is_blk.get("checks") if isinstance(is_blk.get("checks"), list) else []
+            if any(
+                isinstance(ch, dict) and str(ch.get("result") or "").upper() in ("FAIL", "FAILED", "ERROR")
+                for ch in checks
+            ):
+                continue
+            reg = item.get("regular") if isinstance(item.get("regular"), dict) else {}
+            expr = str(reg.get("code") or item.get("expression") or "").strip()
+            if not expr:
+                continue
+            self.stage_candidate_for_daily_selection(
+                aid,
+                expr,
+                float(sh),
+                float(fit),
+                float(norm_to),
+                float(mg or 0.0),
+                day_str=day_str,
+            )
+            existing_ids.add(aid)
+            staged += 1
+        return staged
+
     def flush_daily_candidates(self, day_str: str | None = None, max_daily_submissions: int | None = None) -> list[dict[str, Any]]:
         """Submit top-scoring pending candidates from today's pool up to the remaining daily quota."""
         import sqlite3
@@ -1002,13 +1102,14 @@ class BrainClient:
         if neut_val == "NONE" and "group_neutralize(" not in reg_expr and "group_normalize(" not in reg_expr:
             reasons.append("NEUTRALIZATION_NONE_WITHOUT_GROUP_NEUTRALIZE (Official BRAIN KB 13306223024151)")
         if turnover is not None:
-            norm_to = turnover / 100.0 if 1.0 < turnover <= 70.0 else turnover
+            norm_to = turnover / 100.0 if 2.0 < turnover <= 70.0 else turnover
             if not (0.01 <= norm_to <= 0.70):
                 reasons.append(f"Turnover {norm_to:.4f} outside [0.01, 0.70]")
         if margin is not None:
+            min_margin = float(os.getenv("BRAIN_MIN_MARGIN", "0.0005") or "0.0005")
             norm_margin = margin / 10000.0 if margin > 0.5 else margin
-            if norm_margin < 0.0010:
-                reasons.append(f"Margin {norm_margin:.5f} < 0.0010 (10 bps)")
+            if norm_margin < min_margin:
+                reasons.append(f"Margin {norm_margin:.5f} < {min_margin:.4f} ({min_margin * 10000:.1f} bps)")
 
         if len(reasons) == 0 and not has_side_effect and not self.offline_mode:
             region_val = str(settings_blk.get("region") or "USA").upper()

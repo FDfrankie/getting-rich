@@ -319,9 +319,10 @@ def run_headless_miner(
                 if (margin is not None and float(margin) > 0.5)
                 else (float(margin) if margin is not None else None)
             )
+            min_margin = float(os.getenv("BRAIN_MIN_MARGIN", "0.0005") or "0.0005")
             qualified = (
                 verdict == "PASSED"
-                and (norm_margin is None or norm_margin >= 0.0010)
+                and (norm_margin is None or norm_margin >= min_margin)
                 and vault.passes_qualification(float(sharpe), float(fitness), float(turnover))
             )
             if not qualified:
@@ -405,6 +406,8 @@ def run_headless_miner(
             _consec_zero["count"] = 0
         return hit_cooldown
 
+    _last_harvest_ts: dict[str, float] = {"ts": 0.0}
+
     def _flush_pending_if_due() -> None:
         if not auto_submit:
             return
@@ -420,6 +423,15 @@ def run_headless_miner(
                     f"(set BRAIN_SUBMIT_IMMEDIATELY=true or BRAIN_DAILY_FLUSH_HOUR=-1 to submit right away)"
                 )
             return
+        # P34: Harvest qualified UNSUBMITTED backlog from BRAIN at most once every 15 minutes
+        if hasattr(client, "harvest_unsubmitted_candidates") and (time.monotonic() - _last_harvest_ts["ts"] >= 900.0):
+            _last_harvest_ts["ts"] = time.monotonic()
+            try:
+                harvested = client.harvest_unsubmitted_candidates(limit=50)
+                if harvested > 0:
+                    print(f"[BACKLOG_HARVESTED] Staged {harvested} qualified UNSUBMITTED alpha(s) from BRAIN for auto-submit")
+            except Exception as _hexc:
+                print(f"[BACKLOG_HARVEST_WARN] {_hexc}")
         flushed = client.flush_daily_candidates(max_daily_submissions=max_daily)
         for sr in (flushed or []):
             aid = str(sr.get("alpha_id") or "")
@@ -451,6 +463,8 @@ def run_headless_miner(
     in_flight: list[Future[list[dict[str, Any]]]] = []
     cooldown_until = 0.0
     auth_blocked = False
+    # P34: Run immediate auto-submit flush on startup if past flush_hour (or submit_immediately=true)
+    _flush_pending_if_due()
     with ThreadPoolExecutor(max_workers=eff_workers, thread_name_prefix="brain-multisim") as pool:
         try:
             while time.monotonic() < deadline and not auth_blocked:
