@@ -22,7 +22,8 @@ def _w_long() -> int:
 
 
 def _hump() -> float:
-    return random.choice([0.005, 0.008, 0.01, 0.012, 0.015, 0.02])
+    # P36: TOP3000 safe hump range (avg single-stock weight ~0.00033; hump>=0.005 freezes turnover <1%)
+    return random.choice([0.0005, 0.0008, 0.001])
 
 
 def _wrap_hygiene(
@@ -32,8 +33,6 @@ def _wrap_hygiene(
     transform: str | None = None,
 ) -> str:
     g = grp or _grp()
-    hv = h if h is not None else _hump()
-    std_v = random.choice([3, 3.5, 4])
     inner = core
     if transform == "TS_REGRESSION_RESID" and "ts_regression" not in inner:
         inner = f"ts_regression(rank({inner}), returns, {_w_med()}, rettype=0)"
@@ -42,7 +41,7 @@ def _wrap_hygiene(
     elif transform == "REGRESSION_NEUT_VOL" and "ts_regression" not in inner:
         inner = f"ts_regression(rank({inner}), ts_std_dev(returns, 20), {_w_med()}, lag=0, rettype=0)"
     elif transform == "TRADE_WHEN_VOL_EVENT" and "trade_when" not in inner:
-        base_sig = f"group_neutralize(winsorize(rank({inner}), std={std_v}), {g})"
+        base_sig = f"group_neutralize(rank({inner}), {g})"
         return f"trade_when(volume > ts_mean(volume, 20), {base_sig}, -1)"
     elif transform == "ZSCORE_RANK" and "ts_zscore" not in inner:
         inner = f"ts_zscore({inner}, {_w_med()})"
@@ -50,7 +49,11 @@ def _wrap_hygiene(
         inner = f"(0.5 + 0.5 * rank(ts_mean(volume * close, 21))) * rank({inner})"
     elif transform == "NONLINEAR_SIGNED_POWER" and "signed_power" not in inner:
         inner = f"signed_power(ts_zscore({inner}, {_w_short()}), 0.75)"
-    return f"hump(group_neutralize(winsorize(rank({inner}), std={std_v}), {g}), hump={hv})"
+    # P36: Remove no-op winsorize(rank(...)) and default TOP3000 turnover-freezing hump>=0.005
+    base = f"group_neutralize(rank({inner}), {g})"
+    if h is not None and 0.0 < float(h) <= 0.0015:
+        return f"hump({base}, hump={float(h)})"
+    return base
 
 
 _TEMPLATE_FAMILIES: dict[str, list[Callable[..., tuple[str, str]]]] = {

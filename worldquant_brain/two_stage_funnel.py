@@ -27,11 +27,73 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from worldquant_brain.multi_sim_client import DEFAULT_SIM_SETTINGS, default_neutralization_for_dataset
+from worldquant_brain.multi_sim_client import DEFAULT_SIM_SETTINGS, default_neutralization_for_dataset, default_sim_profile_for_dataset
 
 # Curated v8 multi-field economic hypothesis seeds grounded in official BRAIN Data Explorer & Research Papers 01-14.
 # Every expression uses strictly verified Bronze-unlocked operators (66-op whitelist) and live USA TOP3000 D1 fields.
 V8_ECONOMIC_HYPOTHESIS_SEEDS: tuple[dict[str, Any], ...] = (
+    # --- P36 GOLD-MEDAL & AGONALPHA SPECTACULAR SEEDS (USA TOP3000 D1, 100% Bronze 66-op compliant) ---
+    {
+        "name": "p36_gold_roe_trend_126",
+        "dataset_id": "fundamental6",
+        "expression": "group_rank(ts_rank(operating_income / (equity + 0.001), 126), subindustry)",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP3000",
+        "decay": 0,
+        "truncation": 0.08,
+        "nanHandling": "ON",
+    },
+    {
+        "name": "p36_gold_fcf_yield_126",
+        "dataset_id": "fundamental6",
+        "expression": "group_rank(ts_rank(cashflow_op / (equity + 0.001), 126), industry)",
+        "neutralization": "INDUSTRY",
+        "universe": "TOP3000",
+        "decay": 0,
+        "truncation": 0.08,
+        "nanHandling": "ON",
+    },
+    {
+        "name": "p36_gold_roe_asset_turn_mix_126",
+        "dataset_id": "fundamental6",
+        "expression": "0.5 * group_rank(ts_rank(operating_income / (equity + 0.001), 126), subindustry) + 0.5 * group_rank(ts_rank(sales / (assets + 0.001), 126), subindustry)",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP3000",
+        "decay": 0,
+        "truncation": 0.08,
+        "nanHandling": "ON",
+    },
+    {
+        "name": "p36_gold_fund_analyst_hybrid_126",
+        "dataset_id": "analyst4",
+        "expression": "0.5 * group_rank(ts_rank(operating_income / (equity + 0.001), 126), subindustry) + 0.5 * group_rank(ts_rank(est_eps / (close + 0.001), 126), industry)",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP3000",
+        "decay": 2,
+        "truncation": 0.08,
+        "nanHandling": "ON",
+    },
+    {
+        "name": "p36_agon_vol_stability_88er8JAl",
+        "dataset_id": "pv1",
+        "expression": "-ts_std_dev(volume / (adv20 + 1.0), 40)",
+        "neutralization": "INDUSTRY",
+        "universe": "TOP3000",
+        "decay": 2,
+        "truncation": 0.05,
+        "nanHandling": "OFF",
+    },
+    {
+        "name": "p36_agon_iv_spread_180_A17q5RdR",
+        "dataset_id": "option8",
+        "expression": "ts_mean(ts_backfill(implied_volatility_call_180 - implied_volatility_put_180, 60), 40)",
+        "neutralization": "INDUSTRY",
+        "universe": "TOP3000",
+        "decay": 0,
+        "truncation": 0.08,
+        "nanHandling": "ON",
+    },
+
     # --- P33 EMPIRICAL TOP-20 WINNER FAMILIES (from 2,134-Alpha forensic sort + official BRAIN KB fixes) ---
     # Family B (58JQGZ7n Sharpe=1.78, Fit=1.45, ONLY failed Sub-Univ 0.59<0.77) -> Official KB Liquidity-Weighted Dual Decay + TOP1000/TOP500 + outer rank()
     {
@@ -1174,12 +1236,17 @@ class TwoStageAlphaFunnel:
                     continue
                 s_expr = str(seed["expression"])
                 s_sett = dict(self.base_settings)
-                s_sett["neutralization"] = str(seed.get("neutralization") or default_neutralization_for_dataset(s_ds))
-                s_sett["decay"] = int(seed.get("decay", s_sett.get("decay", 2)))
+                s_sett.update(default_sim_profile_for_dataset(s_ds))
+                if seed.get("neutralization"):
+                    s_sett["neutralization"] = str(seed["neutralization"])
+                if "decay" in seed:
+                    s_sett["decay"] = int(seed["decay"])
+                if seed.get("truncation") is not None:
+                    s_sett["truncation"] = float(seed["truncation"])
                 if seed.get("universe"):
                     s_sett["universe"] = str(seed["universe"])
-                if s_ds.lower() != "pv1":
-                    s_sett["nanHandling"] = "ON"
+                if seed.get("nanHandling"):
+                    s_sett["nanHandling"] = str(seed["nanHandling"])
                 sh_e = _sim_hash(s_expr, s_sett)
                 if self._is_tried(conn, sh_e):
                     continue
@@ -1221,12 +1288,7 @@ class TwoStageAlphaFunnel:
                         eff_template = template
                     expr = _format_probe(eff_template, field)
                     sett = dict(self.base_settings)
-                    sett["neutralization"] = default_neutralization_for_dataset(ds_id)
-                    if any(
-                        k in ds_low
-                        for k in ("fundamental", "fnd", "analyst", "anl", "news", "nws", "social", "option", "opt", "model", "mdl", "sentiment")
-                    ):
-                        sett["nanHandling"] = "ON"
+                    sett.update(default_sim_profile_for_dataset(ds_id))
                     sh = _sim_hash(expr, sett)
                     if self._is_tried(conn, sh):
                         continue

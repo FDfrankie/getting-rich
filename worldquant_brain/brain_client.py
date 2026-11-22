@@ -842,6 +842,7 @@ class BrainClient:
         results: list[dict[str, Any]] = []
         submitted_count = 0
         submitted_skels: set[str] = set()
+        failed_corr_skels: set[str] = set()
         for row in rows:
             if submitted_count >= remaining:
                 break
@@ -849,6 +850,16 @@ class BrainClient:
             skel = extract_expression_skeleton(str(row["expression"] or ""))
             if skel in submitted_skels:
                 continue  # Skip same skeleton only AFTER a sibling succeeded this round
+            if skel and skel in failed_corr_skels:
+                # P36: Fast-skip clones whose structural skeleton already failed SELF_CORRELATION this round
+                try:
+                    c_skip = sqlite3.connect(db_p, timeout=10.0)
+                    c_skip.execute("UPDATE brain_candidate_pool SET status = 'FAILED_CORR' WHERE alpha_id = ?", (aid,))
+                    c_skip.commit()
+                    c_skip.close()
+                except Exception as _skip_exc:
+                    logger.debug("Could not mark clone FAILED_CORR for %s: %s", aid, _skip_exc)
+                continue
             res = self.submit_alpha(aid, max_daily_submissions=limit, enforce_checks=True, day_str=day)
             results.append(res)
             status_val = str(res.get("status") or "")
@@ -862,11 +873,13 @@ class BrainClient:
                     c_ok.close()
                 except Exception as _ok_exc:
                     logger.debug("Could not mark candidate SUBMITTED for %s: %s", aid, _ok_exc)
-            elif status_val == "DAILY_QUOTA_REACHED":
+            elif status_val in ("DAILY_QUOTA_REACHED", "AUTH_FAILED", "OFFLINE"):
                 break
             elif status_val in ("SUBMISSION_CHECK_FAILED", "SUBMIT_REJECTED"):
                 err_txt = str(res.get("error") or "").upper()
                 is_corr = bool(res.get("corr_rejected")) or ("CORRELATION" in err_txt) or ("CORR" in err_txt)
+                if is_corr and skel:
+                    failed_corr_skels.add(skel)
                 new_status = "FAILED_CORR" if is_corr else "FAILED_CHECKS"
                 try:
                     c2 = sqlite3.connect(db_p, timeout=10.0)

@@ -274,10 +274,41 @@ def default_neutralization_for_dataset(dataset_id: str = "") -> str:
             return neut
     return "SUBINDUSTRY"
 
+# P36: Empirical USA TOP3000 D1 dataset simulation profiles (wq-alpha-research & AgonAlpha 2026)
+DATASET_SIM_PROFILES: dict[str, dict[str, Any]] = {
+    "fundamental": {"neutralization": "SUBINDUSTRY", "decay": 0, "nanHandling": "ON", "truncation": 0.08},
+    "analyst": {"neutralization": "SUBINDUSTRY", "decay": 2, "nanHandling": "ON", "truncation": 0.08},
+    "earnings": {"neutralization": "INDUSTRY", "decay": 2, "nanHandling": "ON", "truncation": 0.08},
+    "option": {"neutralization": "INDUSTRY", "decay": 2, "nanHandling": "ON", "truncation": 0.08},
+    "model": {"neutralization": "INDUSTRY", "decay": 4, "nanHandling": "ON", "truncation": 0.08},
+    "news": {"neutralization": "SUBINDUSTRY", "decay": 4, "nanHandling": "ON", "truncation": 0.08},
+    "social": {"neutralization": "INDUSTRY", "decay": 4, "nanHandling": "ON", "truncation": 0.08},
+    "sentiment": {"neutralization": "SUBINDUSTRY", "decay": 4, "nanHandling": "ON", "truncation": 0.08},
+    "short": {"neutralization": "INDUSTRY", "decay": 4, "nanHandling": "ON", "truncation": 0.08},
+    "pv13": {"neutralization": "SUBINDUSTRY", "decay": 4, "nanHandling": "ON", "truncation": 0.08},
+    "pv": {"neutralization": "INDUSTRY", "decay": 12, "nanHandling": "OFF", "truncation": 0.08},
+}
+
+
+def default_sim_profile_for_dataset(dataset_id: str = "") -> dict[str, Any]:
+    """Return empirical USA TOP3000 D1 settings (neutralization, decay, nanHandling, truncation) for dataset."""
+    ds = (dataset_id or "").strip().lower()
+    if "pv13" in ds:
+        return dict(DATASET_SIM_PROFILES["pv13"])
+    for prefix, prof in DATASET_SIM_PROFILES.items():
+        if prefix == "pv13":
+            continue
+        if prefix in ds:
+            return dict(prof)
+    return {"neutralization": default_neutralization_for_dataset(ds), "decay": 4, "nanHandling": "ON", "truncation": 0.08}
+
+
 
 def sanitize_sim_settings(settings: Mapping[str, Any] | None = None, *, dataset_id: str = "") -> dict[str, Any]:
-    """Ensure simulation settings never send Consultant-only neutralizations on Bronze accounts."""
+    """Ensure simulation settings apply dataset-calibrated defaults and Bronze-safe neutralizations."""
     merged = dict(DEFAULT_SIM_SETTINGS)
+    if dataset_id:
+        merged.update(default_sim_profile_for_dataset(dataset_id))
     if settings:
         merged.update(dict(settings))
     neut = str(merged.get("neutralization") or "SUBINDUSTRY").strip().upper()
@@ -486,8 +517,18 @@ def fetch_available_datasets(
             }
         )
 
-    # Sort: highest valueScore first, then lowest alpha_count (least crowded), deprioritize pv (>1M alphas)
-    items.sort(key=lambda d: (d["alpha_count"] > 1_000_000, float(d.get("coverage", 1.0)) < 0.70, -d["value_score"], d["alpha_count"]))
+    # P36 Sort: prioritize empirical high-pass-rate tiers (Fundamental 40% > Analyst/Option > Model/News/PV13 > PV1/Other)
+    def _dataset_tier(d: Mapping[str, Any]) -> int:
+        ds_id_l = str(d.get("id") or "").lower()
+        if ds_id_l in {"fundamental6", "fundamental2"} or ds_id_l.startswith("fundamental"):
+            return 0
+        if ds_id_l.startswith("analyst") or ds_id_l in {"option8", "option9"} or ds_id_l.startswith("option"):
+            return 1
+        if ds_id_l in {"model16", "model51", "pv13", "news12", "news18", "socialmedia12"}:
+            return 2
+        return 3
+
+    items.sort(key=lambda d: (_dataset_tier(d), float(d.get("coverage", 1.0)) < 0.65, -d["value_score"], d["alpha_count"]))
     return items[:max_datasets]
 
 
@@ -576,7 +617,9 @@ def _simulate_single_fallback(
     poll_interval: float,
     item_delay_seconds: float = 1.0,
 ) -> list[dict[str, Any]]:
-    """Sequentially fall back to single-alpha simulation when multi-sim batch POST is rejected."""
+    """Concurrently fall back to single-alpha simulations (Bronze 3-slot pool) when multi-sim POST is rejected."""
+    from concurrent.futures import ThreadPoolExecutor
+
     unavailable_neuts: set[str] = getattr(client, "_unavailable_neutralizations", None)
     if unavailable_neuts is None:
         unavailable_neuts = set()
@@ -585,26 +628,52 @@ def _simulate_single_fallback(
         except Exception as _attr_exc:
             logger.debug("Could not attach _unavailable_neutralizations to client: %s", _attr_exc)
 
-    results: list[dict[str, Any]] = []
-    for idx, it in enumerate(items):
+    n_items = len(items)
+    if n_items == 0:
+        return []
+
+    raw_conc = int(os.getenv("BRAIN_BRONZE_CONCURRENCY", "3") or "3")
+    max_workers = max(1, min(3, raw_conc, n_items))
+    # Preserve deterministic sequential execution when item_delay_seconds == 0 and mock/test expects strict ordering,
+    # or run concurrently across up to 3 Bronze simulation slots.
+    neut_lock = threading.Lock()
+    abort_event = threading.Event()
+    abort_info: dict[str, str] = {"status": "", "error": ""}
+
+    def _run_one(idx: int, it: Mapping[str, Any]) -> dict[str, Any]:
         expr = str(it.get("expression") or "")
-        sett = dict(it.get("settings") or DEFAULT_SIM_SETTINGS)
+        dataset_id = str(it.get("dataset_id") or "")
+        sett = sanitize_sim_settings(it.get("settings"), dataset_id=dataset_id)
         stage = it.get("stage", "STAGE1")
-        dataset_id = it.get("dataset_id", "")
+
+        if abort_event.is_set():
+            return {
+                "success": False,
+                "status": abort_info["status"] or "RATE_LIMITED",
+                "expression": expr,
+                "settings": sett,
+                "stage": stage,
+                "dataset_id": dataset_id,
+                "error": abort_info["error"] or "Aborted due to upstream auth/rate-limit",
+            }
+
         item_neut = str(sett.get("neutralization") or "").upper()
-        if item_neut and item_neut in unavailable_neuts:
-            results.append(
-                {
-                    "success": False,
-                    "status": "SKIPPED",
-                    "expression": expr,
-                    "settings": sett,
-                    "stage": stage,
-                    "dataset_id": dataset_id,
-                    "error": f"Neutralization {item_neut} is not available (cached)",
-                }
-            )
-            continue
+        with neut_lock:
+            neut_blocked = bool(item_neut and item_neut in unavailable_neuts)
+        if neut_blocked:
+            return {
+                "success": False,
+                "status": "SKIPPED",
+                "expression": expr,
+                "settings": sett,
+                "stage": stage,
+                "dataset_id": dataset_id,
+                "error": f"Neutralization {item_neut} is not available (cached)",
+            }
+
+        if idx > 0 and item_delay_seconds > 0:
+            time.sleep(min(item_delay_seconds * (idx % max_workers), 2.5))
+
         try:
             res = client.simulate_alpha(
                 expr,
@@ -619,70 +688,56 @@ def _simulate_single_fallback(
             out["dataset_id"] = dataset_id
             if it.get("probe") is not None:
                 out.setdefault("probe", it.get("probe"))
-            results.append(out)
             err_text = str(out.get("error") or "")
-            for m_neut in _UNAVAILABLE_NEUT_RE.finditer(err_text):
-                unavailable_neuts.add(m_neut.group(1).upper())
+            with neut_lock:
+                for m_neut in _UNAVAILABLE_NEUT_RE.finditer(err_text):
+                    unavailable_neuts.add(m_neut.group(1).upper())
             status_text = str(out.get("status") or "").upper()
             is_auth_blk = status_text == "AUTH_FAILED" or _is_auth_rate_or_captcha_error(err_text)
             is_rl_blk = (not is_auth_blk) and (status_text == "RATE_LIMITED" or _is_rate_limit_error(err_text))
             if is_auth_blk or is_rl_blk:
-                abort_status = "AUTH_FAILED" if is_auth_blk else "RATE_LIMITED"
-                for rem in items[idx + 1 :]:
-                    results.append(
-                        {
-                            "success": False,
-                            "status": abort_status,
-                            "expression": str(rem.get("expression") or ""),
-                            "settings": dict(rem.get("settings") or DEFAULT_SIM_SETTINGS),
-                            "stage": rem.get("stage", "STAGE1"),
-                            "dataset_id": rem.get("dataset_id", ""),
-                            "error": err_text or ("Authentication blocked" if is_auth_blk else "429 rate-limited during single-sim fallback"),
-                        }
-                    )
-                break
+                abort_info["status"] = "AUTH_FAILED" if is_auth_blk else "RATE_LIMITED"
+                abort_info["error"] = err_text or ("Authentication blocked" if is_auth_blk else "429 rate-limited during single-sim fallback")
+                abort_event.set()
+            return out
         except Exception as exc:
             err_text = str(exc)
-            for m_neut in _UNAVAILABLE_NEUT_RE.finditer(err_text):
-                unavailable_neuts.add(m_neut.group(1).upper())
+            with neut_lock:
+                for m_neut in _UNAVAILABLE_NEUT_RE.finditer(err_text):
+                    unavailable_neuts.add(m_neut.group(1).upper())
             is_auth = _is_auth_rate_or_captcha_error(err_text)
             is_rl = (not is_auth) and _is_rate_limit_error(err_text)
             fail_status = "AUTH_FAILED" if is_auth else ("RATE_LIMITED" if is_rl else "FAILED")
-            results.append(
-                {
-                    "success": False,
-                    "status": fail_status,
-                    "expression": expr,
-                    "settings": sett,
-                    "stage": stage,
-                    "dataset_id": dataset_id,
-                    "error": err_text,
-                }
-            )
             if is_auth or is_rl:
-                for rem in items[idx + 1 :]:
-                    results.append(
-                        {
-                            "success": False,
-                            "status": fail_status,
-                            "expression": str(rem.get("expression") or ""),
-                            "settings": dict(rem.get("settings") or DEFAULT_SIM_SETTINGS),
-                            "stage": rem.get("stage", "STAGE1"),
-                            "dataset_id": rem.get("dataset_id", ""),
-                            "error": err_text,
-                        }
-                    )
-                break
-        if idx + 1 < len(items) and item_delay_seconds > 0:
-            time.sleep(item_delay_seconds)
-    return results
+                abort_info["status"] = fail_status
+                abort_info["error"] = err_text
+                abort_event.set()
+            return {
+                "success": False,
+                "status": fail_status,
+                "expression": expr,
+                "settings": sett,
+                "stage": stage,
+                "dataset_id": dataset_id,
+                "error": err_text,
+            }
+
+    if max_workers == 1:
+        return [_run_one(idx, it) for idx, it in enumerate(items)]
+
+    results: list[dict[str, Any] | None] = [None] * n_items
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futs = [(idx, pool.submit(_run_one, idx, it)) for idx, it in enumerate(items)]
+        for idx, fut in futs:
+            results[idx] = fut.result()
+    return [r for r in results if r is not None]
 
 
 def simulate_multi_alpha(
     client: Any,
     items: Sequence[Mapping[str, Any]],
     *,
-    max_wait_seconds: float = 1800.0,
+    max_wait_seconds: float | None = None,
     poll_interval: float = 5.0,
     fallback_item_delay: float = 2.5,
 ) -> list[dict[str, Any]]:
@@ -691,6 +746,8 @@ def simulate_multi_alpha(
     Each element of `items` must have `expression` and optional `settings`, `stage`, `dataset_id`.
     Returns a list of result dicts aligned 1-to-1 with `items` (preserving input metadata).
     """
+    if max_wait_seconds is None:
+        max_wait_seconds = float(os.getenv("BRAIN_SIM_TIMEOUT_SEC", "300.0") or "300.0")
     if not items:
         return []
 
