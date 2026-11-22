@@ -32,6 +32,90 @@ from worldquant_brain.multi_sim_client import DEFAULT_SIM_SETTINGS, default_neut
 # Curated v8 multi-field economic hypothesis seeds grounded in official BRAIN Data Explorer & Research Papers 01-14.
 # Every expression uses strictly verified Bronze-unlocked operators (66-op whitelist) and live USA TOP3000 D1 fields.
 V8_ECONOMIC_HYPOTHESIS_SEEDS: tuple[dict[str, Any], ...] = (
+    # --- P33 EMPIRICAL TOP-20 WINNER FAMILIES (from 2,134-Alpha forensic sort + official BRAIN KB fixes) ---
+    # Family B (58JQGZ7n Sharpe=1.78, Fit=1.45, ONLY failed Sub-Univ 0.59<0.77) -> Official KB Liquidity-Weighted Dual Decay + TOP1000/TOP500 + outer rank()
+    {
+        "name": "p33_58JQGZ7n_subuniv_top1000",
+        "dataset_id": "socialmedia12",
+        "expression": "group_neutralize(rank(-1 * ts_std_dev(ts_backfill(scl12_buzz, 5), 8)), subindustry)",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP1000",
+        "decay": 2,
+    },
+    {
+        "name": "p33_58JQGZ7n_subuniv_liq_dual_decay",
+        "dataset_id": "socialmedia12",
+        "expression": "ts_decay_linear(group_neutralize(rank(-1 * ts_std_dev(ts_backfill(scl12_buzz, 5), 8)), subindustry), 5) * rank(volume * close) + ts_decay_linear(group_neutralize(rank(-1 * ts_std_dev(ts_backfill(scl12_buzz, 5), 8)), subindustry), 10) * (1 - rank(volume * close))",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP3000",
+        "decay": 0,
+    },
+    {
+        "name": "p33_58JQGZ7n_subuniv_top500_w10",
+        "dataset_id": "socialmedia12",
+        "expression": "group_neutralize(rank(-1 * ts_std_dev(ts_backfill(scl12_buzz, 5), 10)), industry)",
+        "neutralization": "INDUSTRY",
+        "universe": "TOP500",
+        "decay": 2,
+    },
+    # Family A (P05o9gqw Sharpe=1.67, Fit=1.02, TO=22.18%, Margin=7.52bps — ALREADY passes Fit & TO!)
+    {
+        "name": "p33_P05o9gqw_unsystematic90_reg60",
+        "dataset_id": "model51",
+        "expression": "rank(ts_regression(ts_backfill(unsystematic_risk_last_90_days, 20), returns, 60, lag=2, rettype=0))",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP3000",
+        "decay": 4,
+    },
+    {
+        "name": "p33_P05o9gqw_unsystematic360_top1000",
+        "dataset_id": "model51",
+        "expression": "rank(ts_regression(ts_backfill(unsystematic_risk_last_360_days, 20), returns, 60, lag=2, rettype=0))",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP1000",
+        "decay": 4,
+    },
+    {
+        "name": "p33_P05o9gqw_unsystematic60_reg60_ind",
+        "dataset_id": "model51",
+        "expression": "rank(ts_regression(ts_backfill(unsystematic_risk_last_60_days, 20), returns, 60, lag=2, rettype=0))",
+        "neutralization": "INDUSTRY",
+        "universe": "TOP3000",
+        "decay": 4,
+    },
+    # Family C (wpoRn25p Sharpe=1.85, Fit=0.99, TO=57.12% & rK7dNQRa Sharpe=1.94, TO=92.32%) -> Official KB trade_when(volume>adv20, ..., -1) + Decay 6/8
+    {
+        "name": "p33_wpoRn25p_trade_when_vol",
+        "dataset_id": "pv1",
+        "expression": "trade_when(volume > adv20, signed_power(ts_rank(close, 5) - 0.5, 2) * -1, -1)",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP3000",
+        "decay": 4,
+    },
+    {
+        "name": "p33_wpoRn25p_decay8_top1000",
+        "dataset_id": "pv1",
+        "expression": "signed_power(ts_rank(close, 5) - 0.5, 2) * -1",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP1000",
+        "decay": 8,
+    },
+    {
+        "name": "p33_rK7dNQRa_trade_when_intraday_rev",
+        "dataset_id": "pv1",
+        "expression": "trade_when(volume > adv20, -group_neutralize(ts_decay_linear((close - open) / ((high - low) + 0.001), 5), sector), -1)",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP1000",
+        "decay": 6,
+    },
+    {
+        "name": "p33_P05M7vpq_trade_when_vol_idio",
+        "dataset_id": "model51",
+        "expression": "trade_when(volume > adv20, rank(ts_backfill(unsystematic_risk_last_360_days, 20) - last_diff_value(ts_backfill(unsystematic_risk_last_360_days, 20), 1)), -1)",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP3000",
+        "decay": 6,
+    },
     # P32 LIVE-EVIDENCE PRIORITY SEEDS (un-frozen from 9ql2kwdx Sharpe=0.98@0.47%TO, P05M7vpq Sharpe=2.06@101%TO, blaKrN1p Sharpe=-0.91@11.9%TO)
     {
         "name": "p32_rescue_9ql2kwdx_pcr_slope_d0",
