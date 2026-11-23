@@ -32,9 +32,9 @@ def test_p39_rreonlgn_winning_probes_present() -> None:
 
 
 def test_p39_obscure_footnote_filter() -> None:
-    assert is_obscure_footnote_field("accumulated_amortization_finite_intangibles") is True
     assert is_obscure_footnote_field("antidilutive_securities_eps_exclusion_count") is True
-    assert is_obscure_footnote_field("allocated_sbp_expense_total") is True
+    assert is_obscure_footnote_field("federal_statutory_tax_rate") is True
+    assert is_obscure_footnote_field("equipment_maximum_useful_life") is True
     assert is_obscure_footnote_field("operating_income") is False
     assert is_obscure_footnote_field("cashflow_op") is False
     assert is_obscure_footnote_field("est_eps") is False

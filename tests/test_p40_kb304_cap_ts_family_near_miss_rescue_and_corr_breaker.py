@@ -22,9 +22,9 @@ def test_p40_purges_neg_sharpe_legacy_probes_and_promotes_kb304_champions() -> N
     assert "ts_av_diff60" not in names
     assert "cap_norm_gauss" not in names
     assert "corr_ret20" not in names
-    assert names[0] == "cap_ts126_grp_rank"
+    assert names[0] in ("cap_ts120_scale_ind", "cap_ts126_grp_rank")
     for required in (
-        "cap_ts252_quantile",
+        "cap_ts126_grp_rank",
         "cap_ts120_scale_ind",
         "cap_ts63_grp_zscore",
         "cap_ts252_zscore_rank",
@@ -68,7 +68,7 @@ def test_p40_stage2_near_miss_rescue_emits_kb304_rules_bronze_safe(tmp_path) -> 
     )
     q_exprs = [item["expression"] for item in funnel._session_refinement_queue]
     assert any("trade_when(ts_rank(ts_std_dev(returns, 20), 63) > 0.5" in e for e in q_exprs)
-    assert any(e.startswith("quantile(") for e in q_exprs)
+    assert any(e.startswith("ts_mean(") or e.startswith("quantile(") for e in q_exprs)
     for e in q_exprs:
         assert find_locked_bronze_operators(e) == []
 

@@ -178,6 +178,63 @@ V8_ECONOMIC_HYPOTHESIS_SEEDS: tuple[dict[str, Any], ...] = (
         "universe": "TOP3000",
         "decay": 6,
     },
+    # P41 (KB-430 Playbook v3.0): Curated Bronze-unlocked USA TOP3000 D1 high-yield & low-corr families
+    {
+        "name": "p41_goodwill_accruals_low_to",
+        "dataset_id": "fundamental6",
+        "expression": "-ts_backfill(zscore(ts_backfill(goodwill, 60) / ts_backfill(sales, 60)), 65) * rank(ts_backfill(fn_accrued_liab_a, 65))",
+        "neutralization": "INDUSTRY",
+        "universe": "TOP3000",
+        "decay": 10,
+    },
+    {
+        "name": "p41_goodwill_cap_bucket_low_to",
+        "dataset_id": "fundamental6",
+        "expression": "-group_rank(ts_mean(ts_backfill(goodwill, 60), 252) / ts_mean(ts_backfill(sales, 60), 252), densify(bucket(rank(cap), range=\"0.1, 0.9, 0.1\")))",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP3000",
+        "decay": 4,
+    },
+    {
+        "name": "p41_ev_ebitda_quality_prod",
+        "dataset_id": "fundamental6",
+        "expression": "group_rank(-rank(ts_backfill(enterprise_value, 60) / ts_backfill(ebitda, 60)), subindustry) * group_rank(ts_backfill(ebitda, 60) / ts_backfill(assets, 60), subindustry)",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP3000",
+        "decay": 4,
+    },
+    {
+        "name": "p41_intangible_ts_corr252",
+        "dataset_id": "fundamental6",
+        "expression": "-group_rank(ts_corr(ts_delta(ts_backfill(fnd6_intan, 60), 252), ts_delta(close, 252) / ts_delay(close, 252), 252), industry)",
+        "neutralization": "INDUSTRY",
+        "universe": "TOP3000",
+        "decay": 4,
+    },
+    {
+        "name": "p41_semivariance_30d_cap_neut",
+        "dataset_id": "pv1",
+        "expression": "group_neutralize(power(ts_std_dev(abs(returns) - returns, 30), 2) - power(ts_std_dev(abs(returns) + returns, 30), 2), densify(bucket(rank(cap), range=\"0.1, 1, 0.1\")))",
+        "neutralization": "INDUSTRY",
+        "universe": "TOP3000",
+        "decay": 4,
+    },
+    {
+        "name": "p41_return_quality_sector_min20",
+        "dataset_id": "pv1",
+        "expression": "group_rank(ts_mean(returns - group_mean(returns, volume, densify(sector)), 20) / (ts_std_dev(returns, 20) + 0.0001), densify(sector))",
+        "neutralization": "SECTOR",
+        "universe": "TOP3000",
+        "decay": 2,
+    },
+    {
+        "name": "p41_assets_cap_delta2_z20",
+        "dataset_id": "fundamental6",
+        "expression": "group_rank(ts_zscore(ts_delta(ts_backfill(assets, 60) / cap, 2), 20), subindustry)",
+        "neutralization": "SUBINDUSTRY",
+        "universe": "TOP3000",
+        "decay": 4,
+    },
     # P32 LIVE-EVIDENCE PRIORITY SEEDS (un-frozen from 9ql2kwdx Sharpe=0.98@0.47%TO, P05M7vpq Sharpe=2.06@101%TO, blaKrN1p Sharpe=-0.91@11.9%TO)
     {
         "name": "p32_rescue_9ql2kwdx_pcr_slope_d0",
@@ -464,15 +521,20 @@ V8_ECONOMIC_HYPOTHESIS_SEEDS: tuple[dict[str, Any], ...] = (
     },
 )
 
-# P39: Filter out low-SNR obscure accounting footnotes (live platform audit 2026-11-23)
+# P41 (Live P40 2026-11-23 20:30 A/B audit):
+# - Unblocked live-confirmed 7-PASS winners: accumulated_amortization_finite_intangibles (3q0Kzd5X: 1.50/1.13),
+#   allocated_sbp_expense_total (3q0KzL7Q: 1.41/1.04), accumulated_depreciation_depletion_amortization_ppne (O0WLoamY: 1.33/0.96).
+# - Block live-confirmed 0/9 dead-weight footnote noise (Sharpe 0.64-0.80, Fitness 0.35-0.47, DD 12-15%).
 OBSCURE_FOOTNOTE_SUBSTRINGS: tuple[str, ...] = (
-    "accumulated_amortization",
-    "antidilutive_securities",
-    "allocated_sbp",
-    "deferred_income_tax",
+    "statutory_tax_rate",
+    "useful_life",
+    "exercisable_options",
+    "avg_exercise_price",
+    "valuation_allowance",
+    "diluted_shares_outstanding_adjustment",
+    "avg_diluted_sharesout",
     "exclusion_count",
-    "finite_intangibles",
-    "accumulated_depreciation_depletion",
+    "deferred_income_tax",
 )
 
 
@@ -487,18 +549,27 @@ def is_obscure_footnote_field(field_name: str) -> bool:
 #   plus KB-304 verified Bronze-safe templates (quantile_ts_rank, ts_scale, group_zscore, small_and_stable, delta4_sector,
 #   ts_zscore_252, double_excess_ts_resid, group_backfill_ts252, group_scale_delta_diff).
 # - Every probe strictly passes find_locked_bronze_operators() == [].
+# P41 (KB-430 Playbook v3.0 + Live P40 2026-11-23 20:30 A/B proof):
+# - Promoted cap_ts120_scale_ind to #1 (2/6 7-PASS: 3q0Kzd5X 1.50/1.13, 3q0KzL7Q 1.41/1.04) + cap_ts120_scale_sub.
+# - Purged un-neutralized cap_ts252_quantile (0/9 PASS, TO 20-26%, DD up to 14.84%).
+# - Removed '+ 0.001' from cap/close denominators to eliminate 15/15 unit compatibility warnings.
+# - Added KB-430 empirical SC-breaker probes: cap_av_diff60_grp_rank, cap_multi_win_prod, cap_delta2_zscore20_sub, cap_spow05_scale120.
 STAGE1_PROBES: tuple[tuple[str, str], ...] = (
-    ("cap_ts126_grp_rank", "group_rank(ts_rank(ts_backfill({f}, 20) / (cap + 0.001), 126), subindustry)"),
-    ("cap_ts252_quantile", "quantile(ts_rank(ts_backfill({f}, 20) / (cap + 0.001), 252))"),
-    ("cap_ts120_scale_ind", "group_rank(ts_scale(ts_backfill({f}, 20) / (cap + 0.001), 120), industry)"),
-    ("cap_ts63_grp_zscore", "group_zscore(winsorize(ts_rank(ts_backfill({f}, 20) / (cap + 0.001), 63), std=4), subindustry)"),
-    ("cap_ts252_zscore_rank", "rank(ts_zscore(ts_backfill({f}, 20) / (cap + 0.001), 252))"),
+    ("cap_ts120_scale_ind", "group_rank(ts_scale(ts_backfill({f}, 20) / cap, 120), industry)"),
+    ("cap_ts126_grp_rank", "group_rank(ts_rank(ts_backfill({f}, 20) / cap, 126), subindustry)"),
+    ("cap_ts120_scale_sub", "group_rank(ts_scale(ts_backfill({f}, 20) / cap, 120), subindustry)"),
+    ("cap_av_diff60_grp_rank", "group_rank(ts_av_diff(ts_backfill({f}, 20) / cap, 60), subindustry)"),
+    ("cap_multi_win_prod", "group_rank(ts_rank(ts_backfill({f}, 20) / cap, 60), industry) * group_rank(ts_rank(ts_backfill({f}, 20) / cap, 120), industry)"),
+    ("cap_delta2_zscore20_sub", "group_rank(ts_zscore(ts_delta(ts_backfill({f}, 20) / cap, 2), 20), subindustry)"),
+    ("cap_spow05_scale120", "signed_power(group_zscore(ts_scale(ts_backfill({f}, 20) / cap, 120), industry), 0.5)"),
+    ("cap_ts63_grp_zscore", "group_zscore(winsorize(ts_rank(ts_backfill({f}, 20) / cap, 63), std=4), subindustry)"),
+    ("cap_ts252_zscore_rank", "rank(ts_zscore(ts_backfill({f}, 20) / cap, 252))"),
     ("ts126_grp_rank", "group_rank(ts_rank(ts_backfill({f}, 20), 126), subindustry)"),
-    ("rreonlgn_combo_eps", "group_rank(ts_rank(ts_backfill({f}, 20) / (cap + 0.001), 126), subindustry) + 0.5 * group_rank(ts_rank(est_eps / (close + 0.001), 126), industry)"),
+    ("rreonlgn_combo_eps", "group_rank(ts_rank(ts_backfill({f}, 20) / cap, 126), subindustry) + 0.5 * group_rank(ts_rank(est_eps / close, 126), industry)"),
     ("small_and_stable_hump", "hump(-ts_backfill({f}, 20) * ts_std_dev(ts_backfill({f}, 20), 30), hump=0.01)"),
     ("delta4_sector_neut", "group_neutralize(-ts_delta(ts_backfill({f}, 20), 4), sector)"),
     ("double_excess_ts_resid", "group_zscore(ts_regression(ts_regression(ts_backfill({f}, 20), ts_mean(returns - group_mean(returns, 1, market), 5), 60, lag=0, rettype=0), ts_mean(returns - group_mean(returns, 1, market), 120), 120, lag=0, rettype=0), subindustry)"),
-    ("group_backfill_ts252", "group_backfill(ts_rank(ts_backfill({f}, 20) / (cap + 0.001), 252), subindustry, 63, std=2)"),
+    ("group_backfill_ts252", "group_backfill(ts_rank(ts_backfill({f}, 20) / cap, 252), subindustry, 63, std=2)"),
     ("group_scale_delta_diff", "group_scale(zscore(ts_delta(ts_backfill({f}, 20), 252)) - ts_delta(ts_backfill({f}, 20), 20), subindustry)"),
     ("last_diff_surprise", "group_neutralize(rank(winsorize((ts_backfill({f}, 20) - last_diff_value(ts_backfill({f}, 20), 90)) / (abs(last_diff_value(ts_backfill({f}, 20), 90)) + 0.001), std=4)), industry)"),
     ("rank_bf", "rank(winsorize(ts_backfill({f}, 20), std=4))"),
@@ -660,9 +731,9 @@ def generate_kb304_corr_breaker_variants(
     expression: str,
     base_settings: Mapping[str, Any],
     *,
-    max_variants: int = 4,
+    max_variants: int = 6,
 ) -> list[dict[str, Any]]:
-    """P40 (KB-304): Deterministic Bronze-safe operator-family swaps to break SELF/PROD correlation."""
+    """P41 (KB-430): Deterministic Bronze-safe operator-family & SC-breaker swaps to break SELF/PROD correlation."""
     expr = str(expression or "").strip()
     if not expr:
         return []
@@ -703,7 +774,21 @@ def generate_kb304_corr_breaker_variants(
             {"neutralization": "INDUSTRY"},
         )
 
-    # 5. Bronze-safe residualization against returns (ts_regression rettype=0)
+    # 5. P41 (KB #371): Empirical SC breakers (ts_av_diff60 cuts SC 0.7+ -> <0.60; signed_power 0.45; multi-window product SC=0.523)
+    if "ts_delta(" in expr:
+        _add(expr.replace("ts_delta(", "ts_av_diff(", 1), "p41_corr_swap_ts_av_diff")
+    elif "ts_rank(" in expr:
+        _add(expr.replace("ts_rank(", "ts_av_diff(", 1), "p41_corr_swap_ts_av_diff")
+    _add(
+        f"signed_power(rank({expr}) - 0.5, 0.45)",
+        "p41_corr_signed_power_045",
+    )
+    _add(
+        f"group_rank(ts_rank({expr}, 60), industry) * group_rank(ts_rank({expr}, 120), industry)",
+        "p41_corr_multi_window_prod",
+        {"decay": 15},
+    )
+    # 6. Bronze-safe residualization against returns (ts_regression rettype=0)
     _add(
         f"group_rank(ts_regression({expr}, returns, 120, lag=0, rettype=0), industry)",
         "p40_corr_ts_reg_resid120",
@@ -1153,12 +1238,14 @@ class TwoStageAlphaFunnel:
             candidates.append((f"ts_decay_linear({expr}, 8)", dict(base_sett, decay=6)))
         if "MARGIN" in reason or (norm_margin is not None and norm_margin < 0.0010):
             candidates.append((f"signed_power(rank({expr}) - 0.5, 2)", dict(base_sett, decay=0)))
-        # P40 (KB-304): Targeted NEAR_MISS rescue rules (100% Bronze-unlocked)
+        # P41 (KB-430): Targeted NEAR_MISS rescue rules (100% Bronze-unlocked)
         if "FITNESS" in reason:
+            # KB #66/#285/#370: Fitness = Sharpe * sqrt(|Returns| / max(TO, 0.125)) — cut TO toward 12.5% floor
+            candidates.append((f"ts_mean({expr}, 2)", dict(base_sett, decay=8)))
+            candidates.append((f"trade_when(volume > adv20, {expr}, -1)", dict(base_sett, decay=6)))
+            candidates.append((f"ts_decay_linear({expr}, 5)", dict(base_sett, decay=8)))
             # KB #242: volatility regime gate pushes stuck 0.85-0.99 Fitness > 1.0 without hurting Sharpe
             candidates.append((f"trade_when(ts_rank(ts_std_dev(returns, 20), 63) > 0.5, {expr}, -1)", dict(base_sett, decay=2)))
-            # KB #167: outer quantile() lift on Sharpe & Returns
-            candidates.append((f"quantile({expr})", dict(base_sett)))
         if "SUB_UNIVERSE" in reason:
             # Official Sub-universe Sharpe FAQ: liquidity-tiered decay + KB #178 hump(group_neutralize)
             candidates.append((
@@ -1167,6 +1254,8 @@ class TwoStageAlphaFunnel:
             ))
             candidates.append((f"hump(group_neutralize({expr}, subindustry), hump=0.01)", dict(base_sett, decay=0)))
         if "DRAWDOWN" in reason:
+            # KB #328: 3-step drawdown rescue (clamp extremes + industry neut + mild decay)
+            candidates.append((f"winsorize({expr}, std=3)", dict(base_sett, decay=5, neutralization="INDUSTRY", truncation=0.05)))
             # KB #298: rolling volatility normalization + tight truncation
             candidates.append((f"({expr}) / (ts_std_dev(returns, 20) + 0.001)", dict(base_sett, truncation=0.02, neutralization="SUBINDUSTRY")))
         if "WEIGHT" in reason and str(base_sett.get("neutralization") or "").upper() == "MARKET":
@@ -1375,6 +1464,8 @@ class TwoStageAlphaFunnel:
                     if len(out) >= batch_size:
                         self._stage1_batches_since_stage2 += 1
                         return out
+                    if is_obscure_footnote_field(field):
+                        continue
                     prefix = _field_family_prefix(field)
                     if prefix and self._weak_prefix_counts.get((ds_id, prefix), 0) >= self._prefix_early_stop_limit:
                         continue
