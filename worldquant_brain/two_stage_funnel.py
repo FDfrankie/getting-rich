@@ -481,12 +481,25 @@ def is_obscure_footnote_field(field_name: str) -> bool:
     return any(tok in low for tok in OBSCURE_FOOTNOTE_SUBSTRINGS)
 
 
-# P39: Removed corr_ret20 (caused 6 consecutive negative Sharpes on quarterly fields) and
-# fixed all no-op winsorize(rank(...)) -> rank(winsorize(...)); promoted RReoNlgn (2.82) TS->CS patterns.
+# P40 (KB-304 + P39 live audit):
+# - Purged live-confirmed negative-Sharpe / ultra-low-TO legacy probes: last_revision, ts_av_diff60, cap_norm_gauss.
+# - Promoted cap_ts126_grp_rank champion family (live P39 Pages 3-6: 16/16 positive, Sharpe 1.40-2.10, Fitness 0.91-1.57)
+#   plus KB-304 verified Bronze-safe templates (quantile_ts_rank, ts_scale, group_zscore, small_and_stable, delta4_sector,
+#   ts_zscore_252, double_excess_ts_resid, group_backfill_ts252, group_scale_delta_diff).
+# - Every probe strictly passes find_locked_bronze_operators() == [].
 STAGE1_PROBES: tuple[tuple[str, str], ...] = (
-    ("ts126_grp_rank", "group_rank(ts_rank(ts_backfill({f}, 20), 126), subindustry)"),
     ("cap_ts126_grp_rank", "group_rank(ts_rank(ts_backfill({f}, 20) / (cap + 0.001), 126), subindustry)"),
+    ("cap_ts252_quantile", "quantile(ts_rank(ts_backfill({f}, 20) / (cap + 0.001), 252))"),
+    ("cap_ts120_scale_ind", "group_rank(ts_scale(ts_backfill({f}, 20) / (cap + 0.001), 120), industry)"),
+    ("cap_ts63_grp_zscore", "group_zscore(winsorize(ts_rank(ts_backfill({f}, 20) / (cap + 0.001), 63), std=4), subindustry)"),
+    ("cap_ts252_zscore_rank", "rank(ts_zscore(ts_backfill({f}, 20) / (cap + 0.001), 252))"),
+    ("ts126_grp_rank", "group_rank(ts_rank(ts_backfill({f}, 20), 126), subindustry)"),
     ("rreonlgn_combo_eps", "group_rank(ts_rank(ts_backfill({f}, 20) / (cap + 0.001), 126), subindustry) + 0.5 * group_rank(ts_rank(est_eps / (close + 0.001), 126), industry)"),
+    ("small_and_stable_hump", "hump(-ts_backfill({f}, 20) * ts_std_dev(ts_backfill({f}, 20), 30), hump=0.01)"),
+    ("delta4_sector_neut", "group_neutralize(-ts_delta(ts_backfill({f}, 20), 4), sector)"),
+    ("double_excess_ts_resid", "group_zscore(ts_regression(ts_regression(ts_backfill({f}, 20), ts_mean(returns - group_mean(returns, 1, market), 5), 60, lag=0, rettype=0), ts_mean(returns - group_mean(returns, 1, market), 120), 120, lag=0, rettype=0), subindustry)"),
+    ("group_backfill_ts252", "group_backfill(ts_rank(ts_backfill({f}, 20) / (cap + 0.001), 252), subindustry, 63, std=2)"),
+    ("group_scale_delta_diff", "group_scale(zscore(ts_delta(ts_backfill({f}, 20), 252)) - ts_delta(ts_backfill({f}, 20), 20), subindustry)"),
     ("last_diff_surprise", "group_neutralize(rank(winsorize((ts_backfill({f}, 20) - last_diff_value(ts_backfill({f}, 20), 90)) / (abs(last_diff_value(ts_backfill({f}, 20), 90)) + 0.001), std=4)), industry)"),
     ("rank_bf", "rank(winsorize(ts_backfill({f}, 20), std=4))"),
     ("zscore60", "winsorize(ts_zscore(ts_backfill({f}, 20), 60), std=4)"),
@@ -494,15 +507,10 @@ STAGE1_PROBES: tuple[tuple[str, str], ...] = (
     ("grp_delta20", "group_rank(ts_delta(ts_backfill({f}, 20), 20), subindustry)"),
     ("tsrank120", "group_rank(ts_rank(ts_backfill({f}, 20), 120), industry)"),
     ("decay5_bf", "ts_decay_linear(rank(winsorize(ts_backfill({f}, 20), std=4)), 5)"),
-    ("trade_vol", "trade_when(volume > adv20, rank(winsorize(ts_backfill({f}, 20), std=4)), -1)"),
     ("spow_rank", "signed_power(rank(ts_backfill({f}, 20)) - 0.5, 2)"),
-    ("cap_norm_gauss", "quantile(divide(ts_backfill({f}, 20), cap), driver=\"gaussian\")"),
     ("cap_bucket_neut", "group_neutralize(rank(ts_backfill({f}, 20)), densify(bucket(rank(cap), range=\"0, 1, 0.1\")))"),
-    ("last_revision", "ts_decay_linear(rank(winsorize(ts_backfill({f}, 20) - last_diff_value(ts_backfill({f}, 20), 252), std=4)), 5)"),
-    ("ts_av_diff60", "quantile(ts_av_diff(ts_backfill({f}, 20), 60), driver=\"gaussian\")"),
     ("reg_resid60", "rank(ts_regression(ts_backfill({f}, 20), returns, 60, lag=0, rettype=0))"),
     ("cap_resid60", "rank(ts_regression(rank(ts_backfill({f}, 20)), log(cap + 1.0), 60, lag=0, rettype=0))"),
-    ("trade_when_vol", "trade_when(volume > ts_mean(volume, 20), group_neutralize(rank(winsorize(ts_backfill({f}, 20), std=4)), industry), -1)"),
     ("grp_scale_sub", "group_scale(ts_zscore(ts_backfill({f}, 20), 60), subindustry)"),
     ("hump_decay10", "hump(group_neutralize(ts_decay_linear(rank(ts_backfill({f}, 20)), 10), industry), hump=0.0008)"),
     ("ev_cf_rank63", "group_rank(-ts_zscore(ts_backfill({f}, 20), 63), industry)"),
@@ -646,6 +654,61 @@ def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
+
+
+def generate_kb304_corr_breaker_variants(
+    expression: str,
+    base_settings: Mapping[str, Any],
+    *,
+    max_variants: int = 4,
+) -> list[dict[str, Any]]:
+    """P40 (KB-304): Deterministic Bronze-safe operator-family swaps to break SELF/PROD correlation."""
+    expr = str(expression or "").strip()
+    if not expr:
+        return []
+    sett = dict(base_settings or {})
+    out: list[dict[str, Any]] = []
+    seen: set[str] = {expr}
+
+    def _add(cand_expr: str, reason: str, overrides: Mapping[str, Any] | None = None) -> None:
+        c = cand_expr.strip()
+        if not c or c in seen or len(out) >= max_variants:
+            return
+        seen.add(c)
+        c_sett = dict(sett)
+        if overrides:
+            c_sett.update(dict(overrides))
+        out.append({"expression": c, "settings": c_sett, "reason": reason})
+
+    # 1. Time-series operator family swap: ts_rank -> ts_scale / ts_zscore / ts_quantile
+    if "ts_rank(" in expr:
+        _add(expr.replace("ts_rank(", "ts_scale(", 1), "p40_corr_swap_ts_scale")
+        _add(expr.replace("ts_rank(", "ts_zscore(", 1), "p40_corr_swap_ts_zscore")
+        _add(expr.replace("ts_rank(", "ts_quantile(", 1), "p40_corr_swap_ts_quantile")
+
+    # 2. Cross-sectional operator family swap: rank -> quantile / zscore
+    if re.search(r"(?<![A-Za-z0-9_])rank\(", expr):
+        _add(re.sub(r"(?<![A-Za-z0-9_])rank\(", "quantile(", expr, count=1), "p40_corr_swap_quantile")
+        _add(re.sub(r"(?<![A-Za-z0-9_])rank\(", "zscore(", expr, count=1), "p40_corr_swap_zscore")
+
+    # 3. Vector aggregation swap (Bronze-safe): vec_avg -> vec_sum
+    if "vec_avg(" in expr:
+        _add(expr.replace("vec_avg(", "vec_sum(", 1), "p40_corr_swap_vec_sum")
+
+    # 4. Grouping swap: subindustry -> cap decile bucket
+    if "subindustry" in expr:
+        _add(
+            expr.replace("subindustry", "densify(bucket(rank(cap), range=\"0, 1, 0.1\"))", 1),
+            "p40_corr_swap_cap_bucket",
+            {"neutralization": "INDUSTRY"},
+        )
+
+    # 5. Bronze-safe residualization against returns (ts_regression rettype=0)
+    _add(
+        f"group_rank(ts_regression({expr}, returns, 120, lag=0, rettype=0), industry)",
+        "p40_corr_ts_reg_resid120",
+    )
+    return out[:max_variants]
 
 
 def _negate_expression(expr: str) -> str:
@@ -1090,6 +1153,26 @@ class TwoStageAlphaFunnel:
             candidates.append((f"ts_decay_linear({expr}, 8)", dict(base_sett, decay=6)))
         if "MARGIN" in reason or (norm_margin is not None and norm_margin < 0.0010):
             candidates.append((f"signed_power(rank({expr}) - 0.5, 2)", dict(base_sett, decay=0)))
+        # P40 (KB-304): Targeted NEAR_MISS rescue rules (100% Bronze-unlocked)
+        if "FITNESS" in reason:
+            # KB #242: volatility regime gate pushes stuck 0.85-0.99 Fitness > 1.0 without hurting Sharpe
+            candidates.append((f"trade_when(ts_rank(ts_std_dev(returns, 20), 63) > 0.5, {expr}, -1)", dict(base_sett, decay=2)))
+            # KB #167: outer quantile() lift on Sharpe & Returns
+            candidates.append((f"quantile({expr})", dict(base_sett)))
+        if "SUB_UNIVERSE" in reason:
+            # Official Sub-universe Sharpe FAQ: liquidity-tiered decay + KB #178 hump(group_neutralize)
+            candidates.append((
+                f"ts_decay_linear({expr}, 5) * rank(volume * close) + ts_decay_linear({expr}, 10) * (1 - rank(volume * close))",
+                dict(base_sett, decay=0),
+            ))
+            candidates.append((f"hump(group_neutralize({expr}, subindustry), hump=0.01)", dict(base_sett, decay=0)))
+        if "DRAWDOWN" in reason:
+            # KB #298: rolling volatility normalization + tight truncation
+            candidates.append((f"({expr}) / (ts_std_dev(returns, 20) + 0.001)", dict(base_sett, truncation=0.02, neutralization="SUBINDUSTRY")))
+        if "WEIGHT" in reason and str(base_sett.get("neutralization") or "").upper() == "MARKET":
+            # KB #297: switch Market -> Sector/Industry FIRST to eliminate forced offsetting concentration
+            candidates.append((f"zscore({expr})", dict(base_sett, neutralization="INDUSTRY", truncation=0.04)))
+            candidates.append((f"zscore({expr})", dict(base_sett, neutralization="SECTOR", truncation=0.04)))
         if "WEIGHT" in reason or "SUB_UNIVERSE" in reason:
             # Official BRAIN Weight/Coverage FAQ: rank/group_rank balances long-short counts + lower truncation
             candidates.append((f"group_rank({expr}, subindustry)", dict(base_sett, truncation=0.05)))
@@ -1471,12 +1554,17 @@ class TwoStageAlphaFunnel:
         base_sett = dict(self.base_settings)
         if settings:
             base_sett.update(dict(settings))
-        variants = generate_decorrelation_variants(
+        kb304_variants = generate_kb304_corr_breaker_variants(
+            expression,
+            base_sett,
+            max_variants=max(2, max_variants),
+        )
+        variants = list(kb304_variants) + list(generate_decorrelation_variants(
             expression,
             base_sett,
             max_variants=max_variants,
             unavailable_neutralizations=self._unavailable_neutralizations,
-        )
+        ))
         added = 0
         with self._connect() as conn:
             for v in variants:

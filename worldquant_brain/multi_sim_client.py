@@ -976,3 +976,38 @@ def simulate_multi_alpha(
         )
 
     return results
+
+
+# P40 (KB #277/#279/#280): Sequential correlation polling & Consultant Quick Mode helpers
+def correlation_poll_interval_seconds() -> float:
+    """Return safe sequential polling spacing for /correlations/self and /prod (KB #277: 30-40s)."""
+    raw = float(os.getenv("BRAIN_CORR_POLL_INTERVAL_SECONDS", "30.0") or "30.0")
+    return max(20.0, raw)
+
+
+def is_empty_correlation_computing(status_code: int, body: Any) -> bool:
+    """Treat HTTP 200 with empty body on /correlations/* as still-computing rather than failure (KB #277)."""
+    if int(status_code) != 200:
+        return False
+    if body is None:
+        return True
+    if isinstance(body, (bytes, bytearray)):
+        return len(body.strip()) == 0
+    if isinstance(body, str):
+        return len(body.strip()) == 0
+    if isinstance(body, Mapping):
+        return len(body) == 0
+    return False
+
+
+def apply_consultant_quick_mode(
+    settings: Mapping[str, Any],
+    *,
+    quick_mode: bool = False,
+) -> dict[str, Any]:
+    """Enable simulationMode='QUICK' & visualization=False ONLY for Consultants in Stage-1 screening (KB #280)."""
+    out = dict(settings or {})
+    if quick_mode and is_consultant_mode():
+        out["simulationMode"] = "QUICK"
+        out["visualization"] = False
+    return out
