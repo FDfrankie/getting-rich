@@ -27,7 +27,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from worldquant_brain.multi_sim_client import DEFAULT_SIM_SETTINGS, default_neutralization_for_dataset, default_sim_profile_for_dataset
+from worldquant_brain.fastexpr_linter import lint_fastexpr
+from worldquant_brain.multi_sim_client import DEFAULT_SIM_SETTINGS, default_neutralization_for_dataset, default_sim_profile_for_dataset, min_decay_for_expression
 
 # Curated v8 multi-field economic hypothesis seeds grounded in official BRAIN Data Explorer & Research Papers 01-14.
 # Every expression uses strictly verified Bronze-unlocked operators (66-op whitelist) and live USA TOP3000 D1 fields.
@@ -519,6 +520,63 @@ V8_ECONOMIC_HYPOTHESIS_SEEDS: tuple[dict[str, Any], ...] = (
         "neutralization": "INDUSTRY",
         "decay": 0,
     },
+    # --- P42 (KB v78 Ch.70-71 Wave 1-3 Orthogonal Bronze-Safe Seeds + Live Page 1-2 Rescue) ---
+    {
+        "name": "p42_wave1_pv1_signed_return_asymmetry",
+        "dataset_id": "pv1",
+        "expression": "group_neutralize(-rank(ts_decay_linear(ts_mean(max(returns, 0) - max(-returns, 0), 20) / (ts_std_dev(returns, 20) + 0.001), 5)), subindustry)",
+        "neutralization": "SUBINDUSTRY",
+        "decay": 6,
+    },
+    {
+        "name": "p42_wave2_fnd6_short_vs_long_leverage",
+        "dataset_id": "fundamental6",
+        "expression": "group_rank(-ts_rank(ts_backfill(debt_st, 60) / (ts_backfill(debt_lt, 60) + cap), 126), subindustry)",
+        "neutralization": "SUBINDUSTRY",
+        "decay": 0,
+    },
+    {
+        "name": "p42_wave2_fnd6_intangible_adj_bm",
+        "dataset_id": "fundamental6",
+        "expression": "group_rank(ts_scale(ts_backfill(equity, 60) / cap, 120), industry) + 0.5 * group_rank(ts_scale(ts_backfill(operating_income, 60) / cap, 120), subindustry)",
+        "neutralization": "INDUSTRY",
+        "decay": 2,
+    },
+    {
+        "name": "p42_wave2_fnd6_freshness_weighted_cashflow",
+        "dataset_id": "fundamental6",
+        "expression": "group_rank(ts_rank(ts_backfill(cashflow_op, 60) / cap, 126), subindustry) * (1 / (1 + days_from_last_change(cashflow_op) / 21))",
+        "neutralization": "SUBINDUSTRY",
+        "decay": 2,
+    },
+    {
+        "name": "p42_wave3_opt8_ivs_plus_divs_30d",
+        "dataset_id": "option8",
+        "expression": "group_neutralize(ts_decay_linear(0.5 * rank(ts_backfill(implied_volatility_call_30, 5) - ts_backfill(implied_volatility_put_30, 5)) + 0.5 * rank(ts_delta(ts_backfill(implied_volatility_call_30, 5) - ts_backfill(implied_volatility_put_30, 5), 5)), 5), industry)",
+        "neutralization": "INDUSTRY",
+        "decay": 6,
+    },
+    {
+        "name": "p42_wave3_opt9_log_vrp_horizon_aligned",
+        "dataset_id": "option9",
+        "expression": "group_neutralize(ts_decay_linear(rank(log((ts_backfill(implied_volatility_call_30, 5) + 0.001) / (ts_backfill(historical_volatility_20, 5) + 0.001))), 5), industry)",
+        "neutralization": "INDUSTRY",
+        "decay": 6,
+    },
+    {
+        "name": "p42_wave3_opt8_call_breakeven20_stabilized",
+        "dataset_id": "option8",
+        "expression": "ts_decay_linear(group_rank(ts_scale(ts_backfill(call_breakeven_20, 5) / cap, 120), industry), 5)",
+        "neutralization": "INDUSTRY",
+        "decay": 6,
+    },
+    {
+        "name": "p42_wave3_opt8_parkinson_term_stabilized",
+        "dataset_id": "option8",
+        "expression": "ts_decay_linear(group_scale(zscore(ts_delta(ts_backfill(parkinson_volatility_10, 5), 252)) - ts_delta(ts_backfill(parkinson_volatility_10, 5), 20), subindustry), 8)",
+        "neutralization": "INDUSTRY",
+        "decay": 8,
+    },
 )
 
 # P41 (Live P40 2026-11-23 20:30 A/B audit):
@@ -560,14 +618,14 @@ STAGE1_PROBES: tuple[tuple[str, str], ...] = (
     ("cap_ts120_scale_sub", "group_rank(ts_scale(ts_backfill({f}, 20) / cap, 120), subindustry)"),
     ("cap_av_diff60_grp_rank", "group_rank(ts_av_diff(ts_backfill({f}, 20) / cap, 60), subindustry)"),
     ("cap_multi_win_prod", "group_rank(ts_rank(ts_backfill({f}, 20) / cap, 60), industry) * group_rank(ts_rank(ts_backfill({f}, 20) / cap, 120), industry)"),
-    ("cap_delta2_zscore20_sub", "group_rank(ts_zscore(ts_delta(ts_backfill({f}, 20) / cap, 2), 20), subindustry)"),
+    ("cap_delta2_zscore20_sub", "ts_decay_linear(group_rank(ts_zscore(ts_delta(ts_backfill({f}, 20) / cap, 2), 20), subindustry), 5)"),
     ("cap_spow05_scale120", "signed_power(group_zscore(ts_scale(ts_backfill({f}, 20) / cap, 120), industry), 0.5)"),
     ("cap_ts63_grp_zscore", "group_zscore(winsorize(ts_rank(ts_backfill({f}, 20) / cap, 63), std=4), subindustry)"),
     ("cap_ts252_zscore_rank", "rank(ts_zscore(ts_backfill({f}, 20) / cap, 252))"),
     ("ts126_grp_rank", "group_rank(ts_rank(ts_backfill({f}, 20), 126), subindustry)"),
     ("rreonlgn_combo_eps", "group_rank(ts_rank(ts_backfill({f}, 20) / cap, 126), subindustry) + 0.5 * group_rank(ts_rank(est_eps / close, 126), industry)"),
     ("small_and_stable_hump", "hump(-ts_backfill({f}, 20) * ts_std_dev(ts_backfill({f}, 20), 30), hump=0.01)"),
-    ("delta4_sector_neut", "group_neutralize(-ts_delta(ts_backfill({f}, 20), 4), sector)"),
+    ("delta4_sector_neut", "ts_decay_linear(group_neutralize(-ts_delta(ts_backfill({f}, 20), 4), sector), 5)"),
     ("double_excess_ts_resid", "group_zscore(ts_regression(ts_regression(ts_backfill({f}, 20), ts_mean(returns - group_mean(returns, 1, market), 5), 60, lag=0, rettype=0), ts_mean(returns - group_mean(returns, 1, market), 120), 120, lag=0, rettype=0), subindustry)"),
     ("group_backfill_ts252", "group_backfill(ts_rank(ts_backfill({f}, 20) / cap, 252), subindustry, 63, std=2)"),
     ("group_scale_delta_diff", "group_scale(zscore(ts_delta(ts_backfill({f}, 20), 252)) - ts_delta(ts_backfill({f}, 20), 20), subindustry)"),
@@ -894,7 +952,10 @@ def classify_verdict(
     if any(bad in chk for chk in failed_checks for bad in NON_RESCUABLE_CHECKS):
         return "REJECTED", ";".join(reasons)
     _early_eff_fit = -fit if sh < 0 else fit
-    _early_high_sh_to = (abs(sh) >= 1.50) and (0.70 < to < 1.50) and (_early_eff_fit >= 0.45)
+    _early_high_sh_to = (
+        ((abs(sh) >= 1.50) and (0.70 < to <= 1.60) and (_early_eff_fit >= 0.20))
+        or ((abs(sh) >= 1.35) and (0.50 < to <= 1.60) and (_early_eff_fit >= 0.25))
+    )
     _early_low_to_frozen = (abs(sh) >= 0.90) and (0.0 < to < 0.015) and (_early_eff_fit >= 0.35)
     if not (_early_high_sh_to or _early_low_to_frozen) and len(failed_checks) > max_fc:
         return "REJECTED", ";".join(reasons)
@@ -931,7 +992,10 @@ def classify_verdict(
     )
     # P26: High-Sharpe / High-Turnover rescue fast-track (e.g., P05M7vpq Sharpe=2.06, TO=100.95%, Fit=0.58):
     # Cutting 100% turnover -> 25% via decay=10/hump/trade_when lifts Fitness by ~2x.
-    high_sharpe_high_to_rescue = (abs(sh) >= 1.50) and (0.70 < to < 1.50) and (eff_fit >= 0.45)
+    high_sharpe_high_to_rescue = (
+        ((abs(sh) >= 1.50) and (0.70 < to <= 1.60) and (eff_fit >= 0.20))
+        or ((abs(sh) >= 1.35) and (0.50 < to <= 1.60) and (eff_fit >= 0.25))
+    )
     if not (high_sharpe_high_to_rescue or _early_low_to_frozen) and not (nm_min_to <= to <= nm_max_to):
         return "REJECTED", ";".join(reasons)
     base_nm_margin = float(
@@ -1446,6 +1510,10 @@ class TwoStageAlphaFunnel:
                     continue
                 if self._is_repelled_by_reference(s_expr, submitted_skels, failure_toks):
                     self._mark_tried(conn, sh_e, s_expr, s_sett, "REPELLED", s_ds)
+                    continue
+                s_sett["decay"] = max(int(s_sett.get("decay", 0) or 0), min_decay_for_expression(s_expr, s_ds))
+                if not lint_fastexpr(s_expr, s_sett).get("ok", False):
+                    self._mark_tried(conn, sh_e, s_expr, s_sett, "LINT_BLOCKED", s_ds)
                     continue
                 self._mark_tried(conn, sh_e, s_expr, s_sett, "STAGE1_ECON", s_ds)
                 out.append(

@@ -279,7 +279,7 @@ DATASET_SIM_PROFILES: dict[str, dict[str, Any]] = {
     "fundamental": {"neutralization": "SUBINDUSTRY", "decay": 0, "nanHandling": "ON", "truncation": 0.08},
     "analyst": {"neutralization": "SUBINDUSTRY", "decay": 2, "nanHandling": "ON", "truncation": 0.08},
     "earnings": {"neutralization": "INDUSTRY", "decay": 2, "nanHandling": "ON", "truncation": 0.08},
-    "option": {"neutralization": "INDUSTRY", "decay": 2, "nanHandling": "ON", "truncation": 0.08},
+    "option": {"neutralization": "INDUSTRY", "decay": 6, "nanHandling": "ON", "truncation": 0.08},  # P42: raised 2->6 to stop 96-142% TO explosion
     "model": {"neutralization": "INDUSTRY", "decay": 4, "nanHandling": "ON", "truncation": 0.08},
     "news": {"neutralization": "SUBINDUSTRY", "decay": 4, "nanHandling": "ON", "truncation": 0.08},
     "social": {"neutralization": "INDUSTRY", "decay": 4, "nanHandling": "ON", "truncation": 0.08},
@@ -302,6 +302,19 @@ def default_sim_profile_for_dataset(dataset_id: str = "") -> dict[str, Any]:
             return dict(prof)
     return {"neutralization": default_neutralization_for_dataset(ds), "decay": 4, "nanHandling": "ON", "truncation": 0.08}
 
+
+
+def min_decay_for_expression(expression: str, dataset_id: str = "") -> int:
+    """P42 (FE12): Compute empirical minimum decay floor to prevent >90% turnover blowups."""
+    expr_l = str(expression or "").lower()
+    ds_l = str(dataset_id or "").strip().lower()
+    has_internal_damper = ("ts_decay_linear(" in expr_l) or ("hump(" in expr_l) or ("trade_when(" in expr_l)
+    floor = 0
+    if "option" in ds_l or any(tok in expr_l for tok in ("parkinson_volatility", "call_breakeven", "put_breakeven", "implied_volatility", "historical_volatility")):
+        floor = max(floor, 4 if has_internal_damper else 6)
+    if re.search(r"\bts_delta\s*\([^()]*,\s*[1-5]\s*\)", expr_l) and not has_internal_damper:
+        floor = max(floor, 6)
+    return floor
 
 
 def sanitize_sim_settings(settings: Mapping[str, Any] | None = None, *, dataset_id: str = "") -> dict[str, Any]:

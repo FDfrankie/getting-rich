@@ -827,6 +827,134 @@ class BrainClient:
             os.replace(tmp_p, out_p)
         return payload
 
+
+    def backfill_all_passed_alphas(
+        self,
+        *,
+        max_pages: int = 20,
+        page_size: int = 100,
+        vault_json_path: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """P42: Full-history paginated sync of ALL passed Alphas from live BRAIN API.
+
+        Paginates BOTH status=ACTIVE (Submitted) and status=UNSUBMITTED (is.sharpe>=1.25,
+        is.fitness>=1.0), verifies 0 FAIL on IS checks, archives every qualifying formula
+        into SQLite qualified_alpha_archive (with zero margin-drop bias), and exports JSON.
+        """
+        if self.offline_mode:
+            return {"ok": False, "reason": "offline_mode", "submitted_archived": 0, "unsubmitted_archived": 0, "total_archived": 0}
+        if not self.is_authenticated and not self.authenticate():
+            return {"ok": False, "reason": "auth_failed", "submitted_archived": 0, "unsubmitted_archived": 0, "total_archived": 0}
+
+        url = f"{self.BASE_URL}/users/self/alphas"
+        limit = int(max(1, min(100, page_size)))
+        submitted_archived = 0
+        unsubmitted_archived = 0
+        skipped_failed_checks = 0
+        pages_scanned = 0
+
+        scan_specs = [
+            ("ACTIVE", {"status": "ACTIVE", "order": "-dateSubmitted"}),
+            ("UNSUBMITTED", {"status": "UNSUBMITTED", "order": "-is.sharpe", "is.sharpe>": 1.2499, "is.fitness>": 0.9999}),
+        ]
+
+        for status_tag, base_params in scan_specs:
+            offset = 0
+            for _ in range(int(max(1, max_pages))):
+                params = dict(base_params)
+                params["limit"] = limit
+                params["offset"] = offset
+                try:
+                    resp = self.session.get(url, params=params, timeout=min(self.timeout, 25.0))
+                    if resp.status_code == 401:
+                        self.authenticated = False
+                        if self.authenticate():
+                            resp = self.session.get(url, params=params, timeout=min(self.timeout, 25.0))
+                    if resp.status_code != 200 or not resp.content:
+                        break
+                    payload = resp.json()
+                except Exception as exc:
+                    logger.debug("backfill_all_passed_alphas (%s offset=%s) failed: %s", status_tag, offset, exc)
+                    break
+
+                pages_scanned += 1
+                items = payload.get("results") if isinstance(payload, dict) else (payload if isinstance(payload, list) else [])
+                if not isinstance(items, list) or not items:
+                    break
+
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    aid = str(item.get("id") or "").strip()
+                    if not aid:
+                        continue
+                    is_blk = item.get("is") if isinstance(item.get("is"), dict) else {}
+                    sett = item.get("settings") if isinstance(item.get("settings"), dict) else {}
+                    reg = item.get("regular") if isinstance(item.get("regular"), dict) else {}
+                    expr = str(reg.get("code") or item.get("expression") or "").strip()
+                    if not expr:
+                        continue
+                    sh = self._number(is_blk, "sharpe")
+                    fit = self._number(is_blk, "fitness")
+                    to = self._number(is_blk, "turnover")
+                    mg = self._number(is_blk, "margin") or 0.0
+                    ret = self._number(is_blk, "returns") or 0.0
+                    dd = self._number(is_blk, "drawdown") or 0.0
+                    if sh is None or fit is None or to is None:
+                        continue
+                    norm_to = to / 100.0 if 2.0 < to <= 100.0 else to
+                    checks = is_blk.get("checks") if isinstance(is_blk.get("checks"), list) else []
+                    sub_u_sh = None
+                    has_fail = False
+                    for ch in checks:
+                        if not isinstance(ch, dict):
+                            continue
+                        if str(ch.get("name") or "").upper() == "LOW_SUB_UNIVERSE_SHARPE":
+                            val = ch.get("value")
+                            if isinstance(val, (int, float)):
+                                sub_u_sh = float(val)
+                        if str(ch.get("result") or "").upper() in ("FAIL", "FAILED", "ERROR"):
+                            has_fail = True
+                    if status_tag == "UNSUBMITTED" and has_fail:
+                        skipped_failed_checks += 1
+                        continue
+                    self.archive_qualified_alpha(
+                        aid,
+                        expr,
+                        float(sh),
+                        float(fit),
+                        float(norm_to),
+                        float(mg),
+                        settings=sett,
+                        returns=float(ret),
+                        drawdown=float(dd),
+                        sub_universe_sharpe=sub_u_sh,
+                        submit_status="SUBMITTED" if status_tag == "ACTIVE" else None,
+                        source="P42_FULL_BACKFILL_ACTIVE" if status_tag == "ACTIVE" else "P42_FULL_BACKFILL_UNSUBMITTED",
+                    )
+                    if status_tag == "ACTIVE":
+                        submitted_archived += 1
+                    else:
+                        unsubmitted_archived += 1
+
+                if len(items) < limit:
+                    break
+                offset += limit
+
+        exported = self.export_qualified_formula_vault(output_path=vault_json_path)
+        summary = exported.get("summary") or {}
+        return {
+            "ok": True,
+            "pages_scanned": pages_scanned,
+            "submitted_archived": submitted_archived,
+            "unsubmitted_archived": unsubmitted_archived,
+            "skipped_failed_checks": skipped_failed_checks,
+            "total_archived": int(summary.get("total_archived", 0)),
+            "consultant_reserve_count": int(summary.get("consultant_reserve_count", 0)),
+            "bronze_submittable_count": int(summary.get("bronze_submittable_count", 0)),
+            "submitted_count": int(summary.get("submitted_count", 0)),
+        }
+
     def stage_candidate_for_daily_selection(
         self,
         alpha_id: str,
@@ -983,14 +1111,44 @@ class BrainClient:
                 pass
 
         staged = 0
+        # P42: Keep ACTIVE submitted alphas synced in archive alongside paginated UNSUBMITTED harvest
+        try:
+            act_resp = self.session.get(url, params={"status": "ACTIVE", "limit": 100, "offset": 0}, timeout=min(self.timeout, 15.0))
+            if act_resp.status_code == 200 and act_resp.content:
+                act_payload = act_resp.json()
+                act_items = act_payload.get("results") if isinstance(act_payload, dict) else []
+                for a_it in (act_items or []):
+                    if not isinstance(a_it, dict):
+                        continue
+                    a_id = str(a_it.get("id") or "").strip()
+                    a_is = a_it.get("is") if isinstance(a_it.get("is"), dict) else {}
+                    a_reg = a_it.get("regular") if isinstance(a_it.get("regular"), dict) else {}
+                    a_expr = str(a_reg.get("code") or a_it.get("expression") or "").strip()
+                    a_sh = self._number(a_is, "sharpe")
+                    a_fit = self._number(a_is, "fitness")
+                    a_to = self._number(a_is, "turnover")
+                    if a_id and a_expr and a_sh is not None and a_fit is not None and a_to is not None:
+                        a_norm_to = a_to / 100.0 if 2.0 < a_to <= 100.0 else a_to
+                        self.archive_qualified_alpha(
+                            a_id, a_expr, float(a_sh), float(a_fit), float(a_norm_to),
+                            float(self._number(a_is, "margin") or 0.0),
+                            settings=a_it.get("settings") if isinstance(a_it.get("settings"), dict) else {},
+                            returns=float(self._number(a_is, "returns") or 0.0),
+                            drawdown=float(self._number(a_is, "drawdown") or 0.0),
+                            submit_status="SUBMITTED",
+                            source="ACTIVE_SYNC",
+                        )
+        except Exception:
+            pass
+
         for order_val, allow_pending_stage in pass_orders:
             params: dict[str, Any] = {
                 "status": "UNSUBMITTED",
                 "limit": int(max(10, min(100, limit))),
                 "offset": 0,
                 "order": order_val,
-                "is.sharpe>=": 1.25,
-                "is.fitness>=": 1.0,
+                "is.sharpe>": 1.2499,
+                "is.fitness>": 0.9999,
             }
             try:
                 resp = self.session.get(url, params=params, timeout=min(self.timeout, 20.0))
