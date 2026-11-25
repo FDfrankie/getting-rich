@@ -1,0 +1,202 @@
+{
+  "bundle": "p46_v84_to_v97_project_consolidation_bundle.zip",
+  "created_at_taipei": "2026-11-26 03:59:20+08:00",
+  "kb_version": "v89_clean_quant",
+  "summary": {
+    "base_unique_papers": 9811,
+    "v84_to_v97_raw_rows": 10500,
+    "v84_to_v97_net_new": 3936,
+    "new_total_unique_clean_quant_papers": 13747,
+    "official_brain_articles": 624,
+    "total_kb_entries": 14371,
+    "tier0_quarantined": 0,
+    "readme_volumes": 88,
+    "files_count": 46
+  },
+  "files": {
+    "scripts/project_hygiene_audit.py": {
+      "size_bytes": 7617,
+      "sha256": "f1a27bd0b9e548638ebc8f868e1c04d701f3cd288ce336cba1f3245dfe75f3f2"
+    },
+    "tests/test_p46_project_hygiene_and_kb.py": {
+      "size_bytes": 3300,
+      "sha256": "c7d2a9a48f70b5b7270d7c749cf919df4d49c36b33608c00779066a78f9df6b4"
+    },
+    "docs/references/README.md": {
+      "size_bytes": 47358,
+      "sha256": "5d01a16e2816c78ab24cbfd18da4fcd3aec54635a6a14627a7a5bea7fc20c25b"
+    },
+    "docs/references/V84_ROUND1_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 233046,
+      "sha256": "fe0a1c04deeea5271a0221b986ee5c189d03fa27e5ffe3f24c34ccc3428434fe"
+    },
+    "docs/references/V84_ROUND2_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 222378,
+      "sha256": "a327a0bf3dd465a5c8866225bba9d7dba7c4ab8ac08261d4bace432633a129e8"
+    },
+    "docs/references/V84_ROUND3_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 221360,
+      "sha256": "fdc1c0008833c006555fbcc8f86391efaa6056c111ff962fdd23f29c77e34307"
+    },
+    "docs/references/V85_ROUND1_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 205094,
+      "sha256": "bc86a5841a83fb880766922a6abaeb62e58a29ff8cbe6ef52af133d0bba2ce74"
+    },
+    "docs/references/V85_ROUND2_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 156012,
+      "sha256": "a6c6cab22dc6714473fab3da59a1d2b4c1bf01eafdf436aff854544f77e41a2c"
+    },
+    "docs/references/V85_ROUND3_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 116592,
+      "sha256": "50e0b23d4e9a6448dde9aaf02996eb83d2357ff848fa4f6446c39791be9390f3"
+    },
+    "docs/references/V86_ROUND1_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 112062,
+      "sha256": "0c7c970ddc9c0485b6366941afea2f5693f1898ed03dd37ff0d910ed08f00831"
+    },
+    "docs/references/V86_ROUND2_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 107459,
+      "sha256": "a027b725e196fa4fc0a9b891f5235cb1302adae42e93befed623124e6d9d6a03"
+    },
+    "docs/references/V86_ROUND3_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 107835,
+      "sha256": "07cacebfce854472a28d54ecf5501df6f850801cc5f4a0889a48b31c2dfd62f5"
+    },
+    "docs/references/V87_ROUND1_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 103288,
+      "sha256": "6b04155a66b1d9a94068b3d614c40679cf3cf2e4c303fa90218522b358b1250b"
+    },
+    "docs/references/V87_ROUND2_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 104700,
+      "sha256": "4fca9662c665b330d45e67eb7974ad2c22ad22bdb41381115e543a1b5df9e6f4"
+    },
+    "docs/references/V87_ROUND3_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 102862,
+      "sha256": "c21c66b005fde22d4a67329b21bdd18690f84ed917a1c5f3a06a0f97662a9905"
+    },
+    "docs/references/V88_ROUND1_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 108100,
+      "sha256": "3565ef02d273e97fd50b1c7aa6232517fdfd0defbf5abaa879b1484185e86dd1"
+    },
+    "docs/references/V88_ROUND2_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 114584,
+      "sha256": "678f4a9174eba976d9eefccd8cb980c5e9b4d0a244d7b451fa9289ceed3c7a60"
+    },
+    "docs/references/V88_ROUND3_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 113595,
+      "sha256": "1fb0c0fedd1257061ff781c34e21068f46c63faa6b41a865e6a93c982e3146b2"
+    },
+    "docs/references/V89_ROUND1_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 113478,
+      "sha256": "8e57c67db9e154fa657b693a10bec7e7f07d90623a611adfa706bc425f15e3b1"
+    },
+    "docs/references/V89_ROUND2_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 115451,
+      "sha256": "85699d03d63383bb160432bab65d2a232117d64b1411038c40a9aadf9172cb54"
+    },
+    "docs/references/V89_ROUND3_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 115367,
+      "sha256": "6448274d56002277e6e0b722baca0afc7b6df9c1340e4f93f45e8b939fc6a8da"
+    },
+    "docs/references/V90_ROUND1_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 120244,
+      "sha256": "f56c26fb71a1cda317242ae7d9710611626a62026f586b1cc18575344c0b8870"
+    },
+    "docs/references/V90_ROUND2_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 119570,
+      "sha256": "a8838baf680f30480492f09bd1398c381a6179c18c6f10caf51c9989f09635b0"
+    },
+    "docs/references/V90_ROUND3_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 115046,
+      "sha256": "6b6750c135994eaf97fceb1840a9e6727f513254fac945cc5986b24817fc88dd"
+    },
+    "docs/references/V91_ROUND1_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 115008,
+      "sha256": "1a2c28cfc9b177cbcc04d5cd5d3dc111c80cf865273dd935eab92075726f822d"
+    },
+    "docs/references/V91_ROUND2_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 117017,
+      "sha256": "4a40013ccfb758807d6d5c91e1b0aa757f158f3373cab6ee45c46c94037f5348"
+    },
+    "docs/references/V91_ROUND3_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 117298,
+      "sha256": "de9b40e9398a8a3d67ffd12e6d644594d9280f97da32ad374e31a5f77e0333b9"
+    },
+    "docs/references/V92_ROUND1_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 121714,
+      "sha256": "6268d7490581789517772cff8200e1d2985a721c7693c166e2ec2fd0847bb2f9"
+    },
+    "docs/references/V92_ROUND2_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 121052,
+      "sha256": "cfc0600c18f661ca96b92d4ce122e0c41f2cf329d671ac0048154c50b24bffec"
+    },
+    "docs/references/V92_ROUND3_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 120136,
+      "sha256": "7aa63d9e6460c6f0b5475d149313b665069f1844a58fa63fea1f711fddc3914f"
+    },
+    "docs/references/V93_ROUND1_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 113332,
+      "sha256": "dc83df5c54adc6aca2ebdd221ace9d9449607fe0dba597399d381a8f6d45f551"
+    },
+    "docs/references/V93_ROUND2_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 112991,
+      "sha256": "798d7e472b7b684d93ce249624fca2550a99bd4108d62db06498759c042d1de0"
+    },
+    "docs/references/V93_ROUND3_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 113233,
+      "sha256": "8a70b57d704d5998b8d751fb97fab3bc98a30aabe194155facd64f5ad416c487"
+    },
+    "docs/references/V94_ROUND1_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 108617,
+      "sha256": "be69c3a1b658989334d07f50c7dca4e77e23297cb6b75291c53ecf1baed35554"
+    },
+    "docs/references/V94_ROUND2_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 110214,
+      "sha256": "f23924da1835ddf187978cb881ed7c789f51b191ed31c4138b261fa9f7871b1f"
+    },
+    "docs/references/V94_ROUND3_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 105855,
+      "sha256": "7a753725f4a5d995480ab730301373ed0d5ca931a688e0a856250ee459090925"
+    },
+    "docs/references/V95_ROUND1_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 99559,
+      "sha256": "d6759bf6261747939ab7edc9f908d3581ca5d8c099f2ad4a68aa9af131ca6ddd"
+    },
+    "docs/references/V95_ROUND2_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 103323,
+      "sha256": "a5f303c0805ce198fec192908c2622f8e63eb5535474dd339ab2c4ad7c43c3b1"
+    },
+    "docs/references/V95_ROUND3_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 102585,
+      "sha256": "6ccbb7f3335ff31971eec9aee4824de561913f4160e3b8657ff3aad24f01e985"
+    },
+    "docs/references/V96_ROUND1_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 118598,
+      "sha256": "8329e269decf3a043882a99e50b50b21daf04f880ed9e8488e06c8705ea56405"
+    },
+    "docs/references/V96_ROUND2_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 122473,
+      "sha256": "acb1eb8056076076fef0c7317c8cd65c5629f68285e26685f7945458761d850d"
+    },
+    "docs/references/V96_ROUND3_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 121344,
+      "sha256": "18d90df9c8a73e763cbbac979a00953731c84b5fcd2b554f22f040d18b59ebcc"
+    },
+    "docs/references/V97_ROUND1_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 122073,
+      "sha256": "ae8e523b063504e0b2bb928bf252ba986a2e625be19e85e223754d2b179d9451"
+    },
+    "docs/references/V97_ROUND2_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 122722,
+      "sha256": "48475f1a3c9d79eb6e07a0b44dd3445b48d75fad1fd555f1fa9792c9239eb7a2"
+    },
+    "docs/references/V97_ROUND3_MEGA_QUANT_LITERATURE_SURVEY.md": {
+      "size_bytes": 125620,
+      "sha256": "6613961cf0a9eee7c568faf9b4a048e5a33937bd8312da7f352dccc151d21424"
+    },
+    "docs/references/worldquant_brain_official_kb_v89_delta_v84_to_v97.json": {
+      "size_bytes": 2891535,
+      "sha256": "f7d8917116d07a9c6cef67fa6e2770177014fd1cb3399afc6b08ddb43ee6a10e"
+    }
+  }
+}
