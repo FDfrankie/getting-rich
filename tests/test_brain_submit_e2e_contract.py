@@ -81,22 +81,24 @@ class TestBrainSubmitAndProtocolE2E(unittest.TestCase):
             c = BrainClient(email="u@e.com", password="pw", poll_interval=0.05, session=MagicMock())
             c.authenticated = True
             c.quota_db_path = db_p
-            c.stage_candidate_for_daily_selection("A_ONCE", "rank(close)", 1.8, 1.3, 0.20, 0.002, day_str="2026-11-21")
+            import os
+            with patch.dict(os.environ, {"BRAIN_SUBMIT_ORDER": "best_first", "BRAIN_RESERVE_MIN_SHARPE": "99", "BRAIN_RESERVE_MIN_FITNESS": "99"}):
+                c.stage_candidate_for_daily_selection("A_ONCE", "rank(close)", 1.8, 1.3, 0.20, 0.002, day_str="2026-11-21")
 
-            with patch.object(c, "submit_alpha", return_value={"success": True, "status": "SUBMITTED", "alpha_id": "A_ONCE"}) as m_sub:
-                r1 = c.flush_daily_candidates(day_str="2026-11-21", max_daily_submissions=2)
-                self.assertEqual(len(r1), 1)
-                self.assertTrue(r1[0]["success"])
+                with patch.object(c, "submit_alpha", return_value={"success": True, "status": "SUBMITTED", "alpha_id": "A_ONCE"}) as m_sub:
+                    r1 = c.flush_daily_candidates(day_str="2026-11-21", max_daily_submissions=2)
+                    self.assertEqual(len(r1), 1)
+                    self.assertTrue(r1[0]["success"])
 
-                conn = sqlite3.connect(db_p)
-                st = conn.execute("SELECT status FROM brain_candidate_pool WHERE alpha_id='A_ONCE'").fetchone()[0]
-                conn.close()
-                self.assertEqual(st, "SUBMITTED")
+                    conn = sqlite3.connect(db_p)
+                    st = conn.execute("SELECT status FROM brain_candidate_pool WHERE alpha_id='A_ONCE'").fetchone()[0]
+                    conn.close()
+                    self.assertEqual(st, "SUBMITTED")
 
-                # Second flush MUST NOT resubmit A_ONCE
-                r2 = c.flush_daily_candidates(day_str="2026-11-21", max_daily_submissions=2)
-                self.assertEqual(r2, [])
-                self.assertEqual(m_sub.call_count, 1)
+                    # Second flush MUST NOT resubmit A_ONCE
+                    r2 = c.flush_daily_candidates(day_str="2026-11-21", max_daily_submissions=2)
+                    self.assertEqual(r2, [])
+                    self.assertEqual(m_sub.call_count, 1)
 
     def test_pre_submission_gate_inclusive_bounds_and_lifecycle_ready(self) -> None:
         elig = submission_eligibility(

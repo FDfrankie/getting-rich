@@ -224,8 +224,8 @@ def evaluate_fastexpr_on_ohlcv(expression: str, df: pd.DataFrame) -> pd.Series:
         z = ((ser - rm) / rsd).fillna(0.0)
         return pd.Series(np.tanh(z * 0.75), index=df.index)
     except Exception:
-        fallback = (close - open_) / (high - low + 1e-4)
-        return pd.Series(np.tanh(fallback), index=df.index)
+        # Never silently fall back to noisy 1-bar intrabar reversal churn; return neutral 0.0
+        return pd.Series(0.0, index=df.index, dtype=float)
 
 
 class BrainAlphaCryptoStrategy(BaseStrategy):

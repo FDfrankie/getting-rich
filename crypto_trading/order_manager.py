@@ -229,6 +229,16 @@ class OrderManager:
         4. 成功更新為 ACKNOWLEDGED / FILLED
         5. 逾時或異常轉入 UNKNOWN 並先查詢遠端狀態，嚴禁重送
         """
+        import math
+        if not math.isfinite(float(amount)) or float(amount) <= 0.0:
+            err_msg = f"INVALID_ORDER_QUANTITY: amount={amount} must be strictly positive (prevents -4003)"
+            return {
+                "success": False,
+                "client_order_id": None,
+                "state": OrderState.REJECTED.value,
+                "error": err_msg,
+                "message": err_msg,
+            }
         claim_res = self.claim_order(symbol, side, order_type, amount, price, client_tag=client_tag)
         if not claim_res["claimed"]:
             return claim_res

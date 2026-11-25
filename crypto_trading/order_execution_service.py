@@ -166,13 +166,17 @@ def build_binance_futures_order_params(
     post_only: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Return (endpoint_path, params) compliant with Binance USD-M 2025-12+ Algo Order & Hedge Mode rules."""
+    import math
+    qty_f = float(quantity)
+    if not math.isfinite(qty_f) or qty_f <= 0.0:
+        raise ValueError(f"quantity must be positive, got {quantity}")
     otype = str(order_type).upper()
     endpoint = "/fapi/v1/algoOrder" if otype in CONDITIONAL_ORDER_TYPES else "/fapi/v1/order"
     params: dict[str, Any] = {
         "symbol": str(symbol).replace("/", ""),
         "side": str(side).upper(),
         "type": otype,
-        "quantity": float(quantity),
+        "quantity": qty_f,
         "selfTradePreventionMode": "EXPIRE_MAKER",
     }
     if otype == "LIMIT" and price is not None:

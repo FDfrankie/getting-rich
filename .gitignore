@@ -116,3 +116,8 @@ data_persistence/watchdog.paused
 taiwan_stock/reports/morning_report_*.md
 BRAIN_官方知識庫與研究紀錄/
 *.sha256
+*.sha256.gdoc
+data_persistence/brain_pending_status.json
+data_persistence/qualified_alpha_formulas_vault.json
+observability/qualified_alpha_formulas_vault.json
+geminiprompt_coord.txt

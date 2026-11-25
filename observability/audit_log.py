@@ -45,8 +45,8 @@ class AuditLog:
                 created_at TEXT NOT NULL DEFAULT ''
             )
         """
-        from worldquant_brain.sqlite_resilience import open_sqlite_wal
-        with open_sqlite_wal(self.db_path, timeout=30.0) as conn:
+        from worldquant_brain.sqlite_resilience import managed_connection
+        with managed_connection(self.db_path, timeout=30.0) as conn:
             conn.execute(_audit_ddl)
             ensure_schema_from_ddl(conn, _audit_ddl)
 
@@ -56,8 +56,8 @@ class AuditLog:
         event_id = uuid.uuid4().hex
         now_iso = datetime.now(timezone.utc).isoformat()
         details_str = json.dumps(scrub(details or {}), sort_keys=True, ensure_ascii=False)
-        from worldquant_brain.sqlite_resilience import open_sqlite_wal
-        with open_sqlite_wal(self.db_path, timeout=30.0) as conn:
+        from worldquant_brain.sqlite_resilience import managed_connection
+        with managed_connection(self.db_path, timeout=30.0) as conn:
             conn.execute(
                 """
                 INSERT INTO audit_events (

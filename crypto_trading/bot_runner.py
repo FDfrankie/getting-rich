@@ -103,17 +103,39 @@ class CryptoTradingBot:
 
         order_side = side.upper()
         # 集中式 RiskManager 檢驗
+        import math
         try:
             from crypto_trading.instruments import get_instrument_spec
             _spec = getattr(self, "instrument_spec", None) or get_instrument_spec(self.symbol)
         except ImportError:
             from crypto_trading.instruments import BTC_USDT_BINANCE_TESTNET
             _spec = getattr(self, "instrument_spec", None) or BTC_USDT_BINANCE_TESTNET
+
+        min_qty = float(_spec.min_quantity)
+        if not math.isfinite(float(amount)) or float(amount) <= 0.0:
+            if reduce_only and abs(float(self.position)) < min_qty:
+                self.position = 0.0
+                self.position_side = "FLAT"
+                self.entry_price = 0.0
+            self.log(f"⛔ [數量防護] 攔截無效下單數量 {amount} {self.symbol} (防 -4003)")
+            return
         try:
             amount = float(_spec.normalize_quantity(amount))
             current_price = float(_spec.normalize_price(current_price))
-        except Exception:
-            pass
+        except ValueError as exc:
+            if reduce_only and abs(float(self.position)) < min_qty:
+                self.position = 0.0
+                self.position_side = "FLAT"
+                self.entry_price = 0.0
+            self.log(f"⛔ [精度防護] {self.symbol} 數量/價格正規化失敗: {exc}")
+            return
+        if amount <= 0.0 or amount < min_qty:
+            if reduce_only and abs(float(self.position)) < min_qty:
+                self.position = 0.0
+                self.position_side = "FLAT"
+                self.entry_price = 0.0
+            self.log(f"⛔ [最小數量防護] {amount} < min_quantity {min_qty} ({self.symbol})，拒絕送單")
+            return
         _ex_connected = True if (self.exchange_adapter is None or getattr(self.exchange_adapter, "mock_mode", False)) else bool(getattr(self.exchange_adapter, "is_connected", True))
         risk_decision = self.risk_manager.evaluate_order(
             symbol=self.symbol,
@@ -130,6 +152,7 @@ class CryptoTradingBot:
                 "has_unknown_orders": False,
                 "exchange_connected": _ex_connected,
                 "step_size": float(_spec.quantity_step),
+                "min_quantity": min_qty,
                 "tick_size": float(_spec.price_tick),
                 "min_notional": float(_spec.min_notional),
                 "auto_quantize_step": True,
@@ -151,9 +174,15 @@ class CryptoTradingBot:
                     order_type="market",
                     amount=amount,
                     price=current_price,
+                    reduce_only=reduce_only,
                 )
                 if res.get("success", False):
-                    _nested_order = res.get("order") if isinstance(res.get("order"), dict) else {}
+                    _raw = res.get("raw") if isinstance(res.get("raw"), dict) else {}
+                    _nested_order = (
+                        res.get("order")
+                        if isinstance(res.get("order"), dict)
+                        else (_raw.get("order") if isinstance(_raw.get("order"), dict) else {})
+                    )
                     order_id = (
                         res.get("exchange_order_id")
                         or res.get("order_id")
@@ -163,7 +192,17 @@ class CryptoTradingBot:
                         or _nested_order.get("id")
                         or f"MOCK_{int(time.time() * 1000)}"
                     )
-                    fill_price = float(res.get("price", current_price))
+                    _raw_px = (
+                        _nested_order.get("avgPrice")
+                        or _nested_order.get("price")
+                        or res.get("price")
+                        or 0.0
+                    )
+                    try:
+                        _parsed_px = float(_raw_px)
+                    except (TypeError, ValueError):
+                        _parsed_px = 0.0
+                    fill_price = _parsed_px if _parsed_px > 0.0 else float(current_price)
                     self.last_order_info = res
                     self.log(
                         f"⚡ [交易所委託成交] {order_side} {amount:.4f} {self.symbol} @ {fill_price:.2f} | 遠端 OrderID: {order_id} | 原因: {reason}"
@@ -256,8 +295,9 @@ class CryptoTradingBot:
                         )
                     return
                 else:
+                    err_reason = res.get("error") or res.get("message") or "未知錯誤"
                     self.log(
-                        f"⚠️ [交易所下單未成交或被拒] 原因: {res.get('error', res.get('message', '未知錯誤'))}。保持原狀，嚴禁污染本地沙盒！"
+                        f"⚠️ [交易所下單未成交或被拒] 原因: {err_reason}。保持原狀，嚴禁污染本地沙盒！"
                     )
                     self.sync.record_order(
                         symbol=self.symbol,
@@ -269,7 +309,7 @@ class CryptoTradingBot:
                         exchange_order_id="NONE",
                         cost=0.0,
                         fee=0.0,
-                        reason=f"REJECTED: {res.get('message', '未知錯誤')}",
+                        reason=f"REJECTED: {err_reason}",
                     )
                     return
             except Exception as e:
@@ -406,8 +446,13 @@ class CryptoTradingBot:
             unrealized_pnl = 0.0
         return self.balance_usdt + unrealized_pnl
 
-    def step(self):
-        """單次決策迴圈步進 (整合高階趨勢濾網 Hierarchical Regime Filter)"""
+    def step(
+        self,
+        *,
+        max_notional_usdt: float | None = None,
+        free_balance_usdt: float | None = None,
+    ):
+        """單次決策迴圈步進 (整合高階趨勢濾網 Hierarchical Regime Filter 與成本門檻)"""
         # 1. 分離高低時框資料，各取至少 100 根已收盤 K 線
         from crypto_trading.settings import TradingMode, get_settings
         _allow_syn = get_settings().trading_mode == TradingMode.LOCAL_PAPER
@@ -417,6 +462,7 @@ class CryptoTradingBot:
         df_strat = self.strategy.generate_signals(df_exec)
         curr = df_strat.iloc[-1]
         current_price = float(curr["Close"])
+        self.last_price = current_price
         raw_signal = int(curr["signal"])
         atr = float(curr.get("ATR", current_price * 0.02))
 
@@ -424,12 +470,28 @@ class CryptoTradingBot:
         regime_info = self.regime_filter.detect_regime(df_high)
         signal = self.regime_filter.filter_micro_signal(raw_signal, regime_info)
 
+        # 1.2 自癒空倉狀態：若 position 歸零或低於最小下單量，立即重置為 FLAT（防 -4003 迴圈）
+        try:
+            from crypto_trading.instruments import get_instrument_spec
+            _spec = getattr(self, "instrument_spec", None) or get_instrument_spec(self.symbol)
+            _min_qty = float(_spec.min_quantity)
+        except Exception:
+            _min_qty = 1e-6
+        if self.position_side != "FLAT" and abs(float(self.position)) < _min_qty:
+            self.position = 0.0
+            self.position_side = "FLAT"
+            self.entry_price = 0.0
+
         # 計算當前總資產淨值 (合約保證金會計)
         total_equity = self.get_equity(current_price)
         self.risk_manager.update_capital(total_equity)
+        try:
+            self.sync.record_equity(total_equity, self.balance_usdt, total_equity - self.balance_usdt)
+        except Exception:
+            pass
 
         # 2. 判斷是否有停損或平倉信號 (雙向 LONG 與 SHORT 支援)
-        if self.position_side == "LONG":
+        if self.position_side == "LONG" and self.position >= _min_qty and self.entry_price > 0:
             pos_risk = self.risk_manager.calculate_position_size(self.entry_price, atr)
             if current_price <= pos_risk["stop_loss_long"]:
                 self.execute_order(
@@ -449,7 +511,7 @@ class CryptoTradingBot:
                     reduce_only=True,
                 )
                 return
-        elif self.position_side == "SHORT":
+        elif self.position_side == "SHORT" and self.position >= _min_qty and self.entry_price > 0:
             pos_risk = self.risk_manager.calculate_position_size(self.entry_price, atr)
             if current_price >= pos_risk["stop_loss_short"]:
                 self.execute_order(
@@ -471,25 +533,33 @@ class CryptoTradingBot:
                 return
 
         # 3. 處理策略開平倉信號 (支援 signal == 1 多, signal == -1 空, signal == 0 平倉)
-        if signal == 1 and self.position_side == "FLAT":
+        if signal in (1, -1) and self.position_side == "FLAT":
+            # 3.1 進場成本門檻檢驗 (當策略提供 expected_edge 且未自帶 cost_gated 時)
+            if not getattr(self.strategy, "cost_gated", False) and "expected_edge" in curr.index:
+                try:
+                    _edge_val = float(curr["expected_edge"])
+                    from crypto_trading.execution_cost_filter import evaluate_cost_barrier
+                    if not evaluate_cost_barrier(expected_return=_edge_val).trade_allowed:
+                        return
+                except Exception:
+                    pass
+
             pos_plan = self.risk_manager.calculate_position_size(current_price, atr)
-            if pos_plan["size"] > 0:
-                self.execute_order(
-                    "BUY",
-                    pos_plan["size"],
-                    current_price,
-                    reason="條件機率+技術指標達標做多",
-                )
-        elif signal == -1 and self.position_side == "FLAT":
-            pos_plan = self.risk_manager.calculate_position_size(current_price, atr)
-            if pos_plan["size"] > 0:
-                self.execute_order(
-                    "SELL",
-                    pos_plan["size"],
-                    current_price,
-                    reason="條件機率+技術指標達標做空",
-                )
-        elif signal == 0 and self.position_side != "FLAT":
+            size = float(pos_plan["size"])
+            # 3.2 強制套用 PortfolioRiskAllocator 上限與可用保證金上限 (防 -2019 Margin insufficient)
+            notional_caps = []
+            if max_notional_usdt is not None and float(max_notional_usdt) > 0:
+                notional_caps.append(float(max_notional_usdt))
+            if free_balance_usdt is not None and float(free_balance_usdt) >= 0:
+                notional_caps.append(float(free_balance_usdt) * 0.90)
+            if notional_caps and current_price > 0:
+                cap_qty = min(notional_caps) / current_price
+                size = min(size, cap_qty)
+            if size >= _min_qty:
+                side = "BUY" if signal == 1 else "SELL"
+                reason = "條件機率+技術指標達標做多" if signal == 1 else "條件機率+技術指標達標做空"
+                self.execute_order(side, size, current_price, reason=reason)
+        elif signal == 0 and self.position_side != "FLAT" and self.position >= _min_qty:
             close_side = "SELL" if self.position_side == "LONG" else "BUY"
             self.execute_order(
                 close_side,
@@ -514,7 +584,8 @@ class CryptoTradingBot:
             cycle_desc = f"Cycle {step_i}" + (f"/{iterations}" if iterations else "")
             self.log(f"--- 執行心跳檢測 {cycle_desc} ---")
             self.step()
-            total_equity = self.balance_usdt + (self.position * self.entry_price if self.position > 0 else 0)
+            mark_p = float(getattr(self, "last_price", 0.0) or self.entry_price or 0.0)
+            total_equity = self.get_equity(mark_p) if mark_p > 0 else self.balance_usdt
             self.log(
                 f"📊 當前帳戶淨值: {total_equity:.2f} USDT | 倉位狀態: {self.position_side} ({self.position:.4f} {self.symbol})"
             )

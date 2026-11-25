@@ -479,7 +479,13 @@ class QuantAppContext:
         lgbm_path = os.path.join(DATA_DIR, "models", "crypto_lgbm_weights.joblib")
         ppo_path = os.path.join(DATA_DIR, "models", "crypto_ppo_agent.pt")
 
-        if strat_name == "brain_alpha":
+        if strat_name == "native_ensemble":
+            from crypto_trading.strategies.native_ensemble_strategy import NativeCryptoEnsembleStrategy
+            strat = NativeCryptoEnsembleStrategy()
+        elif strat_name == "cond_prob_rl":
+            from crypto_trading.strategies.conditional_prob_rl_strategy import ConditionalProbRLStrategy
+            strat = ConditionalProbRLStrategy()
+        elif strat_name == "brain_alpha":
             strat = BrainAlphaCryptoStrategy(vault_db_path=self.alpha_vault.db_path)
         elif strat_name == "perp_carry":
             strat = PerpCarryBasisStrategy()
@@ -1029,7 +1035,11 @@ class QuantAppContext:
                     else:
                         ticker = self.testnet_client.fetch_ticker(self.active_bot.symbol)
                     curr_price = ticker.get("last")
-                    equity = self.active_bot.balance_usdt + (self.active_bot.position * curr_price)
+                    equity = (
+                        self.active_bot.get_equity(curr_price)
+                        if (curr_price is not None and hasattr(self.active_bot, "get_equity"))
+                        else float(self.active_bot.balance_usdt)
+                    )
 
                     # 每 60 秒執行一次持倉同調對齊 (reconcile_with_exchange)
                     now_ts = time.time()
@@ -1037,19 +1047,37 @@ class QuantAppContext:
                         last_reconcile_time = now_ts
                         if self.execution_mode == "BINANCE_TESTNET":
                             self._run_reconciliation_sync()
+                            signed_local = (
+                                -abs(self.active_bot.position)
+                                if getattr(self.active_bot, "position_side", "FLAT") == "SHORT"
+                                else abs(self.active_bot.position)
+                            )
                             rec = self.testnet_client.reconcile_with_exchange(
-                                self.active_bot.position, self.active_bot.symbol
+                                signed_local, self.active_bot.symbol
                             )
                             if not rec["in_sync"]:
                                 self.add_log(f"🔄 交易所持倉同調: {rec['message']}")
-                                self.active_bot.position = rec["remote_position"]
+                                rpos = float(rec["remote_position"] or 0.0)
+                                self.active_bot.position = abs(rpos)
+                                self.active_bot.position_side = "LONG" if rpos > 0 else ("SHORT" if rpos < 0 else "FLAT")
+                                if self.active_bot.position_side == "FLAT":
+                                    self.active_bot.entry_price = 0.0
                         elif self.execution_mode == "BITUNIX_LIVE":
+                            signed_local = (
+                                -abs(self.active_bot.position)
+                                if getattr(self.active_bot, "position_side", "FLAT") == "SHORT"
+                                else abs(self.active_bot.position)
+                            )
                             rec = self.bitunix_client.reconcile_with_exchange(
-                                self.active_bot.position, self.active_bot.symbol
+                                signed_local, self.active_bot.symbol
                             )
                             if not rec["in_sync"]:
                                 self.add_log(f"🔄 Bitunix 持倉同調: {rec['message']}")
-                                self.active_bot.position = rec["remote_position"]
+                                rpos = float(rec["remote_position"] or 0.0)
+                                self.active_bot.position = abs(rpos)
+                                self.active_bot.position_side = "LONG" if rpos > 0 else ("SHORT" if rpos < 0 else "FLAT")
+                                if self.active_bot.position_side == "FLAT":
+                                    self.active_bot.entry_price = 0.0
                             self._run_reconciliation_sync()
                         else:
                             self._run_reconciliation_sync()
@@ -1079,14 +1107,18 @@ class QuantAppContext:
                 rem_orders = (oo_fn(self.active_bot.symbol) or []) if callable(oo_fn) else []
                 rem_eq = float(bal.get("total_equity") or 0.0) if bal.get("total_equity") is not None else float(self.active_bot.balance_usdt)
 
-                # 將遠端持倉轉為正規化 map (例如 BTCUSDT -> BTC/USDT)
+                # 將遠端持倉轉為正規化 map (例如 BTCUSDT -> BTC/USDT)，同步保存 entry_price
                 remote_map: dict[str, float] = {}
+                remote_entry_map: dict[str, float] = {}
                 for rp in rem_pos:
                     nsym = _normalize_recon_symbol(str(rp.get("symbol", "")))
                     amt = float(rp.get("contracts", 0.0))
                     side = str(rp.get("side", "LONG")).upper()
                     if nsym and abs(amt) > 0:
                         remote_map[nsym] = amt if side == "LONG" else -amt
+                        ep = float(rp.get("entry_price", 0.0) or 0.0)
+                        if ep > 0:
+                            remote_entry_map[nsym] = ep
 
                 loc_pos: dict[str, float] = {}
                 for b in all_bots:
@@ -1100,7 +1132,12 @@ class QuantAppContext:
                         b._risk_capital_anchored = True
                     bsym = _normalize_recon_symbol(getattr(b, "symbol", "BTC/USDT"))
                     target_pos = remote_map.get(bsym, 0.0)
-                    b.position = target_pos
+                    b.position = abs(target_pos)
+                    b.position_side = "LONG" if target_pos > 0 else ("SHORT" if target_pos < 0 else "FLAT")
+                    if b.position_side == "FLAT":
+                        b.entry_price = 0.0
+                    elif bsym in remote_entry_map:
+                        b.entry_price = remote_entry_map[bsym]
                     if abs(target_pos) > 0:
                         loc_pos[bsym] = target_pos
 

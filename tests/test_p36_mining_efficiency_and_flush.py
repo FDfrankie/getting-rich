@@ -167,7 +167,8 @@ def test_p36_flush_daily_candidates_fast_skips_corr_clones_to_reach_diverse_alph
             return {"success": True, "alpha_id": aid, "status": "SUBMITTED"}
 
         client.submit_alpha = fake_submit  # type: ignore[method-assign]
-        res = client.flush_daily_candidates(day_str="2026-11-22", max_daily_submissions=2)
+        with patch.dict(os.environ, {"BRAIN_SUBMIT_ORDER": "best_first", "BRAIN_RESERVE_MIN_SHARPE": "99", "BRAIN_RESERVE_MIN_FITNESS": "99"}):
+            res = client.flush_daily_candidates(day_str="2026-11-22", max_daily_submissions=2)
 
         # CLONE1 fails SELF_CORRELATION -> CLONE2 & CLONE3 fast-skipped without API calls -> DIVERSE1 submitted!
         assert submitted_calls == ["CLONE1", "DIVERSE1"]

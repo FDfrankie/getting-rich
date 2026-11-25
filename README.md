@@ -23,6 +23,7 @@
 ├── Dockerfile                     # 🐳 輕量雲端容器封裝檔 (支援 24h 免電腦常駐)
 ├── render.yaml                    # ☁️ Render.com 一鍵自動部署設定
 ├── GEMINI.md                      # 📜 量化操盤與工程開發規範指南
+├── AI_MASTER_HANDOVER.md          # 🤖 AI 代理人總體交接與維運手冊 (架構/P0-P44/排錯)
 │
 ├── web_ui/                        # 📱 一體化響應式 Web APP 控制台 (手機/電腦通用)
 │   ├── app.py                     # 服務啟動入口

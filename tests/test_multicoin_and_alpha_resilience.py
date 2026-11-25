@@ -47,31 +47,39 @@ class TestMultiCoinAndAlphaResilience(unittest.TestCase):
         self.assertEqual(syms, ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
 
     def test_multicoin_bot_manager_executes_all_coins(self) -> None:
-        recon = ReconciliationService()
-        recon.reconcile(
-            local_positions={},
-            remote_positions=[],
-            local_orders=[],
-            remote_orders=[],
-            local_balance=10000.0,
-            remote_balance=10000.0,
-        )
-        mgr = MultiSymbolBotManager(
-            symbols=["BTC/USDT", "ETH/USDT", "SOL/USDT"],
-            strategy_factory=lambda _sym: _AlwaysBuyStrategy(),
-            exchange_adapter=None,
-            reconciliation_service=recon,
-        )
-        # Ensure each bot has reconciliation_service and deterministic synthetic data
-        with patch("crypto_trading.regime_filter.HierarchicalRegimeFilter.filter_micro_signal", return_value=1):
-            res = mgr.step_all()
-        self.assertEqual(set(res.keys()), {"BTC/USDT", "ETH/USDT", "SOL/USDT"})
-        for sym, info in res.items():
-            self.assertTrue(info["ok"], f"{sym} failed: {info}")
-            bot = mgr.get_bot(sym)
-            self.assertIsNotNone(bot)
-            self.assertGreater(bot.position, 0.0, f"{sym} did not open a position")
-            self.assertEqual(bot.position_side, "LONG")
+        from crypto_trading.order_manager import OrderManager
+        from data_persistence.gdrive_sync import LocalPersistenceService
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp_db = os.path.join(td, "test_state.db")
+            recon = ReconciliationService(order_manager=OrderManager(db_path=tmp_db))
+            recon.reconcile(
+                local_positions={},
+                remote_positions=[],
+                local_orders=[],
+                remote_orders=[],
+                local_balance=10000.0,
+                remote_balance=10000.0,
+            )
+            with (
+                patch("crypto_trading.bot_runner.OrderManager", side_effect=lambda *a, **kw: OrderManager(db_path=tmp_db)),
+                patch("crypto_trading.bot_runner.LocalPersistenceService", side_effect=lambda *a, **kw: LocalPersistenceService(db_path=tmp_db)),
+            ):
+                mgr = MultiSymbolBotManager(
+                    symbols=["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+                    strategy_factory=lambda _sym: _AlwaysBuyStrategy(),
+                    exchange_adapter=None,
+                    reconciliation_service=recon,
+                )
+                with patch("crypto_trading.regime_filter.HierarchicalRegimeFilter.filter_micro_signal", return_value=1):
+                    res = mgr.step_all()
+            self.assertEqual(set(res.keys()), {"BTC/USDT", "ETH/USDT", "SOL/USDT"})
+            for sym, info in res.items():
+                self.assertTrue(info["ok"], f"{sym} failed: {info}")
+                bot = mgr.get_bot(sym)
+                self.assertIsNotNone(bot)
+                self.assertGreater(bot.position, 0.0, f"{sym} did not open a position")
+                self.assertEqual(bot.position_side, "LONG")
 
     def test_sqlite_retry_recovers_from_transient_disk_io_error(self) -> None:
         with tempfile.TemporaryDirectory() as td:

@@ -694,6 +694,122 @@ class BrainClient:
         conn.execute(ddl)
         ensure_schema_from_ddl(conn, ddl)
 
+    @staticmethod
+    def _ensure_rejected_alphas_table(conn: Any) -> None:
+        ddl = (
+            "CREATE TABLE IF NOT EXISTS brain_rejected_alphas ("
+            "alpha_id TEXT PRIMARY KEY, "
+            "status TEXT NOT NULL DEFAULT 'FAILED_CHECKS', "
+            "reason TEXT NOT NULL DEFAULT '', "
+            "rejected_at TEXT NOT NULL)"
+        )
+        conn.execute(ddl)
+        ensure_schema_from_ddl(conn, ddl)
+
+    @classmethod
+    def _get_rejected_alpha_ids(cls, conn: Any) -> set[str]:
+        rejected: set[str] = set()
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "brain_rejected_alphas" in tables:
+            for r in conn.execute("SELECT alpha_id FROM brain_rejected_alphas").fetchall():
+                if r and r[0]:
+                    rejected.add(str(r[0]))
+        if "brain_candidate_pool" in tables:
+            for r in conn.execute(
+                "SELECT alpha_id FROM brain_candidate_pool "
+                "WHERE UPPER(status) IN ('FAILED_CORR', 'FAILED_CHECKS', 'SUBMIT_REJECTED')"
+            ).fetchall():
+                if r and r[0]:
+                    rejected.add(str(r[0]))
+        return rejected
+
+    def _record_submit_rejection_and_prune(self, alpha_id: str, status: str, reason: str = "") -> None:
+        """P43: Persist submit rejection and permanently prune alpha_id from qualified_alpha_archive & alphas."""
+        import sqlite3
+        from datetime import datetime, timezone
+
+        aid = str(alpha_id or "").strip()
+        if not aid:
+            return
+        db_p = self._quota_db()
+        os.makedirs(os.path.dirname(os.path.abspath(db_p)), exist_ok=True)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        conn = sqlite3.connect(db_p, timeout=10.0)
+        try:
+            with conn:
+                self._ensure_rejected_alphas_table(conn)
+                self._ensure_qualified_archive_table(conn)
+                conn.execute(
+                    "INSERT OR REPLACE INTO brain_rejected_alphas (alpha_id, status, reason, rejected_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (aid, str(status or "FAILED_CHECKS"), str(reason or "")[:500], now_iso),
+                )
+                tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+                if "brain_candidate_pool" in tables:
+                    conn.execute("UPDATE brain_candidate_pool SET status = ? WHERE alpha_id = ?", (str(status), aid))
+                conn.execute("DELETE FROM qualified_alpha_archive WHERE alpha_id = ?", (aid,))
+                if "alphas" in tables:
+                    conn.execute(
+                        "DELETE FROM alphas WHERE brain_alpha_id = ? OR name = ?",
+                        (aid, f"BRAIN_{aid}"),
+                    )
+        finally:
+            conn.close()
+
+    def _sync_vault_exports(self) -> None:
+        """P43: Auto-regenerate JSON vaults and unsubmitted backup .xlsx after submit/reject mutations."""
+        from pathlib import Path as _Path
+
+        db_p = self._quota_db()
+        explicit_xlsx = getattr(self, "vault_xlsx_path", None)
+        explicit_jsons = getattr(self, "vault_json_paths", None)
+
+        is_default_db = False
+        try:
+            from worldquant_brain.alpha_vault import AlphaVault
+            is_default_db = _Path(db_p).resolve() == _Path(AlphaVault.DEFAULT_DB_PATH).resolve()
+        except Exception:
+            is_default_db = False
+
+        if not is_default_db and explicit_xlsx is None and not explicit_jsons:
+            return
+
+        root_dir = _Path(__file__).resolve().parent.parent
+        json_targets: list[_Path] = []
+        if explicit_jsons:
+            json_targets = [_Path(p) for p in explicit_jsons]
+        elif is_default_db:
+            json_targets = [
+                root_dir / "observability" / "qualified_alpha_formulas_vault.json",
+                root_dir / "data_persistence" / "qualified_alpha_formulas_vault.json",
+            ]
+
+        xlsx_target: _Path | None = None
+        if explicit_xlsx is not None:
+            xlsx_target = _Path(explicit_xlsx)
+        elif is_default_db:
+            xlsx_target = root_dir / "BRAIN_官方知識庫與研究紀錄" / "worldquant_brain_qualified_alphas_latest.xlsx"
+
+        payload: dict[str, Any] | None = None
+        for jp in json_targets:
+            try:
+                payload = self.export_qualified_formula_vault(output_path=jp)
+            except Exception as exc:
+                logger.debug("P43 _sync_vault_exports JSON write failed (%s): %s", jp, exc)
+        if payload is None:
+            try:
+                payload = self.export_qualified_formula_vault()
+            except Exception as exc:
+                logger.debug("P43 _sync_vault_exports payload build failed: %s", exc)
+                return
+
+        if xlsx_target is not None:
+            try:
+                from scripts.backfill_brain_passed_alphas import export_vault_to_xlsx
+                export_vault_to_xlsx(payload, xlsx_target)
+            except Exception as exc:
+                logger.debug("P43 _sync_vault_exports XLSX write failed (%s): %s", xlsx_target, exc)
+
     def archive_qualified_alpha(
         self,
         alpha_id: str,
@@ -727,6 +843,10 @@ class BrainClient:
         try:
             with conn:
                 self._ensure_qualified_archive_table(conn)
+                if st_val.upper() != "SUBMITTED":
+                    rejected_ids = self._get_rejected_alpha_ids(conn)
+                    if str(alpha_id) in rejected_ids:
+                        return "REJECTED_SKIPPED"
                 existing = conn.execute(
                     "SELECT archived_at, submit_status, settings_json FROM qualified_alpha_archive WHERE alpha_id = ?",
                     (str(alpha_id),),
@@ -772,10 +892,12 @@ class BrainClient:
 
         db_p = self._quota_db()
         rows: list[dict[str, Any]] = []
+        rejected_ids: set[str] = set()
         if os.path.exists(db_p):
             conn = sqlite3.connect(db_p, timeout=10.0)
             conn.row_factory = sqlite3.Row
             try:
+                rejected_ids = self._get_rejected_alpha_ids(conn)
                 tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
                 if "qualified_alpha_archive" in tables:
                     for r in conn.execute(
@@ -790,12 +912,23 @@ class BrainClient:
             finally:
                 conn.close()
 
-        reserve = [r for r in rows if r.get("tier") == "CONSULTANT_RESERVE" and r.get("submit_status") != "SUBMITTED"]
+        excluded_unsub = {"SUBMITTED", "FAILED_CORR", "FAILED_CHECKS", "SUBMIT_REJECTED"}
+        reserve = [
+            r for r in rows
+            if r.get("tier") == "CONSULTANT_RESERVE"
+            and str(r.get("submit_status") or "").upper() not in excluded_unsub
+            and str(r.get("alpha_id") or "") not in rejected_ids
+        ]
         submittable = sorted(
-            [r for r in rows if r.get("tier") != "CONSULTANT_RESERVE" and r.get("submit_status") != "SUBMITTED"],
+            [
+                r for r in rows
+                if r.get("tier") != "CONSULTANT_RESERVE"
+                and str(r.get("submit_status") or "").upper() not in excluded_unsub
+                and str(r.get("alpha_id") or "") not in rejected_ids
+            ],
             key=lambda x: (float(x.get("fitness") or 0.0), float(x.get("sharpe") or 0.0)),
         )
-        submitted = [r for r in rows if r.get("submit_status") == "SUBMITTED"]
+        submitted = [r for r in rows if str(r.get("submit_status") or "").upper() == "SUBMITTED"]
 
         enabled, min_sh, min_fit = self._consultant_reserve_thresholds()
         now_utc = datetime.now(timezone.utc)
@@ -851,7 +984,21 @@ class BrainClient:
         submitted_archived = 0
         unsubmitted_archived = 0
         skipped_failed_checks = 0
+        skipped_rejected = 0
         pages_scanned = 0
+
+        import sqlite3
+        rejected_ids: set[str] = set()
+        db_p = self._quota_db()
+        if os.path.exists(db_p):
+            try:
+                _rc = sqlite3.connect(db_p, timeout=10.0)
+                try:
+                    rejected_ids = self._get_rejected_alpha_ids(_rc)
+                finally:
+                    _rc.close()
+            except Exception:
+                rejected_ids = set()
 
         scan_specs = [
             ("ACTIVE", {"status": "ACTIVE", "order": "-dateSubmitted"}),
@@ -915,10 +1062,13 @@ class BrainClient:
                                 sub_u_sh = float(val)
                         if str(ch.get("result") or "").upper() in ("FAIL", "FAILED", "ERROR"):
                             has_fail = True
+                    if status_tag == "UNSUBMITTED" and aid in rejected_ids:
+                        skipped_rejected += 1
+                        continue
                     if status_tag == "UNSUBMITTED" and has_fail:
                         skipped_failed_checks += 1
                         continue
-                    self.archive_qualified_alpha(
+                    arch_res = self.archive_qualified_alpha(
                         aid,
                         expr,
                         float(sh),
@@ -932,6 +1082,9 @@ class BrainClient:
                         submit_status="SUBMITTED" if status_tag == "ACTIVE" else None,
                         source="P42_FULL_BACKFILL_ACTIVE" if status_tag == "ACTIVE" else "P42_FULL_BACKFILL_UNSUBMITTED",
                     )
+                    if arch_res == "REJECTED_SKIPPED":
+                        skipped_rejected += 1
+                        continue
                     if status_tag == "ACTIVE":
                         submitted_archived += 1
                     else:
@@ -1035,39 +1188,47 @@ class BrainClient:
                         alpha_id, float(sharpe), float(fitness),
                     )
                     return "CONSULTANT_RESERVE"
-                _all_existing = conn.execute(
-                    "SELECT alpha_id, expression FROM brain_candidate_pool WHERE status IN ('PENDING', 'SUBMITTED')"
-                ).fetchall()
-                _existing_exprs = [{"alpha_id": str(r[0]), "expression": str(r[1])} for r in _all_existing if str(r[0]) != str(alpha_id)]
-                from worldquant_brain.alpha_novelty import find_duplicate
-                dup_chk = find_duplicate(expression, _existing_exprs)
-                if dup_chk.blocked:
-                    return "DUPLICATE_ARCHIVED"
-                from worldquant_brain.alpha_miner import extract_expression_skeleton
-                new_skel = extract_expression_skeleton(expression)
-                existing_rows = conn.execute("SELECT alpha_id, expression, score FROM brain_candidate_pool WHERE candidate_date = ? AND status = 'PENDING'", (day,)).fetchall()
                 worst_first = self._submit_order_mode() == "worst_first"
-                skip_clone = False
-                for er in existing_rows:
-                    if extract_expression_skeleton(er[1]) == new_skel and er[0] != str(alpha_id):
-                        if worst_first:
-                            # Keep the lower-scoring qualifying clone for Bronze submission (both remain archived)
-                            if float(er[2]) <= float(score):
-                                skip_clone = True
-                                break
-                            else:
-                                conn.execute("DELETE FROM brain_candidate_pool WHERE alpha_id = ?", (er[0],))
-                        else:
+                if worst_first:
+                    # P43: In Bronze worst_first mode, only block exact_hash match to already-SUBMITTED alphas;
+                    # allow structural/parameter clones into brain_candidate_pool so Bronze quota tests them first.
+                    _sub_rows = conn.execute(
+                        "SELECT alpha_id, expression FROM brain_candidate_pool WHERE UPPER(status) = 'SUBMITTED'"
+                    ).fetchall()
+                    from worldquant_brain.alpha_novelty import fingerprint as _fp_fn
+                    _new_fp = _fp_fn(expression)
+                    for sr in _sub_rows:
+                        if str(sr[0]) != str(alpha_id) and _fp_fn(str(sr[1])).exact_hash == _new_fp.exact_hash:
+                            return "DUPLICATE_ARCHIVED"
+                    conn.execute(
+                        "INSERT OR REPLACE INTO brain_candidate_pool (alpha_id, expression, sharpe, fitness, turnover, margin, score, candidate_date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)",
+                        (str(alpha_id), str(expression), float(sharpe), float(fitness), float(turnover), float(margin), score, day, now_iso),
+                    )
+                else:
+                    _all_existing = conn.execute(
+                        "SELECT alpha_id, expression FROM brain_candidate_pool WHERE status IN ('PENDING', 'SUBMITTED')"
+                    ).fetchall()
+                    _existing_exprs = [{"alpha_id": str(r[0]), "expression": str(r[1])} for r in _all_existing if str(r[0]) != str(alpha_id)]
+                    from worldquant_brain.alpha_novelty import find_duplicate
+                    dup_chk = find_duplicate(expression, _existing_exprs)
+                    if dup_chk.blocked:
+                        return "DUPLICATE_ARCHIVED"
+                    from worldquant_brain.alpha_miner import extract_expression_skeleton
+                    new_skel = extract_expression_skeleton(expression)
+                    existing_rows = conn.execute("SELECT alpha_id, expression, score FROM brain_candidate_pool WHERE candidate_date = ? AND status = 'PENDING'", (day,)).fetchall()
+                    skip_clone = False
+                    for er in existing_rows:
+                        if extract_expression_skeleton(er[1]) == new_skel and er[0] != str(alpha_id):
                             if float(er[2]) >= float(score):
                                 skip_clone = True
                                 break
                             else:
                                 conn.execute("DELETE FROM brain_candidate_pool WHERE alpha_id = ?", (er[0],))
-                if not skip_clone:
-                    conn.execute(
-                        "INSERT OR REPLACE INTO brain_candidate_pool (alpha_id, expression, sharpe, fitness, turnover, margin, score, candidate_date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)",
-                        (str(alpha_id), str(expression), float(sharpe), float(fitness), float(turnover), float(margin), score, day, now_iso),
-                    )
+                    if not skip_clone:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO brain_candidate_pool (alpha_id, expression, sharpe, fitness, turnover, margin, score, candidate_date, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)",
+                            (str(alpha_id), str(expression), float(sharpe), float(fitness), float(turnover), float(margin), score, day, now_iso),
+                        )
         finally:
             conn.close()
         return pool_status
@@ -1098,6 +1259,7 @@ class BrainClient:
         ] if worst_first else [("-is.fitness", True)]
 
         existing_ids: set[str] = set()
+        rejected_ids: set[str] = set()
         db_p = self._quota_db()
         if os.path.exists(db_p):
             try:
@@ -1106,6 +1268,7 @@ class BrainClient:
                     "CREATE TABLE IF NOT EXISTS brain_candidate_pool (alpha_id TEXT PRIMARY KEY, expression TEXT NOT NULL, sharpe REAL NOT NULL, fitness REAL NOT NULL, turnover REAL NOT NULL, margin REAL NOT NULL, score REAL NOT NULL, candidate_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL)"
                 )
                 existing_ids = {str(r[0]) for r in c.execute("SELECT alpha_id FROM brain_candidate_pool").fetchall()}
+                rejected_ids = self._get_rejected_alpha_ids(c)
                 c.close()
             except Exception:
                 pass
@@ -1171,7 +1334,7 @@ class BrainClient:
                 if not isinstance(item, dict):
                     continue
                 aid = str(item.get("id") or "").strip()
-                if not aid:
+                if not aid or aid in rejected_ids:
                     continue
                 is_blk = item.get("is") if isinstance(item.get("is"), dict) else {}
                 sett = item.get("settings") if isinstance(item.get("settings"), dict) else {}
@@ -1318,6 +1481,20 @@ class BrainClient:
                 f"SELECT alpha_id, expression, score, sharpe, fitness, turnover, margin FROM brain_candidate_pool WHERE candidate_date <= ? AND status = 'PENDING' {order_sql}",
                 (day,),
             ).fetchall()
+            _ref_rows: list[tuple[str, str, float, float, str]] = []
+            for rr in conn.execute(
+                "SELECT alpha_id, expression, sharpe, score, status FROM brain_candidate_pool "
+                "WHERE UPPER(status) IN ('PENDING', 'SUBMITTED', 'CONSULTANT_RESERVE')"
+            ).fetchall():
+                _ref_rows.append((str(rr[0]), str(rr[1] or ""), float(rr[2] or 0.0), float(rr[3] or 0.0), str(rr[4] or "").upper()))
+            _seen_ref_ids = {x[0] for x in _ref_rows}
+            for ar in conn.execute(
+                "SELECT alpha_id, expression, sharpe, submit_status FROM qualified_alpha_archive"
+            ).fetchall():
+                _a_id = str(ar[0])
+                if _a_id not in _seen_ref_ids:
+                    _ref_rows.append((_a_id, str(ar[1] or ""), float(ar[2] or 0.0), 0.0, str(ar[3] or "").upper()))
+                    _seen_ref_ids.add(_a_id)
             from worldquant_brain.alpha_miner import extract_expression_skeleton
             rows = list(all_pending)
             conn.commit()
@@ -1352,10 +1529,51 @@ class BrainClient:
             else:
                 eligible_rows.append(row)
 
+        # P43: In Bronze worst_first mode, prioritize likely-duplicate / redundant clones FIRST,
+        # ordered by (dup_priority DESC, fitness ASC, sharpe ASC, score ASC).
+        if order_mode == "worst_first" and len(eligible_rows) > 1:
+            from worldquant_brain.alpha_novelty import fingerprint as _fp_fn, near_duplicate_score as _sim_fn
+
+            skel_counts: dict[str, int] = {}
+            ref_fps: list[tuple[str, Any, float, float, str]] = []
+            for r_id, r_expr, r_sh, r_sc, r_st in _ref_rows:
+                sk = extract_expression_skeleton(r_expr)
+                if sk:
+                    skel_counts[sk] = skel_counts.get(sk, 0) + 1
+                try:
+                    ref_fps.append((r_id, _fp_fn(r_expr), r_sh, r_sc, r_st))
+                except Exception:
+                    pass
+
+            def _bronze_sort_key(row_item: Any) -> tuple[int, float, float, float]:
+                aid_k = str(row_item["alpha_id"])
+                expr_k = str(row_item["expression"] or "")
+                fit_k = float(row_item["fitness"] or 0.0)
+                sh_k = float(row_item["sharpe"] or 0.0)
+                sc_k = float(row_item["score"] or 0.0)
+                sk_k = extract_expression_skeleton(expr_k)
+                dup_prio = 1 if (sk_k and skel_counts.get(sk_k, 0) >= 2) else 0
+                if dup_prio == 0:
+                    try:
+                        fp_k = _fp_fn(expr_k)
+                        for r_id, r_fp, r_sh, r_sc, r_st in ref_fps:
+                            if r_id == aid_k:
+                                continue
+                            is_sub_or_higher = (r_st == "SUBMITTED") or (r_sh > sh_k) or (r_sc > sc_k)
+                            if is_sub_or_higher and _sim_fn(fp_k, r_fp) >= 0.70:
+                                dup_prio = 1
+                                break
+                    except Exception:
+                        pass
+                return (-dup_prio, fit_k, sh_k, sc_k)
+
+            eligible_rows.sort(key=_bronze_sort_key)
+
         results: list[dict[str, Any]] = []
         submitted_count = 0
         submitted_skels: set[str] = set()
         failed_corr_skels: set[str] = set()
+        mutated = False
         for row in eligible_rows:
             if submitted_count >= remaining:
                 break
@@ -1389,12 +1607,10 @@ class BrainClient:
             if skel in submitted_skels:
                 continue  # Skip same skeleton only AFTER a sibling succeeded this round
             if skel and skel in failed_corr_skels:
-                # P36: Fast-skip clones whose structural skeleton already failed SELF_CORRELATION this round
+                # P36 + P43: Fast-skip clones whose structural skeleton already failed SELF_CORRELATION and prune from backup
                 try:
-                    c_skip = sqlite3.connect(db_p, timeout=10.0)
-                    c_skip.execute("UPDATE brain_candidate_pool SET status = 'FAILED_CORR' WHERE alpha_id = ?", (aid,))
-                    c_skip.commit()
-                    c_skip.close()
+                    self._record_submit_rejection_and_prune(aid, "FAILED_CORR", "SKELETON_SELF_CORR_CLONE")
+                    mutated = True
                 except Exception as _skip_exc:
                     logger.debug("Could not mark clone FAILED_CORR for %s: %s", aid, _skip_exc)
                 continue
@@ -1409,6 +1625,7 @@ class BrainClient:
             if res.get("success"):
                 submitted_count += 1
                 submitted_skels.add(skel)
+                mutated = True
                 try:
                     c_ok = sqlite3.connect(db_p, timeout=10.0)
                     c_ok.execute("UPDATE brain_candidate_pool SET status = 'SUBMITTED' WHERE alpha_id = ?", (aid,))
@@ -1428,17 +1645,13 @@ class BrainClient:
                 if is_corr and skel:
                     failed_corr_skels.add(skel)
                 new_status = "FAILED_CORR" if is_corr else "FAILED_CHECKS"
+                mutated = True
                 try:
-                    c2 = sqlite3.connect(db_p, timeout=10.0)
-                    c2.execute("UPDATE brain_candidate_pool SET status = ? WHERE alpha_id = ?", (new_status, aid))
-                    c2.execute(
-                        "UPDATE qualified_alpha_archive SET submit_status = ?, updated_at = ? WHERE alpha_id = ?",
-                        (new_status, now_iso, aid),
-                    )
-                    c2.commit()
-                    c2.close()
+                    self._record_submit_rejection_and_prune(aid, new_status, str(res.get("error") or status_val))
                 except Exception as _silent_exc:
                     logger.debug("worldquant_brain/brain_client.py:L565 suppressed exception: %s", _silent_exc)
+        if mutated:
+            self._sync_vault_exports()
         return results
 
     def fetch_self_correlation(self, alpha_id: str, max_polls: int = 5) -> dict[str, Any]:

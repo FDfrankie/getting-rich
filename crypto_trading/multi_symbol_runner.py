@@ -130,9 +130,10 @@ class MultiSymbolBotManager:
         results: dict[str, dict[str, Any]] = {}
         for sym, bot in self.bots.items():
             try:
+                approved_notional: float | None = None
                 is_flat = getattr(bot, "position_side", "FLAT") == "FLAT"
                 if is_flat:
-                    est_notional = max(10.0, float(getattr(bot, "balance_usdt", 0.0) or 0.0) * 0.25)
+                    est_notional = max(10.0, float(getattr(bot, "balance_usdt", 0.0) or 0.0) / max(1, len(self.bots)))
                     gate = self.evaluate_portfolio_gate(sym, requested_notional_usdt=est_notional, is_reduce_only=False)
                     if not gate.allowed:
                         results[sym] = {
@@ -145,7 +146,8 @@ class MultiSymbolBotManager:
                             "balance_usdt": float(bot.balance_usdt),
                         }
                         continue
-                bot.step()
+                    approved_notional = float(gate.approved_notional_usdt)
+                bot.step(max_notional_usdt=approved_notional)
                 results[sym] = {
                     "ok": True,
                     "symbol": sym,
@@ -165,6 +167,8 @@ class MultiSymbolBotManager:
         summary: list[dict[str, Any]] = []
         for sym, bot in self.bots.items():
             spec = get_instrument_spec(sym)
+            mark_px = float(getattr(bot, "last_price", 0.0) or getattr(bot, "entry_price", 0.0) or 0.0)
+            eq_val = float(bot.get_equity(mark_px)) if mark_px > 0 and hasattr(bot, "get_equity") else float(bot.balance_usdt)
             summary.append({
                 "symbol": sym,
                 "venue_symbol": spec.venue_symbol,
@@ -172,7 +176,9 @@ class MultiSymbolBotManager:
                 "price_tick": str(spec.price_tick),
                 "position": float(bot.position),
                 "position_side": bot.position_side,
+                "entry_price": float(getattr(bot, "entry_price", 0.0) or 0.0),
                 "balance_usdt": float(bot.balance_usdt),
+                "equity_usdt": round(eq_val, 4),
                 "strategy": type(bot.strategy).__name__,
             })
         return summary

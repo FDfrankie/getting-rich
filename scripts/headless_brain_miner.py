@@ -158,6 +158,21 @@ def sync_vault_snapshot_to_drive(
                 int((_vault_exp.get("summary") or {}).get("consultant_reserve_count", 0)),
             )
             out["formula_vault_written"] = True
+            if status_json_path is None:
+                obs_vault_json = BASE_DIR / "observability" / "qualified_alpha_formulas_vault.json"
+                if obs_vault_json.parent.exists():
+                    _exp_client.export_qualified_formula_vault(output_path=obs_vault_json)
+            xlsx_out = (
+                (Path(status_json_path).parent / "worldquant_brain_qualified_alphas_latest.xlsx")
+                if status_json_path is not None
+                else (BASE_DIR / "BRAIN_官方知識庫與研究紀錄" / "worldquant_brain_qualified_alphas_latest.xlsx")
+            )
+            try:
+                from scripts.backfill_brain_passed_alphas import export_vault_to_xlsx
+                export_vault_to_xlsx(_vault_exp, xlsx_out)
+                out["xlsx_written"] = True
+            except Exception as _xexc:
+                print(f"[DRIVE_SYNC_WARN] Backup XLSX export failed: {_xexc}")
         finally:
             _exp_client._quota_db = _orig_quota_db
     except Exception as _vexc:

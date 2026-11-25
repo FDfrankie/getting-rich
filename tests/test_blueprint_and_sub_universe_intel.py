@@ -20,9 +20,10 @@ class TestBlueprintAndSubUniverseIntel(unittest.TestCase):
         ids = {bp.blueprint_id for bp in bps}
         self.assertIn("ANALYST_REVISION_001", ids)
         self.assertIn("FUNDAMENTAL_QUALITY_001", ids)
-        self.assertIn("SENTIMENT_ATTENTION_001", ids)
-        self.assertIn("OPTIONS_SKEW_001", ids)
-        self.assertIn("LIQUIDITY_REVERSION_001", ids)
+        self.assertIn("EARNINGS_SURPRISE_001", ids)
+        self.assertIn("VOLATILITY_SKEW_001", ids)
+        self.assertIn("LIQUIDITY_MICROSTRUCTURE_001", ids)
+        self.assertIn("ORTHOGONAL_RESIDUAL_001", ids)
 
         for bp in bps:
             errs = bp.validate()

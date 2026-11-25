@@ -69,6 +69,9 @@ def test_verify_alpha_accepts_752bps_P05o9gqw_and_rejects_101pct_turnover(monkey
 def test_harvest_unsubmitted_candidates_stages_qualified_and_skips_failed(tmp_path, monkeypatch):
     monkeypatch.setenv("BRAIN_DB_PATH", str(tmp_path / "vault.db"))
     monkeypatch.delenv("BRAIN_MIN_MARGIN", raising=False)
+    monkeypatch.setenv("BRAIN_RESERVE_MIN_SHARPE", "99")
+    monkeypatch.setenv("BRAIN_RESERVE_MIN_FITNESS", "99")
+    monkeypatch.setenv("BRAIN_SUBMIT_ORDER", "best_first")
     from worldquant_brain.brain_client import BrainClient
 
     sess = _FakeSession({

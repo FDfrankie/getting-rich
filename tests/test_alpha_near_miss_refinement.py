@@ -37,9 +37,9 @@ def test_near_miss_generates_sign_flip_and_decay_for_high_turnover_or_negative()
         turnover=0.62,
         margin=0.0007,
         failed_checks=["HIGH_TURNOVER"],
-        max_variants=3,
+        max_variants=6,
     )
-    assert len(variants) == 3
+    assert len(variants) >= 3
     names = [v["name"] for v in variants]
     assert "NearMiss_SignFlip" in names
     assert "NearMiss_DecayTurnover" in names

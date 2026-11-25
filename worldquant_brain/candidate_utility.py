@@ -211,10 +211,12 @@ def evaluate_candidate(candidate: Mapping[str, Any]) -> UtilityResult:
     is_failed = str(candidate.get("is_check_status") or "").upper() in {"FAIL", "FAILED", "ERROR"}
     eligible = not (duplicate_expression or already_submitted or has_blocking_corr or is_failed)
 
-    if not eligible:
+    if duplicate_expression or already_submitted or is_failed:
         decision = "REJECT_DUPLICATE"
     elif max_corr is not None and abs(max_corr) >= 0.90:
         decision = "NEAR_MISS_CORRELATION"
+    elif not eligible:
+        decision = "REJECT_DUPLICATE"
     elif missing_is_penalty > 0:
         decision = "WAIT_FOR_IS_CHECK"
     elif final_utility >= 70:

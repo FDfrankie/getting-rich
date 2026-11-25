@@ -332,26 +332,35 @@ class RiskManager:
             reasons.append("Exchange connectivity is offline")
 
         # 7. 名義金額、Tick、Step 與持倉限額
-        notional = amount * price
+        import math
+        if not math.isfinite(float(amount)) or float(amount) <= 0.0:
+            reasons.append(f"INVALID_QUANTITY: Amount {amount} must be strictly positive")
+        if not math.isfinite(float(price)) or float(price) <= 0.0:
+            reasons.append(f"INVALID_PRICE: Price {price} must be strictly positive")
+
+        notional = float(amount) * float(price)
         min_not = ctx.get("min_notional", self.min_notional)
         if notional < min_not:
             reasons.append(f"Notional value {notional:.2f} < minimum required {min_not:.2f}")
 
+        min_qty = float(ctx.get("min_quantity", 0.0) or 0.0)
         step_size = ctx.get("step_size", 0.001)
-        if step_size > 0:
+        if step_size > 0 and math.isfinite(float(amount)) and float(amount) > 0.0:
             from decimal import Decimal, ROUND_DOWN
             d_amt = Decimal(str(amount))
             d_step = Decimal(str(step_size))
             if ctx.get("auto_quantize_step", True):
                 q_amt = float((d_amt / d_step).to_integral_value(rounding=ROUND_DOWN) * d_step)
-                if q_amt <= 0:
-                    reasons.append(f"Amount {amount} quantizes to 0 under step_size {step_size}")
+                if q_amt <= 0 or (min_qty > 0 and q_amt < min_qty):
+                    reasons.append(f"INVALID_QUANTITY: Amount {amount} quantizes to {q_amt} under step_size {step_size}")
                 else:
                     amount = q_amt
             else:
                 rem = d_amt % d_step
                 if rem != Decimal("0"):
                     reasons.append(f"Amount {amount} violates step_size {step_size}")
+                if min_qty > 0 and float(amount) < min_qty:
+                    reasons.append(f"INVALID_QUANTITY: Amount {amount} < min_quantity {min_qty}")
 
         tick_size = ctx.get("tick_size", 0.01)
         if tick_size > 0:
@@ -384,8 +393,18 @@ class RiskManager:
 
         # 若有違規理由，檢查是否為減倉 / 平倉
         if is_reduce_only:
-            # 只要不是 DB 寫入失敗或連線全斷，減倉原則上放行
-            critical_blockers = [r for r in reasons if "Database write probe" in r or "Exchange connectivity" in r]
+            # DB 寫入失敗、連線全斷、或無效數量/價格（防 -4003）永不放行
+            critical_blockers = [
+                r
+                for r in reasons
+                if (
+                    "Database write probe" in r
+                    or "Exchange connectivity" in r
+                    or "INVALID_QUANTITY" in r
+                    or "INVALID_PRICE" in r
+                    or "quantizes to 0" in r
+                )
+            ]
             if critical_blockers:
                 return RiskDecision(
                     action=DecisionAction.REJECT,

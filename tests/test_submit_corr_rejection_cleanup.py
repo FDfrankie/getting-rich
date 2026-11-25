@@ -122,7 +122,7 @@ class TestSubmitCorrRejectionCleanup(unittest.TestCase):
             fitness=1.15,
             turnover=0.22,
             failed_checks=["SELF_CORRELATION_FAIL"],
-            max_variants=3,
+            max_variants=6,
         )
         self.assertTrue(len(corr_variants) >= 2)
         self.assertTrue(any("ts_regression(" in v["expression"] for v in corr_variants))

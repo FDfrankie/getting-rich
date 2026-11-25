@@ -309,10 +309,35 @@ class TaiwanStockMLRanker:
     def predict_rankings(self, stock_data_map: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         if self.model is None:
             raise RuntimeError("請先呼叫 train_model()")
-        rows = []
+        panels: list[pd.DataFrame] = []
         for symbol, raw in stock_data_map.items():
+            if raw is None or raw.empty:
+                continue
             feat = self.extract_features(raw)
-            valid = feat.dropna(subset=self.feature_cols)
+            feat["symbol"] = str(symbol)
+            panels.append(feat)
+        if not panels:
+            return pd.DataFrame(
+                columns=["symbol", "current_price", "predicted_fwd_5d_ret_pct", "bias_ma20", "rsi_14", "rank"]
+            )
+        combined = pd.concat(panels, axis=0, sort=False).sort_index(kind="mergesort")
+        for col in (
+            "mom_20d",
+            "hist_vol_20",
+            "vol_surge",
+            "fip_20d",
+            "rev_yoy_pct",
+            "total_inst_net_shares",
+            "margin_change_lots",
+            "smart_institutional_lots",
+            "smart_inst_5d_sum",
+        ):
+            if col in combined.columns:
+                combined[f"cs_rank_{col}"] = combined.groupby(level=0)[col].rank(pct=True)
+
+        rows = []
+        for symbol, grp in combined.groupby("symbol", sort=False):
+            valid = grp.dropna(subset=self.feature_cols)
             if valid.empty:
                 continue
             latest = valid.iloc[-1]

@@ -59,7 +59,7 @@ def build_pnl_snapshot(
         bal = float(row.get("balance_usdt") or 0.0)
         pos = float(row.get("position") or 0.0)
         entry = float(row.get("entry_price") or 0.0)
-        eq = float(row.get("equity_usdt") or (bal + (pos * entry if pos > 0 else 0.0)))
+        eq = float(row["equity_usdt"]) if row.get("equity_usdt") is not None else bal
         total_equity += eq
         per_symbol.append(
             {

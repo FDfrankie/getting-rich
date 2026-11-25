@@ -49,19 +49,22 @@ class TestAlphaDiversityUpgrade(unittest.TestCase):
         self.assertGreaterEqual(len(skeletons), 7)
 
     def test_candidate_pool_deduplicates_structural_clones(self):
+        import os
+        from unittest.mock import patch
         db_file = str(pathlib.Path(tempfile.mkdtemp()) / "pool.db")
         bc = BrainClient(email="test@example.com", password="secret")
         bc.quota_db_path = db_file
-        bc.stage_candidate_for_daily_selection(
-            "A1",
-            "ts_decay_linear(group_neutralize(rank(debt / (abs(equity) + 0.001)), industry), 5)",
-            1.28, 1.05, 0.025, 0.002, day_str="2026-11-19",
-        )
-        bc.stage_candidate_for_daily_selection(
-            "A2",
-            "ts_decay_linear(ts_decay_linear(group_neutralize(rank(debt / (abs(equity) + 0.001)), industry), 3), 12)",
-            1.37, 1.22, 0.020, 0.002, day_str="2026-11-19",
-        )
+        with patch.dict(os.environ, {"BRAIN_SUBMIT_ORDER": "best_first", "BRAIN_RESERVE_MIN_SHARPE": "99", "BRAIN_RESERVE_MIN_FITNESS": "99"}):
+            bc.stage_candidate_for_daily_selection(
+                "A1",
+                "ts_decay_linear(group_neutralize(rank(debt / (abs(equity) + 0.001)), industry), 5)",
+                1.28, 1.05, 0.025, 0.002, day_str="2026-11-19",
+            )
+            bc.stage_candidate_for_daily_selection(
+                "A2",
+                "ts_decay_linear(ts_decay_linear(group_neutralize(rank(debt / (abs(equity) + 0.001)), industry), 3), 12)",
+                1.37, 1.22, 0.020, 0.002, day_str="2026-11-19",
+            )
         conn = sqlite3.connect(db_file)
         rows = conn.execute("SELECT alpha_id, sharpe FROM brain_candidate_pool").fetchall()
         conn.close()
@@ -130,26 +133,28 @@ class TestAlphaDiversityUpgrade(unittest.TestCase):
         self.assertEqual(q.queue_depth(), 1)
 
     def test_cross_day_flush_deduplicates_and_submits_yesterday_pending(self):
+        import os
         from unittest.mock import patch
         db_file = str(pathlib.Path(tempfile.mkdtemp()) / "cross_day.db")
         bc = BrainClient(email="test@example.com", password="secret")
         bc.quota_db_path = db_file
         bc.authenticated = True
-        bc.stage_candidate_for_daily_selection("YEST_TOP", "group_neutralize(rank(debt / (abs(equity) + 0.001)), industry)", 1.36, 1.21, 0.022, 0.002, day_str="2026-11-18")
-        # Force insert a second clone from yesterday with lower score
-        conn = sqlite3.connect(db_file)
-        conn.execute(
-            "INSERT INTO brain_candidate_pool VALUES ('YEST_CLONE', 'ts_decay_linear(group_neutralize(rank(debt / (abs(equity) + 0.001)), industry), 5)', 1.28, 1.05, 0.025, 0.002, 1.80, '2026-11-18', 'PENDING', '2026-11-18T02:00:00Z')"
-        )
-        conn.commit()
-        conn.close()
+        with patch.dict(os.environ, {"BRAIN_SUBMIT_ORDER": "best_first", "BRAIN_RESERVE_MIN_SHARPE": "99", "BRAIN_RESERVE_MIN_FITNESS": "99"}):
+            bc.stage_candidate_for_daily_selection("YEST_TOP", "group_neutralize(rank(debt / (abs(equity) + 0.001)), industry)", 1.36, 1.21, 0.022, 0.002, day_str="2026-11-18")
+            # Force insert a second clone from yesterday with lower score
+            conn = sqlite3.connect(db_file)
+            conn.execute(
+                "INSERT INTO brain_candidate_pool VALUES ('YEST_CLONE', 'ts_decay_linear(group_neutralize(rank(debt / (abs(equity) + 0.001)), industry), 5)', 1.28, 1.05, 0.025, 0.002, 1.80, '2026-11-18', 'PENDING', '2026-11-18T02:00:00Z')"
+            )
+            conn.commit()
+            conn.close()
 
-        def fake_sub(alpha_id, max_daily_submissions=2, enforce_checks=True, day_str=None):
-            bc._record_daily_submission(alpha_id, day_str=day_str)
-            return {"success": True, "status": "SUBMITTED", "alpha_id": alpha_id}
+            def fake_sub(alpha_id, max_daily_submissions=2, enforce_checks=True, day_str=None):
+                bc._record_daily_submission(alpha_id, day_str=day_str)
+                return {"success": True, "status": "SUBMITTED", "alpha_id": alpha_id}
 
-        with patch.object(bc, "submit_alpha", side_effect=fake_sub):
-            res = bc.flush_daily_candidates(day_str="2026-11-19", max_daily_submissions=2)
+            with patch.object(bc, "submit_alpha", side_effect=fake_sub):
+                res = bc.flush_daily_candidates(day_str="2026-11-19", max_daily_submissions=2)
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0]["alpha_id"], "YEST_TOP")
 
