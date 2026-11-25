@@ -67,3 +67,7 @@
 1. 離線測試（不觸發真實下單或真實 BRAIN Submit）：
    `python -m unittest tests.test_novelty_and_survey tests.test_antigravity_enhancements tests.test_multicoin_and_alpha_resilience tests.test_all_5_improvements tests.test_submit_corr_rejection_cleanup tests.test_local_cs_screener tests.test_alpha_yield_booster tests.test_objective_aware_integration tests.test_alpha_improvement_priority_and_dsr tests.test_iqc_scoring tests.test_iqc_scoring_boundaries tests.test_iqc_scoring_properties tests.test_iqc_api_contract tests.test_pnl_jump_scoring tests.test_correlation_semantics tests.test_neutralization -v`
 2. 嚴禁將 `.env`、`*.db*`、`*.pkl` 納入版本控制。
+3. **Windows 腳本與排程規範**：
+   - 撰寫 `.bat` 批次檔時一律維持純 ASCII（中文邏輯與字串移至 UTF-8 BOM `.ps1` 或以 Unicode 碼點表示），避免 CP950/UTF-8 解析亂碼。
+   - 重啟 `Quant_BrainMiner` 排程前，必須先清理殘留之 `headless_brain_miner` Python 子行程，再執行 `Start-ScheduledTask`，確保單一實例維持 `Running`。
+   - Git 提交一律明確指定檔案路徑，嚴禁 `git add -A` 或 `git add .`。
