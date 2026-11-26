@@ -124,6 +124,11 @@ def run_headless_crypto(
             trading_mode=mode_str,
         )
         _atomic_write_json(out_path, last_snap)
+        try:
+            from scripts.export_crypto_pnl_to_drive import export_crypto_pnl_to_drive
+            export_crypto_pnl_to_drive()
+        except Exception as _exp_exc:
+            print(f"[CRYPTO_PNL_EXPORT_WARN] {_exp_exc}")
         sign = "+" if last_snap["pnl_usdt"] >= 0 else ""
         print(
             f"[CRYPTO_PNL] cycle={cycle} mode={mode_str} "

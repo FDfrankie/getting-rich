@@ -1,4 +1,4 @@
-﻿# Byte-compiled / optimized / DLL files
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *.pyc
@@ -121,3 +121,5 @@ data_persistence/brain_pending_status.json
 data_persistence/qualified_alpha_formulas_vault.json
 observability/qualified_alpha_formulas_vault.json
 geminiprompt_coord.txt
+data_persistence/crypto_pnl_status.json
+data_persistence/CRYPTO_PNL_DASHBOARD.md
