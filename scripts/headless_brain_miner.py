@@ -161,7 +161,16 @@ def sync_vault_snapshot_to_drive(
             if status_json_path is None:
                 obs_vault_json = BASE_DIR / "observability" / "qualified_alpha_formulas_vault.json"
                 if obs_vault_json.parent.exists():
-                    _exp_client.export_qualified_formula_vault(output_path=obs_vault_json)
+                    _obs_tmp = obs_vault_json.parent / f".{obs_vault_json.name}.{os.getpid()}.tmp"
+                    try:
+                        _obs_tmp.write_text(json.dumps(_vault_exp, ensure_ascii=False, indent=2), encoding="utf-8")
+                        os.replace(_obs_tmp, obs_vault_json)
+                    finally:
+                        if _obs_tmp.exists():
+                            try:
+                                _obs_tmp.unlink()
+                            except Exception:
+                                pass
             xlsx_out = (
                 (Path(status_json_path).parent / "worldquant_brain_qualified_alphas_latest.xlsx")
                 if status_json_path is not None
@@ -195,9 +204,16 @@ def sync_vault_snapshot_to_drive(
     status_path = Path(status_json_path) if status_json_path is not None else (BASE_DIR / "data_persistence" / "brain_pending_status.json")
     try:
         status_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_json = status_path.parent / f".{status_path.name}.tmp"
-        tmp_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp_json, status_path)
+        tmp_json = status_path.parent / f".{status_path.name}.{os.getpid()}.tmp"
+        try:
+            tmp_json.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp_json, status_path)
+        finally:
+            if tmp_json.exists():
+                try:
+                    tmp_json.unlink()
+                except Exception:
+                    pass
         out["status_written"] = True
         out["pending_count"] = len(pending_alphas)
     except Exception as exc:
@@ -220,6 +236,11 @@ def run_headless_miner(
 
     Pass duration_minutes=0 for continuous 24/7 daemon mode.
     """
+    print(
+        f"[MINER_BOOT] pid={os.getpid()} started_utc={datetime.now(timezone.utc).isoformat()} "
+        f"workers={num_workers} batch_size={batch_size} duration_min={duration_minutes}",
+        flush=True,
+    )
     vault = AlphaVault(str(vault_db_path)) if vault_db_path else AlphaVault()
     client = brain_client or BrainClient()
     stats = {

@@ -947,6 +947,7 @@ class BrainClient:
                 "consultant_reserve_count": len(reserve),
                 "bronze_submittable_count": len(submittable),
                 "submitted_count": len(submitted),
+                "rejected_or_excluded_count": max(0, len(rows) - len(reserve) - len(submittable) - len(submitted)),
             },
             "consultant_reserve": reserve,
             "bronze_submittable_worst_first": submittable,
@@ -955,9 +956,16 @@ class BrainClient:
         if output_path is not None:
             out_p = _Path(output_path)
             out_p.parent.mkdir(parents=True, exist_ok=True)
-            tmp_p = out_p.parent / f".{out_p.name}.tmp"
-            tmp_p.write_text(_json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(tmp_p, out_p)
+            tmp_p = out_p.parent / f".{out_p.name}.{os.getpid()}.tmp"
+            try:
+                tmp_p.write_text(_json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                os.replace(tmp_p, out_p)
+            finally:
+                if tmp_p.exists():
+                    try:
+                        tmp_p.unlink()
+                    except Exception:
+                        pass
         return payload
 
 

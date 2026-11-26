@@ -269,11 +269,23 @@ class AlphaVault:
         return deleted
 
     def export_to_json(self, file_path: str | None = None) -> str:
-        """將倉庫 Alpha 導出為標準 JSON"""
+        """將倉庫 Alpha 原子性導出為標準 JSON（防 Drive 同步讀到半寫入殘檔）"""
         target = file_path or self.DEFAULT_EXPORT_JSON
         alphas = self.list_alphas()
-        with open(target, "w", encoding="utf-8") as f:
-            json.dump(alphas, f, indent=2, ensure_ascii=False)
+        parent = os.path.dirname(os.path.abspath(target))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp_path = os.path.join(parent, f".{os.path.basename(target)}.{os.getpid()}.tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(alphas, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, target)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
         return target
 
     @staticmethod

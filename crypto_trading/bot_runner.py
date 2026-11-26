@@ -69,7 +69,27 @@ class CryptoTradingBot:
         self.execution_mode = execution_mode
         self.is_paper = get_settings().trading_mode == TradingMode.LOCAL_PAPER
         self.loader = CryptoDataLoader(symbol=symbol)
-        self.strategy = strategy or (NativeCryptoEnsembleStrategy() if NativeCryptoEnsembleStrategy is not None else ConditionalProbTechStrategy())
+        if strategy is not None:
+            self.strategy = strategy
+        else:
+            import os as _os
+            _prof = _os.getenv("CRYPTO_STRATEGY_PROFILE", "condprob_3m").strip().lower()
+            _resolved_strat = None
+            if _prof in ("institutional_3m", "router_3m"):
+                try:
+                    from crypto_trading.strategies.institutional_alpha_router import InstitutionalAlphaRouter
+                    _resolved_strat = InstitutionalAlphaRouter(timeframe="3m", maker_mode=True)
+                except Exception:
+                    _resolved_strat = None
+            elif _prof in ("condprob_3m", "default", ""):
+                try:
+                    from crypto_trading.strategies.conditional_prob_rl_strategy import ConditionalProbRLStrategy
+                    _resolved_strat = ConditionalProbRLStrategy(timeframe="3m", maker_mode=True)
+                except Exception:
+                    _resolved_strat = None
+            if _resolved_strat is None:
+                _resolved_strat = NativeCryptoEnsembleStrategy() if NativeCryptoEnsembleStrategy is not None else ConditionalProbTechStrategy()
+            self.strategy = _resolved_strat
         self.exec_timeframe = exec_timeframe or getattr(self.strategy, "preferred_timeframe", None) or _resolve_default_timeframe()
         self.risk_manager = RiskManager(initial_capital=INITIAL_BALANCE_USDT)
         self.order_manager = OrderManager()
@@ -613,7 +633,28 @@ class CryptoTradingBot:
                 )
                 return
 
-        # 3. 處理策略開平倉信號 (支援 signal == 1 多, signal == -1 空, signal == 0 平倉)
+        # 3. 處理策略開平倉信號 (支援 signal == 1 多, signal == -1 空, 反向確認平倉)
+        if self.position_side == "LONG" and self.position >= _min_qty and signal == -1:
+            self.execute_order(
+                "SELL",
+                self.position,
+                current_price,
+                reason="策略反向空頭信號確認平多",
+                reduce_only=True,
+                prefer_maker=True,
+            )
+            return
+        if self.position_side == "SHORT" and self.position >= _min_qty and signal == 1:
+            self.execute_order(
+                "BUY",
+                self.position,
+                current_price,
+                reason="策略反向多頭信號確認平空",
+                reduce_only=True,
+                prefer_maker=True,
+            )
+            return
+
         if signal in (1, -1) and self.position_side == "FLAT":
             # 3.1 進場成本門檻檢驗 (當策略提供 expected_edge 且未自帶 cost_gated 時)
             if not getattr(self.strategy, "cost_gated", False) and "expected_edge" in curr.index:

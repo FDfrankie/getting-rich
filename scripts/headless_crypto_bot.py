@@ -39,9 +39,16 @@ from crypto_trading.settings import get_settings
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    tmp = path.parent / f".{path.name}.{os.getpid()}.tmp"
+    try:
+        tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except Exception:
+                pass
 
 
 def build_pnl_snapshot(
@@ -71,6 +78,10 @@ def build_pnl_snapshot(
                 "equity_usdt": round(eq, 2),
             }
         )
+    # P59: Normalize shared-account equity so N symbols don't multiply reported account equity by N
+    n_syms = max(1, len(per_symbol))
+    if n_syms > 1 and initial_total_equity > 0:
+        total_equity = total_equity / n_syms
     pnl_usdt = total_equity - initial_total_equity
     pnl_pct = (pnl_usdt / initial_total_equity * 100.0) if initial_total_equity > 0 else 0.0
     return {
@@ -97,18 +108,23 @@ def run_headless_crypto(
     mode_str = str(getattr(settings, "trading_mode", "PAPER"))
     syms = symbols or parse_configured_symbols()
     mgr = manager or MultiSymbolBotManager(symbols=syms)
-    out_path = Path(status_path) if status_path else (BASE_DIR / "data_persistence" / "crypto_pnl_status.json")
+    # P59: Write cycle heartbeat to dedicated file so it never clobbers crypto_pnl_status.json
+    out_path = Path(status_path) if status_path else (BASE_DIR / "data_persistence" / "crypto_bot_heartbeat.json")
 
     initial_rows = mgr.status_summary()
+    n_init = max(1, len(initial_rows))
     initial_eq = sum(
         float(r.get("equity_usdt") or r.get("balance_usdt") or 0.0)
         for r in initial_rows
-    )
+    ) / n_init
     print(
         f"[CRYPTO_START] mode={mode_str} symbols={','.join(syms)} "
-        f"initial_equity={initial_eq:.2f} USDT status_file={out_path}"
+        f"initial_equity={initial_eq:.2f} USDT heartbeat_file={out_path}",
+        flush=True,
     )
 
+    _export_interval = max(60.0, float(os.getenv("CRYPTO_PNL_EXPORT_INTERVAL_SEC", "300") or "300"))
+    _last_export_ts = 0.0
     cycle = 0
     last_snap: dict[str, Any] = {}
     while True:
@@ -116,7 +132,7 @@ def run_headless_crypto(
         try:
             mgr.step_all()
         except Exception as exc:
-            print(f"[CRYPTO_CYCLE_ERROR] cycle={cycle} error={exc}")
+            print(f"[CRYPTO_CYCLE_ERROR] cycle={cycle} error={exc}", flush=True)
         last_snap = build_pnl_snapshot(
             mgr,
             initial_total_equity=initial_eq,
@@ -124,11 +140,14 @@ def run_headless_crypto(
             trading_mode=mode_str,
         )
         _atomic_write_json(out_path, last_snap)
-        try:
-            from scripts.export_crypto_pnl_to_drive import export_crypto_pnl_to_drive
-            export_crypto_pnl_to_drive()
-        except Exception as _exp_exc:
-            print(f"[CRYPTO_PNL_EXPORT_WARN] {_exp_exc}")
+        now_mono = time.monotonic()
+        if _last_export_ts == 0.0 or (now_mono - _last_export_ts) >= _export_interval:
+            _last_export_ts = now_mono
+            try:
+                from scripts.export_crypto_pnl_to_drive import export_crypto_pnl_to_drive
+                export_crypto_pnl_to_drive()
+            except Exception as _exp_exc:
+                print(f"[CRYPTO_PNL_EXPORT_WARN] {_exp_exc}", flush=True)
         sign = "+" if last_snap["pnl_usdt"] >= 0 else ""
         print(
             f"[CRYPTO_PNL] cycle={cycle} mode={mode_str} "

@@ -1,0 +1,22 @@
+{
+  "bundle_id": "P59_SYSTEMIC_AUDIT_AND_BUGFIX",
+  "created_at_taipei": "2026-11-27 01:30:31+08:00",
+  "files": [
+    "crypto_trading/bot_runner.py",
+    "scripts/export_crypto_pnl_to_drive.py",
+    "scripts/headless_brain_miner.py",
+    "scripts/headless_crypto_bot.py",
+    "scripts/watchdog_check.ps1",
+    "tests/test_p59_systemic_audit_fixes.py",
+    "worldquant_brain/alpha_vault.py",
+    "worldquant_brain/brain_client.py"
+  ],
+  "fixes": [
+    "Unified Python venv resolution, single-instance crypto bot dedup with log redirection, and deduplicated 5m PnL sync in scripts/watchdog_check.ps1",
+    "Normalized shared-account multi-symbol equity, separated crypto_bot_heartbeat.json, and 300s throttled cloud export in scripts/headless_crypto_bot.py",
+    "Switched CryptoTradingBot default strategy to P55 walk-forward gate winner (condprob_3m / institutional_3m) and added confirmed reversal exit handling in crypto_trading/bot_runner.py",
+    "Balanced qualified_alpha_formulas_vault.json summary accounting with rejected_or_excluded_count in worldquant_brain/brain_client.py",
+    "Upgraded AlphaVault.export_to_json(), export_crypto_pnl_to_drive.py, brain_client.py, and headless_brain_miner.py to PID-scoped atomic os.replace writes",
+    "Added [MINER_BOOT] immediate flushed startup banner and removed duplicate SQLite query on observability vault mirror in scripts/headless_brain_miner.py"
+  ]
+}
