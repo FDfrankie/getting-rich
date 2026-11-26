@@ -137,11 +137,13 @@ def simulate_walkforward_oos(
     slippage_one_way: float = 0.00005,
     funding_rate_8h: float = 0.0001,
     warmup_bars: int = 300,
-    tp_atr_mult: float = 2.4,
-    sl_atr_mult: float = 1.2,
+    tp_atr_mult: float | None = None,
+    sl_atr_mult: float | None = None,
     execution_mode: str = "MAKER_FIRST",
 ) -> WalkForwardMetrics:
     """Strictly causal bar-by-bar OOS simulation with intrabar hard SL/TP, fees & funding."""
+    tp_atr_mult = float(tp_atr_mult if tp_atr_mult is not None else getattr(strategy, "tp_atr_mult", 4.0))
+    sl_atr_mult = float(sl_atr_mult if sl_atr_mult is not None else getattr(strategy, "sl_atr_mult", 2.0))
     sig_df = strategy.generate_signals(df)
     close = pd.to_numeric(sig_df["Close"], errors="coerce").to_numpy(dtype=np.float64)
     high = pd.to_numeric(sig_df["High"], errors="coerce").to_numpy(dtype=np.float64)

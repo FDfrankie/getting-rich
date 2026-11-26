@@ -1,0 +1,14 @@
+{
+  "bundle_id": "P52",
+  "title": "Crypto Turnover-Fee Killer (1m/3m/1h) & CCXT Demo Trading API Fix",
+  "created_at_taipei": "2026-11-26 17:11:58+08:00",
+  "builds_on": "P51",
+  "files": [
+    "P52_CRYPTO_TURNOVER_DEMO_MANIFEST.json",
+    "scripts/export_crypto_pnl_to_drive.py",
+    "crypto_trading/strategies/native_ensemble_strategy.py",
+    "crypto_trading/strategies/conditional_prob_rl_strategy.py",
+    "scripts/backtest_crypto_usdt_walkforward.py",
+    "tests/test_p52_crypto_turnover_killer_and_demo_fix.py"
+  ]
+}

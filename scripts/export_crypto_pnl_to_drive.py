@@ -207,7 +207,11 @@ def fetch_exchange_account_ro(trading_mode: str) -> dict[str, Any]:
             }
         )
         if mode == "BINANCE_TESTNET":
-            exchange.set_sandbox_mode(True)
+            # P52: CCXT deprecated binanceusdm.set_sandbox_mode(True); prefer enable_demo_trading(True)
+            if hasattr(exchange, "enable_demo_trading"):
+                exchange.enable_demo_trading(True)
+            else:
+                exchange.set_sandbox_mode(True)
 
         bal = exchange.fetch_balance()
         usdt_info = bal.get("USDT") or {}

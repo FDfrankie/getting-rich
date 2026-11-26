@@ -27,13 +27,14 @@ from crypto_trading.strategies.momentum_breakout import BaseStrategy
 
 ACTIONS: tuple[float, ...] = (-1.0, -0.5, 0.0, 0.5, 1.0)
 
-# Timeframe-calibrated presets: (htf_mult, short_h, long_h, halflife_bars, cooldown, tp_atr, sl_atr, cusum_atr_mult)
-TIMEFRAME_PRESETS: dict[str, tuple[int, int, int, float, int, float, float, float]] = {
-    "1m": (15, 15, 45, 720.0, 5, 2.4, 1.2, 0.90),
-    "3m": (20, 10, 30, 480.0, 4, 2.4, 1.2, 0.85),
-    "5m": (12, 12, 36, 360.0, 4, 2.2, 1.1, 0.80),
-    "15m": (4, 8, 24, 280.0, 3, 2.2, 1.1, 0.75),
-    "1h": (4, 12, 24, 240.0, 3, 2.2, 1.1, 0.70),
+# P52 High-Conviction Low-Turnover presets:
+# (htf_mult, short_h, long_h, halflife_bars, cooldown, min_hold, tp_atr, sl_atr, cusum_atr_mult, min_move_cost_ratio, min_edge)
+TIMEFRAME_PRESETS: dict[str, tuple[int, int, int, float, int, int, float, float, float, float, float]] = {
+    "1m": (15, 20, 60, 720.0, 45, 20, 5.0, 2.5, 2.20, 7.0, 0.0018),
+    "3m": (20, 16, 48, 480.0, 24, 12, 4.5, 2.2, 1.80, 6.0, 0.0015),
+    "5m": (12, 14, 42, 360.0, 16, 8, 4.0, 2.0, 1.50, 5.0, 0.0012),
+    "15m": (4, 10, 30, 280.0, 10, 6, 3.8, 1.9, 1.20, 4.5, 0.0010),
+    "1h": (4, 12, 24, 240.0, 8, 6, 3.6, 1.8, 1.00, 4.0, 0.0008),
 }
 
 
@@ -168,12 +169,14 @@ class ConditionalProbRLStrategy(BaseStrategy):
         rebalance_cooldown: int | None = None,
         use_rl_policy: bool = True,
         rl_learning_rate: float = 0.025,
-        min_edge_threshold: float = 0.0003,
+        min_edge_threshold: float | None = None,
+        min_holding_bars: int | None = None,
         tp_atr_mult: float | None = None,
         sl_atr_mult: float | None = None,
         cusum_atr_mult: float | None = None,
-        min_expected_move_cost_ratio: float = 2.5,
+        min_expected_move_cost_ratio: float | None = None,
         use_cusum_filter: bool = True,
+        require_htf_alignment: bool = True,
     ) -> None:
         tf = str(timeframe or "3m").strip().lower()
         preset = TIMEFRAME_PRESETS.get(tf, TIMEFRAME_PRESETS["3m"])
@@ -189,14 +192,16 @@ class ConditionalProbRLStrategy(BaseStrategy):
         self.prior_strength = float(prior_strength)
         self.min_history_bars = max(80, int(min_history_bars))
         self.rebalance_cooldown = max(1, int(rebalance_cooldown if rebalance_cooldown is not None else preset[4]))
+        self.min_holding_bars = max(1, int(min_holding_bars if min_holding_bars is not None else preset[5]))
         self.use_rl_policy = bool(use_rl_policy)
         self.rl_learning_rate = float(rl_learning_rate)
-        self.min_edge_threshold = float(min_edge_threshold)
-        self.tp_atr_mult = float(tp_atr_mult if tp_atr_mult is not None else preset[5])
-        self.sl_atr_mult = float(sl_atr_mult if sl_atr_mult is not None else preset[6])
-        self.cusum_atr_mult = float(cusum_atr_mult if cusum_atr_mult is not None else preset[7])
-        self.min_expected_move_cost_ratio = float(min_expected_move_cost_ratio)
+        self.tp_atr_mult = float(tp_atr_mult if tp_atr_mult is not None else preset[6])
+        self.sl_atr_mult = float(sl_atr_mult if sl_atr_mult is not None else preset[7])
+        self.cusum_atr_mult = float(cusum_atr_mult if cusum_atr_mult is not None else preset[8])
+        self.min_expected_move_cost_ratio = float(min_expected_move_cost_ratio if min_expected_move_cost_ratio is not None else preset[9])
+        self.min_edge_threshold = float(min_edge_threshold if min_edge_threshold is not None else preset[10])
         self.use_cusum_filter = bool(use_cusum_filter)
+        self.require_htf_alignment = bool(require_htf_alignment)
         self.last_state_summary: dict[str, Any] = {}
 
     @staticmethod
@@ -474,7 +479,9 @@ class ConditionalProbRLStrategy(BaseStrategy):
         conf_arr = np.zeros(n, dtype=float)
         cost_gate_pass = np.zeros(n, dtype=bool)
 
+        htf_trend_z_arr = out["HTF_TREND_Z"].to_numpy(dtype=np.float64)
         pos = 0.0
+        held_bars = 0
         bars_since_trade = self.rebalance_cooldown
 
         def _decay_tables(fine_tbl: dict[str, list[float]], coarse_tbl: dict[str, list[float]], g: list[float]) -> None:
@@ -589,7 +596,9 @@ class ConditionalProbRLStrategy(BaseStrategy):
             ev_short_arr[i] = ev_net_short
             conf_arr[i] = conf
 
-            if bars_since_trade < self.rebalance_cooldown:
+            if pos != 0.0:
+                held_bars += 1
+            if (pos == 0.0 and bars_since_trade < self.rebalance_cooldown) or (pos != 0.0 and held_bars < self.min_holding_bars):
                 signals[i] = pos
                 bars_since_trade += 1
                 continue
@@ -623,10 +632,17 @@ class ConditionalProbRLStrategy(BaseStrategy):
                 elif target_pos < 0 and ofi_arr[i] > 0.75:
                     target_pos = 0.0
 
-            # Enforce positive net expectancy for brand-new entries
-            if pos == 0.0 and target_pos > 0 and ev_net_long < self.min_edge_threshold:
+            # P52 HTF Directional Alignment Gate: never catch falling knives against strong 15m/1h trend
+            if self.require_htf_alignment and pos == 0.0:
+                if target_pos > 0 and htf_trend_z_arr[i] < 0.25:
+                    target_pos = 0.0
+                elif target_pos < 0 and htf_trend_z_arr[i] > -0.25:
+                    target_pos = 0.0
+
+            # Enforce high-conviction positive net expectancy for brand-new entries
+            if pos == 0.0 and target_pos > 0 and (ev_net_long < self.min_edge_threshold or p_long < 0.54):
                 target_pos = 0.0
-            elif pos == 0.0 and target_pos < 0 and ev_net_short < self.min_edge_threshold:
+            elif pos == 0.0 and target_pos < 0 and (ev_net_short < self.min_edge_threshold or p_short < 0.54):
                 target_pos = 0.0
 
             # Volatility-targeted scaling
@@ -634,7 +650,11 @@ class ConditionalProbRLStrategy(BaseStrategy):
                 vol_scale = min(1.0, 0.010 / float(atr_pct[i]))
                 target_pos = round(float(target_pos) * vol_scale, 2)
 
-            if abs(target_pos - pos) >= 0.15 or (target_pos == 0.0 and pos != 0.0):
+            if abs(target_pos - pos) >= 0.25 or (target_pos == 0.0 and pos != 0.0):
+                if (pos == 0.0 and target_pos != 0.0) or (pos * target_pos < 0):
+                    held_bars = 0
+                elif target_pos == 0.0:
+                    held_bars = 0
                 pos = target_pos
                 bars_since_trade = 1
             else:
