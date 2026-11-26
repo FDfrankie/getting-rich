@@ -1,0 +1,13 @@
+{
+  "bundle_id": "P54",
+  "title": "Institutional Crypto Alpha Suite: Derivatives OI/Funding, Liquidity Sweep + CVD Divergence, BTC Lead-Lag, Kaufman ER Regime Router & 50% Partial-TP Runner",
+  "created_at_taipei": "2026-11-26 17:42:51+08:00",
+  "builds_on": "P53",
+  "files": [
+    "P54_INSTITUTIONAL_ALPHA_MANIFEST.json",
+    "crypto_trading/derivatives_data_loader.py",
+    "crypto_trading/strategies/institutional_alpha_router.py",
+    "scripts/backtest_crypto_usdt_walkforward.py",
+    "tests/test_p54_institutional_alpha_suite.py"
+  ]
+}

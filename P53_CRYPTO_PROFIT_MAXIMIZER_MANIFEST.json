@@ -1,0 +1,13 @@
+{
+  "bundle_id": "P53",
+  "title": "Crypto Alpha Profit Maximizer: Multi-Factor VWAP/OFI/Chop Filters, Break-Even Ratchet, Half-Kelly & Live Fractional Signal Fix",
+  "created_at_taipei": "2026-11-26 17:38:56+08:00",
+  "builds_on": "P52",
+  "files": [
+    "P53_CRYPTO_PROFIT_MAXIMIZER_MANIFEST.json",
+    "crypto_trading/bot_runner.py",
+    "crypto_trading/strategies/conditional_prob_rl_strategy.py",
+    "scripts/backtest_crypto_usdt_walkforward.py",
+    "tests/test_p53_crypto_profit_maximizer.py"
+  ]
+}

@@ -29,6 +29,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from crypto_trading.strategies.conditional_prob_rl_strategy import ConditionalProbRLStrategy
+from crypto_trading.strategies.institutional_alpha_router import InstitutionalAlphaRouter
+from crypto_trading.derivatives_data_loader import (
+    enrich_ohlcv_with_derivatives,
+    fetch_funding_rate_history,
+    fetch_open_interest_history,
+    fetch_top_trader_ls_ratio,
+)
 
 try:
     from crypto_trading.strategies.native_ensemble_strategy import NativeCryptoEnsembleStrategy
@@ -163,36 +170,80 @@ def simulate_walkforward_oos(
     total_fees = 0.0
     total_funding = 0.0
 
+    partial_tp_mult = float(getattr(strategy, "partial_tp_atr_mult", 2.0))
     pos = 0.0
     entry_price = 0.0
     hard_sl = 0.0
     hard_tp = 0.0
+    partial_tp_price = 0.0
+    partial_taken = False
     trade_returns: list[float] = []
     bar_returns: list[float] = []
 
     for i in range(start_i, n - 1):
         prev_eq = equity
         # Signal generated at bar i close executes at bar i close (strictly causal) -> realized on bar i+1
-        target = float(np.clip(signals[i], -1.0, 1.0))
+        target = float(np.clip(signals[i], -1.35, 1.35))
 
-        # 1. Check intrabar hard SL / TP on bar i if currently in position
+        # 1. Check intrabar hard SL / TP + P54 50% Partial Maker TP + Break-Even Lock & Profit Ratchet
         if pos != 0.0:
             exited = False
             exit_p = close[i]
+            ap_i = max(0.0008, float(atr_pct[i]))
+            atr_abs = entry_price * ap_i
             if pos > 0:
                 if low[i] <= hard_sl:
                     exit_p = hard_sl
                     exited = True
-                elif high[i] >= hard_tp:
-                    exit_p = hard_tp
-                    exited = True
+                else:
+                    # P54 50% Partial Maker TP lock + instant Break-Even Lock on remaining 50% runner
+                    if (not partial_taken) and partial_tp_price > 0 and high[i] >= partial_tp_price:
+                        half_pos = pos * 0.5
+                        raw_part = half_pos * ((partial_tp_price - entry_price) / entry_price)
+                        fee_part = abs(half_pos) * fee_one_way
+                        net_part = raw_part - fee_part
+                        equity *= (1.0 + net_part)
+                        gross_pnl_sum += raw_part
+                        total_fees += fee_part
+                        trade_returns.append(net_part)
+                        pos -= half_pos
+                        partial_taken = True
+                        hard_sl = max(hard_sl, entry_price * 1.0006)
+                    if high[i] >= hard_tp:
+                        exit_p = hard_tp
+                        exited = True
+                    else:
+                        gain = high[i] - entry_price
+                        if gain >= 1.6 * atr_abs:
+                            hard_sl = max(hard_sl, entry_price * 1.0006)
+                        if gain >= 2.8 * atr_abs:
+                            hard_sl = max(hard_sl, high[i] - 1.5 * atr_abs)
             else:
                 if high[i] >= hard_sl:
                     exit_p = hard_sl
                     exited = True
-                elif low[i] <= hard_tp:
-                    exit_p = hard_tp
-                    exited = True
+                else:
+                    if (not partial_taken) and partial_tp_price > 0 and low[i] <= partial_tp_price:
+                        half_pos = pos * 0.5
+                        raw_part = half_pos * ((partial_tp_price - entry_price) / entry_price)
+                        fee_part = abs(half_pos) * fee_one_way
+                        net_part = raw_part - fee_part
+                        equity *= (1.0 + net_part)
+                        gross_pnl_sum += raw_part
+                        total_fees += fee_part
+                        trade_returns.append(net_part)
+                        pos -= half_pos
+                        partial_taken = True
+                        hard_sl = min(hard_sl, entry_price * 0.9994)
+                    if low[i] <= hard_tp:
+                        exit_p = hard_tp
+                        exited = True
+                    else:
+                        gain = entry_price - low[i]
+                        if gain >= 1.6 * atr_abs:
+                            hard_sl = min(hard_sl, entry_price * 0.9994)
+                        if gain >= 2.8 * atr_abs:
+                            hard_sl = min(hard_sl, low[i] + 1.5 * atr_abs)
 
             if exited:
                 raw_r = pos * ((exit_p - entry_price) / entry_price)
@@ -226,12 +277,15 @@ def simulate_walkforward_oos(
             equity *= (1.0 - fee_cost)
             total_fees += fee_cost
             ap = max(0.001, float(atr_pct[i]))
+            partial_taken = False
             if pos > 0:
                 hard_sl = entry_price * (1.0 - ap * sl_atr_mult)
                 hard_tp = entry_price * (1.0 + ap * tp_atr_mult)
+                partial_tp_price = entry_price * (1.0 + ap * partial_tp_mult)
             else:
                 hard_sl = entry_price * (1.0 + ap * sl_atr_mult)
                 hard_tp = entry_price * (1.0 - ap * tp_atr_mult)
+                partial_tp_price = entry_price * (1.0 - ap * partial_tp_mult)
 
         # 3. Accrue perpetual funding cost on open position
         if pos != 0.0:
@@ -330,7 +384,7 @@ def write_profitability_report(
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
     lines = [
-        "# Crypto USDT-M Walk-Forward OOS Profitability Gate Report (P51)",
+        "# Crypto USDT-M Walk-Forward OOS Profitability Gate Report (P54 Institutional Alpha Suite)",
         "",
         f"- **Generated (Taipei)**: `{payload['generated_at_taipei']}`",
         f"- **Gate Thresholds**: Net Sharpe >= `{GATE_MIN_SHARPE}`, PF >= `{GATE_MIN_PROFIT_FACTOR}`, Max DD <= `{GATE_MAX_DRAWDOWN_PCT}%`, Trades >= `{GATE_MIN_TRADES}`, Net Return > `0%`",
@@ -353,17 +407,41 @@ def write_profitability_report(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="P51 Binance USDT-M Walk-Forward OOS Profitability Gate")
-    parser.add_argument("--symbols", nargs="+", default=["BTCUSDT", "ETHUSDT"])
-    parser.add_argument("--bars-1m", type=int, default=4500)
-    parser.add_argument("--bars-3m", type=int, default=4500)
-    parser.add_argument("--bars-1h", type=int, default=1500)
+    parser.add_argument("--symbols", nargs="+", default=["BTCUSDT", "ETHUSDT", "SOLUSDT"])
+    parser.add_argument("--bars-1m", type=int, default=15000)
+    parser.add_argument("--bars-3m", type=int, default=10000)
+    parser.add_argument("--bars-1h", type=int, default=2000)
     args = parser.parse_args()
 
     cache_dir = PROJECT_ROOT / "data_persistence" / "market_cache"
     results: list[WalkForwardMetrics] = []
 
+    btc_ref_3m = fetch_binance_usdt_klines("BTCUSDT", "3m", args.bars_3m, cache_dir=cache_dir)
     for sym in args.symbols:
-        df_3m = fetch_binance_usdt_klines(sym, "3m", args.bars_3m, cache_dir=cache_dir)
+        f_df = fetch_funding_rate_history(sym, 500, cache_dir=cache_dir)
+        oi_df = fetch_open_interest_history(sym, "5m", 500, cache_dir=cache_dir)
+        ls_df = fetch_top_trader_ls_ratio(sym, "15m", 500, cache_dir=cache_dir)
+
+        df_3m = enrich_ohlcv_with_derivatives(
+            fetch_binance_usdt_klines(sym, "3m", args.bars_3m, cache_dir=cache_dir), f_df, oi_df, ls_df
+        )
+        btc_lead = None if sym.upper() == "BTCUSDT" else btc_ref_3m
+        router_3m = InstitutionalAlphaRouter(timeframe="3m", fee_roundtrip=0.00036, maker_mode=True)
+        # Pre-bind btc_lead for generate_signals
+        _orig_gen = router_3m.generate_signals
+        router_3m.generate_signals = lambda d, _g=_orig_gen, _b=btc_lead: _g(d, btc_df=_b)
+        results.append(
+            simulate_walkforward_oos(
+                df_3m,
+                router_3m,
+                label="InstitutionalRouter_3m_MakerBNB",
+                symbol=sym,
+                timeframe="3m",
+                fee_one_way=0.00018,
+                slippage_one_way=0.00003,
+                execution_mode="MAKER_BNB",
+            )
+        )
         results.append(
             simulate_walkforward_oos(
                 df_3m,

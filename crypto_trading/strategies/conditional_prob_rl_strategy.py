@@ -443,6 +443,7 @@ class ConditionalProbRLStrategy(BaseStrategy):
         trend_z = out["TREND_Z"].to_numpy(dtype=np.float64)
         vol_reg = out["VOL_REGIME"].to_numpy(dtype=np.float64)
         ofi_arr = out["OFI"].to_numpy(dtype=np.float64)
+        vwap_dev_arr = out["VWAP_DEV_ATR"].to_numpy(dtype=np.float64)
         patterns = out["CANDLE_PATTERN"].tolist()
         cusum_arr = out["CUSUM_EVENT"].to_numpy(dtype=bool)
         fine_states = out["state_fine"].tolist()
@@ -632,23 +633,39 @@ class ConditionalProbRLStrategy(BaseStrategy):
                 elif target_pos < 0 and ofi_arr[i] > 0.75:
                     target_pos = 0.0
 
-            # P52 HTF Directional Alignment Gate: never catch falling knives against strong 15m/1h trend
+            # P53 Weapon 1: Dead-Chop & Panic-Cascade Regime Filter (skip bottom-quartile low-vol chop & extreme liquidation panics)
+            if pos == 0.0 and target_pos != 0.0:
+                if vol_reg[i] < -0.25 or vol_reg[i] > 2.50:
+                    target_pos = 0.0
+
+            # P53 Weapon 2: HTF Directional Alignment + VWAP Pullback-to-Trend Filter (never chase > +1.8 ATR extended spikes!)
             if self.require_htf_alignment and pos == 0.0:
-                if target_pos > 0 and htf_trend_z_arr[i] < 0.25:
+                if target_pos > 0:
+                    if htf_trend_z_arr[i] < 0.25 or vwap_dev_arr[i] > 1.80:
+                        target_pos = 0.0
+                elif target_pos < 0:
+                    if htf_trend_z_arr[i] > -0.25 or vwap_dev_arr[i] < -1.80:
+                        target_pos = 0.0
+
+            # P53 Weapon 3: High-Conviction Net Expectancy + OFI Confirmation Gate
+            if pos == 0.0 and target_pos > 0:
+                if ev_net_long < self.min_edge_threshold or p_long < 0.54 or ofi_arr[i] < -0.25:
                     target_pos = 0.0
-                elif target_pos < 0 and htf_trend_z_arr[i] > -0.25:
+            elif pos == 0.0 and target_pos < 0:
+                if ev_net_short < self.min_edge_threshold or p_short < 0.54 or ofi_arr[i] > 0.25:
                     target_pos = 0.0
 
-            # Enforce high-conviction positive net expectancy for brand-new entries
-            if pos == 0.0 and target_pos > 0 and (ev_net_long < self.min_edge_threshold or p_long < 0.54):
-                target_pos = 0.0
-            elif pos == 0.0 and target_pos < 0 and (ev_net_short < self.min_edge_threshold or p_short < 0.54):
-                target_pos = 0.0
-
-            # Volatility-targeted scaling
-            if target_pos != 0.0 and atr_pct[i] > 0.012:
-                vol_scale = min(1.0, 0.010 / float(atr_pct[i]))
-                target_pos = round(float(target_pos) * vol_scale, 2)
+            # P53 Weapon 4: Conformal Half-Kelly Conviction Scaling (size up A+ setups up to 1.35x, shrink B/high-vol setups)
+            if target_pos != 0.0:
+                edge_aligned = ev_net_long if target_pos > 0 else ev_net_short
+                ofi_aligned = ofi_arr[i] if target_pos > 0 else -ofi_arr[i]
+                kelly_boost = 1.0
+                if conf >= 0.65 and edge_aligned >= self.min_edge_threshold * 1.8 and ofi_aligned >= 0.20 and -0.10 <= vol_reg[i] <= 0.80:
+                    kelly_boost = 1.35
+                elif conf < 0.40 or vol_reg[i] > 1.0:
+                    kelly_boost = 0.60
+                vol_scale = min(1.0, 0.010 / float(atr_pct[i])) if atr_pct[i] > 0.012 else 1.0
+                target_pos = round(float(np.clip(target_pos * kelly_boost * vol_scale, -1.35, 1.35)), 2)
 
             if abs(target_pos - pos) >= 0.25 or (target_pos == 0.0 and pos != 0.0):
                 if (pos == 0.0 and target_pos != 0.0) or (pos * target_pos < 0):

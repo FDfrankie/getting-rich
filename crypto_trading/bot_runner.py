@@ -3,9 +3,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 from crypto_trading.config import DEFAULT_SYMBOL, INITIAL_BALANCE_USDT
+from crypto_trading.settings import RISK_PARAMS, USDT_M_MAKER_FEE_PCT, USDT_M_TAKER_FEE_PCT
 from crypto_trading.settings import TradingMode, get_settings
 from crypto_trading.data_loader import CryptoDataLoader
 from crypto_trading.strategies.conditional_prob_strategy import ConditionalProbTechStrategy
+try:
+    from crypto_trading.strategies.native_ensemble_strategy import NativeCryptoEnsembleStrategy
+except ImportError:
+    NativeCryptoEnsembleStrategy = None
 from crypto_trading.strategies.momentum_breakout import (
     BaseStrategy,
     MomentumBreakoutStrategy,
@@ -38,7 +43,7 @@ def _resolve_default_timeframe() -> str:
                 return tf
         except Exception:
             pass
-    return "5m"
+    return "1h"
 
 
 class CryptoTradingBot:
@@ -64,8 +69,8 @@ class CryptoTradingBot:
         self.execution_mode = execution_mode
         self.is_paper = get_settings().trading_mode == TradingMode.LOCAL_PAPER
         self.loader = CryptoDataLoader(symbol=symbol)
-        self.exec_timeframe = exec_timeframe or _resolve_default_timeframe()
-        self.strategy = strategy or ConditionalProbTechStrategy()
+        self.strategy = strategy or (NativeCryptoEnsembleStrategy() if NativeCryptoEnsembleStrategy is not None else ConditionalProbTechStrategy())
+        self.exec_timeframe = exec_timeframe or getattr(self.strategy, "preferred_timeframe", None) or _resolve_default_timeframe()
         self.risk_manager = RiskManager(initial_capital=INITIAL_BALANCE_USDT)
         self.order_manager = OrderManager()
         self.manual_controller = ManualPositionController()
@@ -78,6 +83,12 @@ class CryptoTradingBot:
         self.position = 0.0  # 持倉標的數量
         self.position_side = "FLAT"  # FLAT, LONG, SHORT
         self.entry_price = 0.0
+        self.entry_fee_usdt = 0.0
+        self.active_stop_loss = 0.0
+        self.active_take_profit = 0.0
+        self.max_stop_loss_pct = float(RISK_PARAMS.get("max_stop_loss_pct", 0.035))
+        self.maker_fee_pct = float(RISK_PARAMS.get("maker_fee_pct", USDT_M_MAKER_FEE_PCT))
+        self.taker_fee_pct = float(RISK_PARAMS.get("taker_fee_pct", USDT_M_TAKER_FEE_PCT))
         self.trade_logs = []
         self.last_order_info = {}
 
@@ -88,6 +99,52 @@ class CryptoTradingBot:
             self.trade_logs = self.trade_logs[-500:]
         print(line)
 
+    def _compute_order_fee(self, notional: float, *, order_type: str, post_only: bool) -> float:
+        """Calculate USDT-M Futures fee: 0.02% Maker (LIMIT+post_only) vs 0.05% Taker (MARKET)."""
+        if "USDC" in self.symbol.upper():
+            return 0.0
+        rate = self.maker_fee_pct if (order_type.upper() == "LIMIT" and post_only) else self.taker_fee_pct
+        return float(notional) * rate
+
+    def _init_or_ratchet_stops(self, side: str, price: float, atr: float) -> None:
+        """Anchor stop-loss at entry (capped at max_stop_loss_pct) and only trail favorably."""
+        pos_risk = self.risk_manager.calculate_position_size(price, atr)
+        max_dist = price * self.max_stop_loss_pct
+        if side == "LONG":
+            raw_sl = float(pos_risk["stop_loss_long"])
+            capped_sl = max(raw_sl, price - max_dist)
+            if self.active_stop_loss <= 0.0:
+                self.active_stop_loss = capped_sl
+                self.active_take_profit = float(pos_risk["take_profit_long"])
+            else:
+                # Ratchet UP only — never widen stop-loss downward when ATR spikes
+                self.active_stop_loss = max(self.active_stop_loss, capped_sl)
+                if self.entry_price > 0 and atr > 0:
+                    gain = price - self.entry_price
+                    if gain >= 1.6 * atr:
+                        # Stage 1: Break-Even Lock covering full Maker+Taker fees (+6 bps)
+                        self.active_stop_loss = max(self.active_stop_loss, self.entry_price * 1.0006)
+                    if gain >= 2.8 * atr:
+                        # Stage 2: Chandelier Profit Ratchet (lock trend runner)
+                        self.active_stop_loss = max(self.active_stop_loss, price - 1.5 * atr)
+        elif side == "SHORT":
+            raw_sl = float(pos_risk["stop_loss_short"])
+            capped_sl = min(raw_sl, price + max_dist)
+            if self.active_stop_loss <= 0.0:
+                self.active_stop_loss = capped_sl
+                self.active_take_profit = float(pos_risk["take_profit_short"])
+            else:
+                # Ratchet DOWN only — never widen stop-loss upward when ATR spikes
+                self.active_stop_loss = min(self.active_stop_loss, capped_sl)
+                if self.entry_price > 0 and atr > 0:
+                    gain = self.entry_price - price
+                    if gain >= 1.6 * atr:
+                        # Stage 1: Break-Even Lock covering full Maker+Taker fees (-6 bps)
+                        self.active_stop_loss = min(self.active_stop_loss, self.entry_price * 0.9994)
+                    if gain >= 2.8 * atr:
+                        # Stage 2: Chandelier Profit Ratchet
+                        self.active_stop_loss = min(self.active_stop_loss, price + 1.5 * atr)
+
     def execute_order(
         self,
         side: str,
@@ -95,6 +152,7 @@ class CryptoTradingBot:
         current_price: float,
         reason: str,
         reduce_only: bool = False,
+        prefer_maker: bool = True,
     ):
         """下單撮合：先經 manual_override 防護，再走 RiskManager 閘道與 OrderManager 冪等下單"""
         if self.manual_controller.is_symbol_locked(self.symbol):
@@ -140,7 +198,7 @@ class CryptoTradingBot:
         risk_decision = self.risk_manager.evaluate_order(
             symbol=self.symbol,
             side=order_side,
-            order_type="MARKET",
+            order_type="LIMIT" if prefer_maker else "MARKET",
             amount=amount,
             price=current_price,
             is_reduce_only=reduce_only,
@@ -167,11 +225,12 @@ class CryptoTradingBot:
         # 1. 若有對接真實 Testnet 或 Bitunix Adapter，且處於活動狀態
         if self.exchange_adapter:
             try:
+                _exec_order_type = "limit" if prefer_maker else "market"
                 res = self.order_manager.execute_with_idempotency(
                     client=self.exchange_adapter,
                     symbol=self.symbol,
                     side=order_side,
-                    order_type="market",
+                    order_type=_exec_order_type,
                     amount=amount,
                     price=current_price,
                     reduce_only=reduce_only,
@@ -208,16 +267,21 @@ class CryptoTradingBot:
                         f"⚡ [交易所委託成交] {order_side} {amount:.4f} {self.symbol} @ {fill_price:.2f} | 遠端 OrderID: {order_id} | 原因: {reason}"
                     )
 
+                    _order_fee = self._compute_order_fee(
+                        fill_price * amount,
+                        order_type=_exec_order_type,
+                        post_only=prefer_maker,
+                    )
                     self.sync.record_order(
                         symbol=self.symbol,
                         side=order_side,
-                        order_type="MARKET",
+                        order_type=_exec_order_type.upper(),
                         price=fill_price,
                         amount=amount,
                         status="FILLED",
                         exchange_order_id=order_id,
                         cost=fill_price * amount,
-                        fee=0.0 if "USDC" in self.symbol else (fill_price * amount * 0.0005),
+                        fee=_order_fee,
                         reason=reason,
                     )
 
@@ -228,11 +292,12 @@ class CryptoTradingBot:
                         or (self.position_side == "SHORT" and order_side == "BUY")
                     ):
                         # 平倉
-                        pnl = (
+                        gross_pnl = (
                             (fill_price - self.entry_price) * amount
                             if self.position_side == "LONG"
                             else (self.entry_price - fill_price) * amount
                         )
+                        pnl = gross_pnl - _order_fee - float(getattr(self, "entry_fee_usdt", 0.0))
                         pnl_pct = (
                             ((fill_price - self.entry_price) / self.entry_price * 100.0)
                             if (self.entry_price > 0 and self.position_side == "LONG")
@@ -268,6 +333,9 @@ class CryptoTradingBot:
                         if self.position == 0.0:
                             self.position_side = "FLAT"
                             self.entry_price = 0.0
+                            self.entry_fee_usdt = 0.0
+                            self.active_stop_loss = 0.0
+                            self.active_take_profit = 0.0
                         self.sync.update_position(
                             symbol=self.symbol,
                             side=self.position_side,
@@ -279,6 +347,7 @@ class CryptoTradingBot:
                         self.position += amount
                         self.position_side = "LONG" if order_side == "BUY" else "SHORT"
                         self.entry_price = fill_price
+                        self.entry_fee_usdt = _order_fee
                         self.sync.update_position(
                             symbol=self.symbol,
                             side=self.position_side,
@@ -317,7 +386,7 @@ class CryptoTradingBot:
                 return
 
         # 2. 僅在純沙盒模式 (exchange_adapter is None) 呼叫內部沙盒 Paper Order 記帳
-        self.execute_paper_order(side, amount, current_price, reason, reduce_only=reduce_only)
+        self.execute_paper_order(side, amount, current_price, reason, reduce_only=reduce_only, prefer_maker=prefer_maker)
 
     def execute_paper_order(
         self,
@@ -326,10 +395,12 @@ class CryptoTradingBot:
         current_price: float,
         reason: str,
         reduce_only: bool = False,
+        prefer_maker: bool = True,
     ):
-        """執行合約保證金模擬訂單撮合 (支援做多 LONG 與做空 SHORT，淨值 = balance_usdt + unrealized_pnl)"""
+        """執行合約保證金模擬訂單撮合 (支援 USDT Maker 0.02% / Taker 0.05% 手續費與淨損益入帳)"""
         cost = amount * current_price
-        fee = cost * 0.0005  # 模擬 0.05% 手續費
+        _ot = "LIMIT" if prefer_maker else "MARKET"
+        fee = self._compute_order_fee(cost, order_type=_ot, post_only=prefer_maker)
         order_side = side.upper()
 
         is_closing = (
@@ -340,18 +411,19 @@ class CryptoTradingBot:
 
         if is_closing and self.position > 0:
             close_amount = min(self.position, amount)
-            pnl = (
+            gross_pnl = (
                 (current_price - self.entry_price) * close_amount
                 if self.position_side == "LONG"
                 else (self.entry_price - current_price) * close_amount
             )
+            pnl = gross_pnl - fee - float(getattr(self, "entry_fee_usdt", 0.0))
             pnl_pct = (
                 ((current_price - self.entry_price) / self.entry_price * 100.0)
                 if (self.entry_price > 0 and self.position_side == "LONG")
                 else (((self.entry_price - current_price) / self.entry_price * 100.0) if self.entry_price > 0 else 0.0)
             )
 
-            self.balance_usdt += pnl - fee
+            self.balance_usdt += gross_pnl - fee
             self.log(
                 f"🔴 [模擬合約平倉] {close_amount:.4f} {self.symbol} ({self.position_side}) @ {current_price:.2f} | 損益: {pnl:+.2f} USDT (手續費: {fee:.2f}) | 原因: {reason}"
             )
@@ -393,6 +465,9 @@ class CryptoTradingBot:
             if self.position == 0.0:
                 self.position_side = "FLAT"
                 self.entry_price = 0.0
+                self.entry_fee_usdt = 0.0
+                self.active_stop_loss = 0.0
+                self.active_take_profit = 0.0
             self.sync.update_position_record(
                 symbol=self.symbol,
                 side=self.position_side,
@@ -405,6 +480,7 @@ class CryptoTradingBot:
             self.position += amount
             self.position_side = "LONG" if order_side == "BUY" else "SHORT"
             self.entry_price = current_price
+            self.entry_fee_usdt = fee
             self.log(
                 f"🟢 [模擬合約開倉] {order_side} {amount:.4f} {self.symbol} @ {current_price:.2f} | 名義價值: {cost:.2f} USDT (手續費: {fee:.2f}) | 原因: {reason}"
             )
@@ -463,7 +539,8 @@ class CryptoTradingBot:
         curr = df_strat.iloc[-1]
         current_price = float(curr["Close"])
         self.last_price = current_price
-        raw_signal = int(curr["signal"])
+        _raw_sig_f = float(curr["signal"])
+        raw_signal = 1 if _raw_sig_f >= 0.25 else (-1 if _raw_sig_f <= -0.25 else 0)
         atr = float(curr.get("ATR", current_price * 0.02))
 
         # 1.1 高階時框 (1h) 市場狀態檢驗與信號濾波 (傳入獨立 df_high)
@@ -490,45 +567,49 @@ class CryptoTradingBot:
         except Exception:
             pass
 
-        # 2. 判斷是否有停損或平倉信號 (雙向 LONG 與 SHORT 支援)
+        # 2. 判斷是否有停損或平倉信號 (棘輪式移動停損：絕不因 ATR 暴增而放寬停損；停損用市價確保成交、停利用 Maker 省 60% 費率)
         if self.position_side == "LONG" and self.position >= _min_qty and self.entry_price > 0:
-            pos_risk = self.risk_manager.calculate_position_size(self.entry_price, atr)
-            if current_price <= pos_risk["stop_loss_long"]:
+            self._init_or_ratchet_stops("LONG", current_price if self.active_stop_loss > 0 else self.entry_price, atr)
+            if current_price <= self.active_stop_loss:
                 self.execute_order(
                     "SELL",
                     self.position,
                     current_price,
-                    reason=f"觸發多頭 ATR 移動停損 ({pos_risk['stop_loss_long']})",
+                    reason=f"觸發多頭棘輪停損 ({self.active_stop_loss:.2f})",
                     reduce_only=True,
+                    prefer_maker=False,
                 )
                 return
-            elif current_price >= pos_risk["take_profit_long"]:
+            elif self.active_take_profit > 0 and current_price >= self.active_take_profit:
                 self.execute_order(
                     "SELL",
                     self.position,
                     current_price,
-                    reason=f"達到多頭 1.5R 目標停利 ({pos_risk['take_profit_long']})",
+                    reason=f"達到多頭 1.5R 目標停利 ({self.active_take_profit:.2f})",
                     reduce_only=True,
+                    prefer_maker=True,
                 )
                 return
         elif self.position_side == "SHORT" and self.position >= _min_qty and self.entry_price > 0:
-            pos_risk = self.risk_manager.calculate_position_size(self.entry_price, atr)
-            if current_price >= pos_risk["stop_loss_short"]:
+            self._init_or_ratchet_stops("SHORT", current_price if self.active_stop_loss > 0 else self.entry_price, atr)
+            if current_price >= self.active_stop_loss:
                 self.execute_order(
                     "BUY",
                     self.position,
                     current_price,
-                    reason=f"觸發空頭 ATR 移動停損 ({pos_risk['stop_loss_short']})",
+                    reason=f"觸發空頭棘輪停損 ({self.active_stop_loss:.2f})",
                     reduce_only=True,
+                    prefer_maker=False,
                 )
                 return
-            elif current_price <= pos_risk["take_profit_short"]:
+            elif self.active_take_profit > 0 and current_price <= self.active_take_profit:
                 self.execute_order(
                     "BUY",
                     self.position,
                     current_price,
-                    reason=f"達到空頭 1.5R 目標停利 ({pos_risk['take_profit_short']})",
+                    reason=f"達到空頭 1.5R 目標停利 ({self.active_take_profit:.2f})",
                     reduce_only=True,
+                    prefer_maker=True,
                 )
                 return
 
@@ -558,7 +639,9 @@ class CryptoTradingBot:
             if size >= _min_qty:
                 side = "BUY" if signal == 1 else "SELL"
                 reason = "條件機率+技術指標達標做多" if signal == 1 else "條件機率+技術指標達標做空"
-                self.execute_order(side, size, current_price, reason=reason)
+                self.execute_order(side, size, current_price, reason=reason, prefer_maker=True)
+                if self.position_side in ("LONG", "SHORT") and self.entry_price > 0:
+                    self._init_or_ratchet_stops(self.position_side, self.entry_price, atr)
         elif signal == 0 and self.position_side != "FLAT" and self.position >= _min_qty:
             close_side = "SELL" if self.position_side == "LONG" else "BUY"
             self.execute_order(
