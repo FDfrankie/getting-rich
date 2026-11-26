@@ -213,3 +213,58 @@ BITUNIX_STATUS_MAP: dict[str, OrderState] = {
 
 def map_bitunix_order_status(raw_status: str) -> OrderState:
     return BITUNIX_STATUS_MAP.get(str(raw_status or "").upper().strip(), OrderState.UNKNOWN)
+
+
+# ---------------------------------------------------------------------------
+# 4. Binance USDT-M Futures Fee-Aware Barrier Helpers (P50 Upgrade)
+# ---------------------------------------------------------------------------
+USDT_M_MAKER_FEE_ONE_WAY = 0.0002       # 2 bps (VIP 0 Maker)
+USDT_M_TAKER_FEE_ONE_WAY = 0.0005       # 5 bps (VIP 0 Taker)
+USDT_M_BNB_DISCOUNT_MULT = 0.90         # 10% fee discount when paying in BNB
+
+
+def estimate_usdt_roundtrip_fee(
+    *,
+    entry_mode: str = "maker",
+    exit_mode: str = "maker",
+    use_bnb_discount: bool = False,
+) -> float:
+    """Return total round-trip explicit fee ratio for Binance USDT-M perpetuals."""
+    e_fee = USDT_M_MAKER_FEE_ONE_WAY if str(entry_mode).lower() == "maker" else USDT_M_TAKER_FEE_ONE_WAY
+    x_fee = USDT_M_MAKER_FEE_ONE_WAY if str(exit_mode).lower() == "maker" else USDT_M_TAKER_FEE_ONE_WAY
+    total = e_fee + x_fee
+    if use_bnb_discount:
+        total *= USDT_M_BNB_DISCOUNT_MULT
+    return round(total, 8)
+
+
+def evaluate_usdt_cost_barrier(
+    *,
+    expected_return: float,
+    entry_mode: str = "maker",
+    exit_mode: str = "maker",
+    use_bnb_discount: bool = False,
+    spread_cost: float | None = None,
+    slippage: float | None = None,
+    funding: float = 0.0001,
+    uncertainty_buffer: float = 0.00015,
+    minimum_edge_multiple: float = 1.25,
+) -> TradeGateDecision:
+    """USDT-M fee-calibrated no-trade barrier (Maker 4 bps RT vs Taker 10 bps RT)."""
+    rt_fee = estimate_usdt_roundtrip_fee(
+        entry_mode=entry_mode,
+        exit_mode=exit_mode,
+        use_bnb_discount=use_bnb_discount,
+    )
+    is_maker_entry = str(entry_mode).lower() == "maker"
+    eff_spread = 0.00005 if (spread_cost is None and is_maker_entry) else (0.0001 if spread_cost is None else float(spread_cost))
+    eff_slip = 0.00005 if (slippage is None and is_maker_entry) else (0.00025 if slippage is None else float(slippage))
+    return evaluate_cost_barrier(
+        expected_return=expected_return,
+        explicit_fee=rt_fee,
+        spread_cost=eff_spread,
+        slippage=eff_slip,
+        funding=funding,
+        uncertainty_buffer=uncertainty_buffer,
+        minimum_edge_multiple=minimum_edge_multiple,
+    )

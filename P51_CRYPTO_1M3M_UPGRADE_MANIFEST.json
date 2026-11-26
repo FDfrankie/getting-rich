@@ -1,0 +1,15 @@
+{
+  "bundle_id": "P51",
+  "title": "Crypto 1m/3m MTF Candlestick Conditional-Probability Upgrade & Real Walk-Forward Profitability Gate",
+  "created_at_taipei": "2026-11-26 16:47:26+08:00",
+  "builds_on": "P50",
+  "papers_indexed": 14,
+  "files": [
+    "P51_CRYPTO_1M3M_UPGRADE_MANIFEST.json",
+    "docs/references/crypto_quant_kb_v1.json",
+    "docs/CRYPTO_1M_3M_CONDITIONAL_PROB_SURVEY_P51.md",
+    "crypto_trading/strategies/conditional_prob_rl_strategy.py",
+    "scripts/backtest_crypto_usdt_walkforward.py",
+    "tests/test_p51_crypto_1m3m_condprob_walkforward.py"
+  ]
+}

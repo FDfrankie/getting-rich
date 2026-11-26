@@ -173,7 +173,7 @@ class BinanceTestnetClient:
                 "free_balance": self._mock_balance.get(self.settlement, 15000.0) * 0.8,
                 "settlement_currency": self.settlement,
                 "balances": self._mock_balance,
-                "zero_fee_usdc": True,
+                "zero_fee_usdc": self.settlement == "USDC",
             }
 
         try:
@@ -389,7 +389,7 @@ class BinanceTestnetClient:
         order_type = order_type.upper()
         target_symbol = self.format_symbol(symbol)
         raw_symbol = self._to_raw_symbol(symbol)
-        fee_rate = 0.0 if self.settlement == "USDC" else 0.0005
+        fee_rate = 0.0 if self.settlement == "USDC" else (0.0002 if (order_type == "LIMIT" and post_only) else 0.0005)
 
         # 檢查 USDC Liquidity Guard (若為 USDC 市價單)
         if "USDC" in self.settlement and order_type == "MARKET":
@@ -443,7 +443,7 @@ class BinanceTestnetClient:
                 "exchange_order_id": str(order_info.get("id") or order_info.get("orderId") or ""),
                 "order": order_info,
                 "zero_fee": fee_rate == 0.0,
-                "message": f"[幣安合約測試網] 成功送出 {target_symbol} {side} 委託 (費率: {'0% USDC特惠' if fee_rate == 0 else '0.05%'})",
+                "message": f"[幣安合約測試網] 成功送出 {target_symbol} {side} {order_type} 委託 (費率: {fee_rate * 100:.3f}% {self.settlement})",
             }
 
         try:
@@ -573,7 +573,7 @@ def main_cli():
     client = BinanceTestnetClient()
     print("=== Binance Futures Testnet 模組自檢 ===")
     ticker = client.fetch_ticker(args.symbol)
-    print("即時報價 (USDC合約):", ticker)
+    print(f"即時報價 ({client.settlement}合約):", ticker)
     bal = client.fetch_balance()
     print("合約錢包餘額:", bal)
 

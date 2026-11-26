@@ -1,0 +1,174 @@
+{
+  "kb_name": "crypto_quant_kb_v1",
+  "version": "1.0.0",
+  "created_at_taipei": "2026-11-26 16:47:26+08:00",
+  "scope": "Cryptocurrency Perpetual Futures (Binance USDT-M): 1m/3m/Intraday Candlestick TA, Conditional Probability & HMM Regime Switching, CUSUM + Triple-Barrier Labeling, Order Flow Imbalance (OFI), Maker/Taker Adverse Selection & Walk-Forward Profitability Verification",
+  "binance_usdt_m_vip0_fees_2026": {
+    "maker_one_way": 0.0002,
+    "taker_one_way": 0.0005,
+    "maker_bnb_discount_one_way": 0.00018,
+    "taker_bnb_discount_one_way": 0.00045,
+    "maker_roundtrip_bps": 4.0,
+    "taker_roundtrip_bps": 10.0,
+    "sources": [
+      "https://www.binance.com/en/square/post/382805944096961",
+      "https://bitsgap.com/blog/binance-trading-fees-explained-what-it-costs"
+    ]
+  },
+  "papers": [
+    {
+      "id": "CKB-001",
+      "track": "intraday_ta_fdr",
+      "title": "Are Simple Technical Trading Rules Profitable in Bitcoin Markets?",
+      "authors": "Niek Deprez, Michael Frömmel",
+      "year": 2024,
+      "venue": "International Review of Economics & Finance, Vol. 93, pp. 858-874",
+      "url": "https://biblio.ugent.be/publication/01HY3C3S169G1N6QNYR55NZMFB",
+      "key_finding": "Tests 75,360 simple technical trading rules across daily and intraday frequencies with FDR multiple-hypothesis control and realistic transaction costs; portfolios of FDR-selected rules outperform buy-and-hold out-of-sample on a risk-adjusted basis.",
+      "implementation_rule": "Never deploy unvalidated technical rules; require out-of-sample post-cost selection and combine orthogonal rules rather than single indicator triggers."
+    },
+    {
+      "id": "CKB-002",
+      "track": "intraday_ta_costs",
+      "title": "Technical analysis in cryptocurrency markets: Do transaction costs and bubbles matter?",
+      "authors": "Daniel Svogun, Walter Bazán-Palomino",
+      "year": 2022,
+      "venue": "Journal of International Financial Markets, Institutions and Money, Vol. 79",
+      "url": "https://ideas.repec.org/a/eee/intfin/v79y2022ics1042443122000816.html",
+      "key_finding": "Evaluates 69 technical rules on daily and 1-minute returns (2016-2021) with and without transaction costs; costs dramatically erode altcoin profitability while BTC/ETH liquidity retains structural edge.",
+      "implementation_rule": "Focus 1m/3m execution on highest-liquidity USDT-M pairs (BTCUSDT, ETHUSDT, SOLUSDT) and enforce explicit per-pair fee gates."
+    },
+    {
+      "id": "CKB-003",
+      "track": "candlestick_intraday",
+      "title": "Intraday price forecasts using candlestick patterns in cryptocurrency markets",
+      "authors": "Review of Financial Economics / IREF",
+      "year": 2026,
+      "venue": "International Review of Economics & Finance, Vol. 108",
+      "url": "https://ideas.repec.org/a/eee/reveco/v108y2026ics1059056026002716.html",
+      "key_finding": "Documents intraday predictive power of candlestick reversal/continuation patterns in crypto when conditioned on prevailing trend definition and holding horizon.",
+      "implementation_rule": "Condition candlestick patterns (wick sweep / pin bar / engulfing) on higher-timeframe trend state rather than trading isolated candles."
+    },
+    {
+      "id": "CKB-004",
+      "track": "candlestick_regime",
+      "title": "Visual Chart Representations for Cryptocurrency Regime Prediction: A Systematic Deep Learning Study",
+      "authors": "arXiv Preprint",
+      "year": 2026,
+      "venue": "arXiv:2605.00875",
+      "url": "https://arxiv.org/html/2605.00875v1",
+      "key_finding": "Raw candlestick spatial geometry on BTC/ETH (2018-2024) achieves 0.892 AUC-ROC for regime classification, outperforming complex encodings.",
+      "implementation_rule": "Encode clean OHLC candlestick geometry (body ratio, upper/lower wick ratios, range expansion) directly into the regime/conditional probability state."
+    },
+    {
+      "id": "CKB-005",
+      "track": "cusum_triple_barrier",
+      "title": "Algorithmic crypto trading using information-driven bars, triple barrier labeling and deep learning",
+      "authors": "Financial Innovation",
+      "year": 2025,
+      "venue": "Financial Innovation, Vol. 11(1)",
+      "url": "https://ideas.repec.org/a/spr/fininn/v11y2025i1d10.1186_s40854-025-00866-w.html",
+      "key_finding": "On 2018-2023 BTC/ETH tick data, combining CUSUM event filtering with Triple-Barrier labeling outperforms fixed-time next-bar prediction and stays net-profitable after transaction costs.",
+      "implementation_rule": "Filter 1m/3m noise bars with a volatility-scaled CUSUM / structural-candle trigger and label conditional probabilities via Triple-Barrier (TP hit before SL within vertical time limit)."
+    },
+    {
+      "id": "CKB-006",
+      "track": "mtf_zero_lookahead",
+      "title": "Multi-Timeframe Feature Engineering for Bitcoin Market Prediction: A Price-Level-Agnostic Machine Learning Approach",
+      "authors": "MDPI Machine Learning and Knowledge Extraction",
+      "year": 2026,
+      "venue": "MDPI MAKE, 8(3), 40",
+      "url": "https://www.mdpi.com/2571-9394/8/3/40",
+      "key_finding": "Proves that merging higher-timeframe (HTF) candles onto lower-timeframe bars without shifting HTF bars by 1 completed period inflates ROC-AUC by +0.20 (lookahead bias); causal MTF alignment significantly reduces maximum drawdown.",
+      "implementation_rule": "Strictly shift resampled 15m/1h higher-timeframe indicators by 1 completed bar before merging onto 1m/3m execution bars; normalize all features price-level-agnostically (ratios/ATR/z-scores)."
+    },
+    {
+      "id": "CKB-007",
+      "track": "walkforward_tx_costs",
+      "title": "Machine Learning-Based Bitcoin Trading Under Transaction Costs: Evidence From Walk-Forward Forecasting",
+      "authors": "arXiv Preprint",
+      "year": 2026,
+      "venue": "arXiv:2606.00060",
+      "url": "https://arxiv.org/html/2606.00060v1",
+      "key_finding": "Shows intraday Bitcoin models frequently exhibit positive gross edge that turns negative net of transaction costs due to high turnover; walk-forward evaluation must directly optimize net-of-cost utility.",
+      "implementation_rule": "Enforce walk-forward OOS net-of-cost Profitability Gate before live deployment and include switching/turnover penalty directly in action selection."
+    },
+    {
+      "id": "CKB-008",
+      "track": "maker_adverse_selection",
+      "title": "The Market Maker's Dilemma: Navigating the Fill Probability vs. Post-Fill Returns Trade-Off",
+      "authors": "arXiv Preprint",
+      "year": 2025,
+      "venue": "arXiv:2502.18625",
+      "url": "https://arxiv.org/html/2502.18625v2",
+      "key_finding": "Taker strategies are constrained by prohibitive fees, while passive Maker orders suffer adverse selection unless timed when order-book/flow imbalance begins reverting.",
+      "implementation_rule": "Use Maker-First (POST_ONLY) execution on liquidity-sweep / OFI-reversal setups, and block passive limit entries during extreme one-sided momentum cascades."
+    },
+    {
+      "id": "CKB-009",
+      "track": "binance_microstructure_ofi",
+      "title": "Explainable Patterns in Cryptocurrency Microstructure",
+      "authors": "Bartosz Bieganowski, Robert Ślepaczuk",
+      "year": 2026,
+      "venue": "arXiv:2602.00776 (Binance Futures 2022-2025)",
+      "url": "https://arxiv.org/html/2602.00776v1",
+      "key_finding": "Using 1-second Binance Futures perpetual data (2022-2025), documents portable cross-asset SHAP patterns in Order Flow Imbalance (OFI), spread, and VWAP deviation, plus flash-crash divergence between Maker and Taker execution.",
+      "implementation_rule": "Include signed Order Flow Imbalance (Binance taker_buy_base_vol) and VWAP deviation in 1m/3m feature states."
+    },
+    {
+      "id": "CKB-010",
+      "track": "short_horizon_reversion",
+      "title": "Short-horizon mean reversion in cryptocurrency markets: a matched cross-market measurement",
+      "authors": "arXiv Preprint",
+      "year": 2026,
+      "venue": "arXiv:2608.21888",
+      "url": "https://arxiv.org/html/2608.21888v1",
+      "key_finding": "Measures short-horizon reversal on Binance USDT-M perpetuals using kline taker-buy base volume and funding history, isolating liquidity-provision edge vs. informed flow.",
+      "implementation_rule": "Extract Binance kline taker_buy_base_volume directly during data ingestion to compute real Taker Imbalance = 2*(taker_buy/total_vol) - 1."
+    },
+    {
+      "id": "CKB-011",
+      "track": "regime_switching_hmm",
+      "title": "Regime-switching in bitcoin volatility under global uncertainty: Markov-switching GARCH and hidden Markov Copula approaches",
+      "authors": "Amin Shakourloo, Asil Azimli",
+      "year": 2026,
+      "venue": "Research in International Business and Finance, Vol. 83",
+      "url": "https://ideas.repec.org/a/eee/riibaf/v83y2026ics027553192600022x.html",
+      "key_finding": "Confirms Bitcoin operates under sharp volatility regime switches; conditioning strategy parameters and risk scaling on latent regime improves robustness.",
+      "implementation_rule": "Scale position size inversely with realized volatility regime and separate high-vol vs. normal-vol conditional probability posteriors."
+    },
+    {
+      "id": "CKB-012",
+      "track": "perp_liquidation_momentum",
+      "title": "Momentum in the Cryptocurrency Market: A Comprehensive Analysis under Realistic Assumptions",
+      "authors": "Review of Asset Pricing Studies",
+      "year": 2026,
+      "venue": "Review of Asset Pricing Studies (Oxford Academic)",
+      "url": "https://academic.oup.com/raps/advance-article/doi/10.1093/rapstu/raag011/8914819",
+      "key_finding": "Under daily mark-to-market liquidation risk, time-series momentum on major cryptocurrencies remains robust whereas leveraged cross-sectional altcoin portfolios frequently liquidate.",
+      "implementation_rule": "Prioritize time-series trend/reversion on liquid majors (BTCUSDT, ETHUSDT, SOLUSDT) with fixed initial hard stops and conservative leverage."
+    },
+    {
+      "id": "CKB-013",
+      "track": "perp_funding_fundamentals",
+      "title": "Fundamentals of Perpetual Futures",
+      "authors": "Songrun He, Asaf Manela, Omri Ross, Victor von Wachter",
+      "year": 2026,
+      "venue": "arXiv:2212.06888",
+      "url": "https://arxiv.org/abs/2212.06888",
+      "key_finding": "Derives no-arbitrage perpetual funding bounds and shows funding rate deviations reflect leveraged directional crowding.",
+      "implementation_rule": "Account for 8h funding rate carry in walk-forward PnL and throttle longs/shorts during extreme crowded funding."
+    },
+    {
+      "id": "CKB-014",
+      "track": "crypto_carry_tail_risk",
+      "title": "Crypto Carry",
+      "authors": "Maik Schmeling, Andreas Schrimpf, Karamfil Todorov",
+      "year": 2026,
+      "venue": "Management Science",
+      "url": "https://pubsonline.informs.org/doi/10.1287/mnsc.2024.05069",
+      "key_finding": "Documents high crypto carry premia accompanied by severe left-tail crash risk during crowded unwinding.",
+      "implementation_rule": "Apply conformal / tail-risk position scaling and hard stop-loss caps to prevent left-tail liquidation."
+    }
+  ]
+}

@@ -76,6 +76,7 @@ def read_sqlite_pnl_summary(db_path: Path | None = None) -> dict[str, Any]:
             "win_count": 0,
             "win_rate_pct": 0.0,
             "realized_pnl_usdt": 0.0,
+            "total_fees_usdt": 0.0,
             "filtered_test_rows_count": 0,
             "recent_closes": [],
             "bot_state": {},
@@ -139,6 +140,16 @@ def read_sqlite_pnl_summary(db_path: Path | None = None) -> dict[str, Any]:
             realized_pnl_usdt = sum(r["pnl_usdt"] for r in real_closes)
             recent_closes = real_closes[:20]
 
+        total_fees_usdt = 0.0
+        if "orders" in tables:
+            try:
+                fee_row = conn.execute(
+                    "SELECT COALESCE(SUM(fee), 0.0) FROM orders WHERE status = 'FILLED' AND (exchange_order_id NOT LIKE 'PAPER_%' OR price NOT IN (45000.0, 50000.0, 55000.0))"
+                ).fetchone()
+                total_fees_usdt = float(fee_row[0] or 0.0) if fee_row else 0.0
+            except Exception:
+                total_fees_usdt = 0.0
+
         bot_state: dict[str, Any] = {}
         if "bot_state" in tables:
             bs_rows = conn.execute("SELECT key, value FROM bot_state").fetchall()
@@ -152,6 +163,7 @@ def read_sqlite_pnl_summary(db_path: Path | None = None) -> dict[str, Any]:
             "win_count": win_count,
             "win_rate_pct": round(win_rate_pct, 2),
             "realized_pnl_usdt": round(realized_pnl_usdt, 4),
+            "total_fees_usdt": round(total_fees_usdt, 4),
             "filtered_test_rows_count": filtered_test_rows_count,
             "recent_closes": recent_closes,
             "bot_state": bot_state,
@@ -161,7 +173,10 @@ def read_sqlite_pnl_summary(db_path: Path | None = None) -> dict[str, Any]:
 
 
 def fetch_exchange_account_ro(trading_mode: str) -> dict[str, Any]:
-    mode = str(trading_mode or "LOCAL_PAPER").upper()
+    raw_val = getattr(trading_mode, "value", trading_mode)
+    mode = str(raw_val or "LOCAL_PAPER").strip().upper()
+    if mode.startswith("TRADINGMODE."):
+        mode = mode.split(".", 1)[1]
     out: dict[str, Any] = {
         "trading_mode": mode,
         "connected": False,
@@ -195,12 +210,11 @@ def fetch_exchange_account_ro(trading_mode: str) -> dict[str, Any]:
             exchange.set_sandbox_mode(True)
 
         bal = exchange.fetch_balance()
-        total_eq = 0.0
-        free_bal = 0.0
-        for asset in ("USDT", "USDC"):
-            info = bal.get(asset) or {}
-            total_eq += float(info.get("total") or 0.0)
-            free_bal += float(info.get("free") or 0.0)
+        usdt_info = bal.get("USDT") or {}
+        usdc_info = bal.get("USDC") or {}
+        total_eq = float(usdt_info.get("total") or 0.0)
+        free_bal = float(usdt_info.get("free") or 0.0)
+        legacy_usdc = float(usdc_info.get("total") or 0.0)
 
         positions_raw = exchange.fetch_positions()
         open_positions: list[dict[str, Any]] = []
@@ -226,8 +240,10 @@ def fetch_exchange_account_ro(trading_mode: str) -> dict[str, Any]:
         out.update(
             {
                 "connected": True,
+                "settlement_currency": "USDT",
                 "total_equity_usdt": round(total_eq, 4),
                 "free_balance_usdt": round(free_bal, 4),
+                "legacy_usdc_balance": round(legacy_usdc, 4),
                 "unrealized_pnl_usdt": round(total_upnl, 4),
                 "open_positions": open_positions,
             }
@@ -293,10 +309,12 @@ def render_dashboard_md(payload: dict[str, Any]) -> str:
         "## Account & PnL Summary",
         "| Metric | Value |",
         "|---|---|",
-        f"| Total Equity (USDT/USDC) | `{ex.get('total_equity_usdt')}` |",
-        f"| Free Balance (USDT/USDC) | `{ex.get('free_balance_usdt')}` |",
+        f"| Total Equity (USDT) | `{ex.get('total_equity_usdt')}` |",
+        f"| Free Balance (USDT) | `{ex.get('free_balance_usdt')}` |",
         f"| Unrealized PnL (USDT) | `{ex.get('unrealized_pnl_usdt')}` |",
-        f"| Realized PnL (SQLite, USDT) | `{sq.get('realized_pnl_usdt', 0.0)}` |",
+        f"| Settlement Currency | `USDT` (VIP0 Maker 0.02% / Taker 0.05%) |",
+        f"| Realized Net PnL (SQLite, USDT) | `{sq.get('realized_pnl_usdt', 0.0)}` |",
+        f"| Cumulative Recorded Fees (USDT) | `{sq.get('total_fees_usdt', 0.0)}` |",
         f"| Total Real Closes / Win Rate | `{sq.get('total_closes', 0)}` / `{sq.get('win_rate_pct', 0.0)}%` |",
         f"| Filtered Unit-Test Rows | `{sq.get('filtered_test_rows_count', 0)}` |",
         f"| Exchange Error | `{ex.get('exchange_error') or 'None'}` |",
@@ -351,9 +369,20 @@ def export_crypto_pnl_to_drive(
     exchange_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     settings = get_settings()
-    trading_mode = str(getattr(settings, "trading_mode", "LOCAL_PAPER") or "LOCAL_PAPER")
+    _raw_tm = getattr(settings, "trading_mode", "LOCAL_PAPER")
+    trading_mode = str(getattr(_raw_tm, "value", _raw_tm) or "LOCAL_PAPER").strip().upper()
+    if trading_mode.startswith("TRADINGMODE."):
+        trading_mode = trading_mode.split(".", 1)[1]
     sq_summary = read_sqlite_pnl_summary(db_path=db_path)
-    ex_summary = exchange_override if exchange_override is not None else fetch_exchange_account_ro(trading_mode)
+    effective_exchange_mode = trading_mode
+    if (
+        effective_exchange_mode == "LOCAL_PAPER"
+        and str((sq_summary.get("bot_state") or {}).get("execution_mode") or "").upper() == "BINANCE_TESTNET"
+        and (os.getenv("BINANCE_TESTNET_API_KEY") or "").strip()
+        and (os.getenv("BINANCE_TESTNET_API_SECRET") or "").strip()
+    ):
+        effective_exchange_mode = "BINANCE_TESTNET"
+    ex_summary = exchange_override if exchange_override is not None else fetch_exchange_account_ro(effective_exchange_mode)
     models = read_model_statuses()
     bot_running, bot_pids = detect_crypto_bot_processes()
 

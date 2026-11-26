@@ -1,0 +1,24 @@
+{
+  "bundle": "p50_crypto_usdt_strategy_upgrade_bundle.zip",
+  "generated_at_taipei": "2026-11-26 16:16:22+08:00",
+  "upgrade_id": "P50",
+  "settlement_currency": "USDT",
+  "binance_usdt_m_vip0_fees": {
+    "maker_pct": 0.0002,
+    "taker_pct": 0.0005,
+    "bnb_maker_pct": 0.00018,
+    "bnb_taker_pct": 0.00045
+  },
+  "files": [
+    "crypto_trading/settings.py",
+    "crypto_trading/execution_cost_filter.py",
+    "crypto_trading/testnet_client.py",
+    "crypto_trading/strategies/native_ensemble_strategy.py",
+    "crypto_trading/bot_runner.py",
+    "scripts/export_crypto_pnl_to_drive.py",
+    "scripts/watchdog_check.ps1",
+    ".github/workflows/crypto_and_taiwan_cron.yml",
+    "docs/CRYPTO_USDT_STRATEGY_AUDIT_AND_UPGRADE_P50.md",
+    "tests/test_p50_crypto_usdt_upgrade.py"
+  ]
+}

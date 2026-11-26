@@ -139,20 +139,29 @@ BITUNIX_API_KEY = os.getenv("BITUNIX_API_KEY", "")
 BITUNIX_API_SECRET = os.getenv("BITUNIX_API_SECRET", "")
 
 DEFAULT_SYMBOL = "BTC/USDT"
-DEFAULT_SETTLEMENT_CURRENCY = "USDC"
+DEFAULT_SETTLEMENT_CURRENCY = "USDT"
 DEFAULT_TIMEFRAME = "1h"
 
 PAPER_TRADING = True
 INITIAL_BALANCE_USDT = 10000.0
 
+# Binance USD-M Futures (USDT-settled, VIP 0 standard schedule)
+USDT_M_MAKER_FEE_PCT = 0.0002       # 0.02% (2 bps) Maker / Post-Only Limit
+USDT_M_TAKER_FEE_PCT = 0.0005       # 0.05% (5 bps) Taker / Market
+USDT_M_BNB_MAKER_FEE_PCT = 0.00018  # 0.018% (1.8 bps) with 10% BNB discount
+USDT_M_BNB_TAKER_FEE_PCT = 0.00045  # 0.045% (4.5 bps) with 10% BNB discount
+
 RISK_PARAMS = {
     "max_risk_per_trade_pct": 0.02,
     "max_drawdown_stop_pct": 0.08,
+    "max_stop_loss_pct": 0.035,
     "atr_stop_multiplier": 2.0,
     "atr_take_profit_multiplier": 3.0,
     "max_open_positions": 3,
-    "slippage_bps": 5,
-    "taker_fee_pct": 0.0005,
+    "slippage_bps": 3,
+    "maker_fee_pct": USDT_M_MAKER_FEE_PCT,
+    "taker_fee_pct": USDT_M_TAKER_FEE_PCT,
+    "preferred_order_type": "LIMIT_POST_ONLY",
 }
 
 STRATEGY_PARAMS = {
