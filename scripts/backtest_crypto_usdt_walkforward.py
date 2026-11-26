@@ -177,6 +177,10 @@ def simulate_walkforward_oos(
     hard_tp = 0.0
     partial_tp_price = 0.0
     partial_taken = False
+    # P55 Bugfix: Prevent phantom immediate re-entry on stale signal after intrabar SL/TP exit
+    locked_dir_until_reset = 0.0
+    post_exit_cooldown = 0
+    cooldown_after_exit = {"1m": 20, "3m": 15, "5m": 10, "15m": 6, "1h": 4}.get(timeframe, 10)
     trade_returns: list[float] = []
     bar_returns: list[float] = []
 
@@ -247,16 +251,32 @@ def simulate_walkforward_oos(
 
             if exited:
                 raw_r = pos * ((exit_p - entry_price) / entry_price)
-                # SL exit typically crosses spread (Taker), TP exit rests as Maker
-                exit_fee = (0.0005 + slippage_one_way) if ((pos > 0 and exit_p <= hard_sl) or (pos < 0 and exit_p >= hard_sl)) else fee_one_way
+                # SL exit crosses spread (Taker), Break-Even / TP exit rests as Maker when profitable
+                is_loss_stop = (pos > 0 and exit_p < entry_price) or (pos < 0 and exit_p > entry_price)
+                exit_fee = (0.0005 + slippage_one_way) if is_loss_stop else fee_one_way
                 fee_cost = abs(pos) * exit_fee
                 net_r = raw_r - fee_cost
                 equity *= (1.0 + net_r)
                 gross_pnl_sum += raw_r
                 total_fees += fee_cost
                 trade_returns.append(net_r)
+                locked_dir_until_reset = 1.0 if pos > 0 else -1.0
+                post_exit_cooldown = cooldown_after_exit
                 pos = 0.0
                 entry_price = 0.0
+                partial_taken = False
+                peak_equity = max(peak_equity, equity)
+                dd = (peak_equity - equity) / peak_equity if peak_equity > 0 else 0.0
+                max_dd = max(max_dd, dd)
+                bar_returns.append((equity - prev_eq) / prev_eq if prev_eq > 0 else 0.0)
+                continue
+
+        # Unlock stale direction once strategy signal returns to FLAT or flips opposite
+        if locked_dir_until_reset != 0.0:
+            if abs(target) < 0.15 or (target * locked_dir_until_reset < 0):
+                locked_dir_until_reset = 0.0
+        if post_exit_cooldown > 0:
+            post_exit_cooldown -= 1
 
         # 2. Rebalance / Open / Close according to causal signal at bar i close
         if pos != 0.0 and (target == 0.0 or (target * pos < 0)):
@@ -270,7 +290,8 @@ def simulate_walkforward_oos(
             pos = 0.0
             entry_price = 0.0
 
-        if pos == 0.0 and abs(target) >= 0.15:
+        can_open_fresh = (post_exit_cooldown == 0) and (locked_dir_until_reset == 0.0 or (target * locked_dir_until_reset < 0))
+        if pos == 0.0 and abs(target) >= 0.15 and can_open_fresh:
             pos = target
             entry_price = close[i]
             fee_cost = abs(pos) * (fee_one_way + slippage_one_way)
@@ -384,7 +405,7 @@ def write_profitability_report(
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
     lines = [
-        "# Crypto USDT-M Walk-Forward OOS Profitability Gate Report (P54 Institutional Alpha Suite)",
+        "# Crypto USDT-M Walk-Forward OOS Profitability Gate Report (P55 Institutional Suite (Zero Phantom Re-Entry))",
         "",
         f"- **Generated (Taipei)**: `{payload['generated_at_taipei']}`",
         f"- **Gate Thresholds**: Net Sharpe >= `{GATE_MIN_SHARPE}`, PF >= `{GATE_MIN_PROFIT_FACTOR}`, Max DD <= `{GATE_MAX_DRAWDOWN_PCT}%`, Trades >= `{GATE_MIN_TRADES}`, Net Return > `0%`",

@@ -1,0 +1,12 @@
+{
+  "bundle_id": "P55",
+  "title": "Fix Phantom Immediate Re-Entry After SL/TP in Walk-Forward Simulator + Self-Healing Watchdog for Crypto Bot & PnL Sync",
+  "created_at_taipei": "2026-11-26 19:23:32+08:00",
+  "builds_on": "P54",
+  "files": [
+    "P55_REENTRY_WATCHDOG_MANIFEST.json",
+    "scripts/backtest_crypto_usdt_walkforward.py",
+    "scripts/watchdog_check.ps1",
+    "tests/test_p55_no_phantom_reentry_after_sl_tp.py"
+  ]
+}
