@@ -30,6 +30,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from crypto_trading.strategies.conditional_prob_rl_strategy import ConditionalProbRLStrategy
 from crypto_trading.strategies.institutional_alpha_router import InstitutionalAlphaRouter
+from crypto_trading.strategies.fib_condprob_kline_strategy import FibCondProbKLineStrategy
 from crypto_trading.derivatives_data_loader import (
     enrich_ohlcv_with_derivatives,
     fetch_funding_rate_history,
@@ -157,6 +158,14 @@ def simulate_walkforward_oos(
     low = pd.to_numeric(sig_df["Low"], errors="coerce").to_numpy(dtype=np.float64)
     atr_pct = pd.to_numeric(sig_df.get("ATR_PCT", pd.Series(0.003, index=sig_df.index)), errors="coerce").fillna(0.003).to_numpy(dtype=np.float64)
     signals = pd.to_numeric(sig_df["signal"], errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
+    ambush_px = pd.to_numeric(sig_df.get("ambush_limit_price", pd.Series(0.0, index=sig_df.index)), errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
+    ambush_dir = pd.to_numeric(sig_df.get("ambush_dir", pd.Series(0, index=sig_df.index)), errors="coerce").fillna(0).to_numpy(dtype=np.int8)
+    ambush_size = pd.to_numeric(sig_df.get("ambush_size", pd.Series(0.0, index=sig_df.index)), errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
+    enable_pyramiding = bool(getattr(strategy, "enable_pyramiding", False))
+    pyramid_add_frac = float(getattr(strategy, "pyramid_add_fraction", 0.50))
+    max_lev_cap = float(getattr(strategy, "max_leverage_scale", 1.35))
+    pyramided = False
+    breakeven_locked = False
 
     n = len(sig_df)
     start_i = min(max(100, warmup_bars), max(1, n - 50))
@@ -187,7 +196,9 @@ def simulate_walkforward_oos(
     for i in range(start_i, n - 1):
         prev_eq = equity
         # Signal generated at bar i close executes at bar i close (strictly causal) -> realized on bar i+1
-        target = float(np.clip(signals[i], -1.35, 1.35))
+        cur_dd_pct = (peak_equity - equity) / max(peak_equity, 1e-9) * 100.0
+        dd_throttle = 0.65 if cur_dd_pct >= 4.0 else 1.0
+        target = float(np.clip(signals[i] * dd_throttle, -max_lev_cap, max_lev_cap))
 
         # 1. Check intrabar hard SL / TP + P54 50% Partial Maker TP + Break-Even Lock & Profit Ratchet
         if pos != 0.0:
@@ -220,6 +231,18 @@ def simulate_walkforward_oos(
                         gain = high[i] - entry_price
                         if gain >= 1.6 * atr_abs:
                             hard_sl = max(hard_sl, entry_price * 1.0006)
+                            breakeven_locked = True
+                        if enable_pyramiding and breakeven_locked and (not pyramided) and target > 0:
+                            add_sz = min(max_lev_cap - abs(pos), abs(pos) * pyramid_add_frac)
+                            if add_sz > 0.05:
+                                new_pos = pos + add_sz
+                                entry_price = (pos * entry_price + add_sz * close[i]) / new_pos
+                                fee_add = add_sz * fee_one_way
+                                equity *= (1.0 - fee_add)
+                                total_fees += fee_add
+                                pos = new_pos
+                                hard_sl = max(hard_sl, entry_price * 1.0004)
+                                pyramided = True
                         if gain >= 2.8 * atr_abs:
                             hard_sl = max(hard_sl, high[i] - 1.5 * atr_abs)
             else:
@@ -291,6 +314,32 @@ def simulate_walkforward_oos(
             entry_price = 0.0
 
         can_open_fresh = (post_exit_cooldown == 0) and (locked_dir_until_reset == 0.0 or (target * locked_dir_until_reset < 0))
+        if pos == 0.0:
+            pyramided = False
+            breakeven_locked = False
+        # P61 Elite Mechanic #1: Resting Maker Limit Ambush Fill on bar i+1 (0 slippage, Maker fee only)
+        if pos == 0.0 and post_exit_cooldown == 0 and ambush_dir[i] != 0 and ambush_px[i] > 0.0 and target == 0.0:
+            a_dir = int(ambush_dir[i])
+            a_px = float(ambush_px[i])
+            if low[i + 1] <= a_px <= high[i + 1] and (locked_dir_until_reset == 0.0 or np.sign(a_dir) != locked_dir_until_reset):
+                a_sz = float(np.clip(ambush_size[i] * dd_throttle, 0.5, max_lev_cap))
+                pos = float(a_dir) * a_sz
+                entry_price = a_px
+                ap_i = max(0.0008, float(atr_pct[i]))
+                atr_abs = entry_price * ap_i
+                if pos > 0:
+                    hard_sl = entry_price - sl_atr_mult * atr_abs
+                    hard_tp = entry_price + tp_atr_mult * atr_abs
+                    partial_tp_price = entry_price + partial_tp_mult * atr_abs
+                else:
+                    hard_sl = entry_price + sl_atr_mult * atr_abs
+                    hard_tp = entry_price - tp_atr_mult * atr_abs
+                    partial_tp_price = entry_price - partial_tp_mult * atr_abs
+                partial_taken = False
+                fee_in = abs(pos) * fee_one_way  # Pure Maker, ZERO slippage!
+                equity *= (1.0 - fee_in)
+                total_fees += fee_in
+                locked_dir_until_reset = 0.0
         if pos == 0.0 and abs(target) >= 0.15 and can_open_fresh:
             pos = target
             entry_price = close[i]
@@ -461,6 +510,39 @@ def main() -> int:
                 fee_one_way=0.00018,
                 slippage_one_way=0.00003,
                 execution_mode="MAKER_BNB",
+            )
+        )
+        fib_3m = FibCondProbKLineStrategy(timeframe="3m", fee_roundtrip=0.0004, maker_mode=True)
+        _fib3_gen = fib_3m.generate_signals
+        fib_3m.generate_signals = lambda d, _g=_fib3_gen, _b=btc_lead: _g(d, btc_df=_b)
+        results.append(
+            simulate_walkforward_oos(
+                df_3m,
+                fib_3m,
+                label="FibCondProb_Elite_3m_Maker",
+                symbol=sym,
+                timeframe="3m",
+                fee_one_way=0.0002,
+                slippage_one_way=0.00003,
+                execution_mode="MAKER_AMBUSH",
+            )
+        )
+        df_5m = fetch_binance_usdt_klines(sym, "5m", max(2000, args.bars_3m // 2), cache_dir=cache_dir)
+        btc_ref_5m = df_5m if sym.upper() == "BTCUSDT" else fetch_binance_usdt_klines("BTCUSDT", "5m", max(2000, args.bars_3m // 2), cache_dir=cache_dir)
+        btc_lead_5m = None if sym.upper() == "BTCUSDT" else btc_ref_5m
+        fib_5m = FibCondProbKLineStrategy(timeframe="5m", fee_roundtrip=0.0004, maker_mode=True)
+        _fib5_gen = fib_5m.generate_signals
+        fib_5m.generate_signals = lambda d, _g=_fib5_gen, _b=btc_lead_5m: _g(d, btc_df=_b)
+        results.append(
+            simulate_walkforward_oos(
+                df_5m,
+                fib_5m,
+                label="FibCondProb_Elite_5m_Maker",
+                symbol=sym,
+                timeframe="5m",
+                fee_one_way=0.0002,
+                slippage_one_way=0.00003,
+                execution_mode="MAKER_AMBUSH",
             )
         )
         results.append(

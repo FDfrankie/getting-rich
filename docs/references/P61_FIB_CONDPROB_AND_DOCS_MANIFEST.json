@@ -1,0 +1,20 @@
+{
+  "bundle": "p61_crypto_fib_condprob_profit_engine_and_docs_bundle.zip",
+  "edition": "P61 Full Elite-Trader Structural Imitation Edition",
+  "built_at_taipei": "2026-11-28 16:23:55+08:00",
+  "elite_trader_mechanics": [
+    "1. Resting Maker Limit Ambush at Fibonacci 0.618/0.382 (0 slippage, Maker fee only)",
+    "2. 10 SPA-Verified K-Line Patterns + Expanding-Window Beta-Binomial Conditional Probability",
+    "3. Profit-Locked Pyramiding (+50% add-on strictly after Break-Even Lock >= 1.6*ATR) + Vol-Targeted Dynamic Leverage (0.75x-2.75x) + Drawdown Throttle (>=4% DD -> 0.65x)",
+    "4. Cross-Symbol Relative Strength Rotation (leaders for Longs, laggards for Shorts vs BTC)"
+  ],
+  "files": [
+    "GEMINI.md",
+    "README.md",
+    "crypto_trading/bot_runner.py",
+    "crypto_trading/strategies/fib_condprob_kline_strategy.py",
+    "docs/references/P61_FIB_CONDPROB_AND_DOCS_MANIFEST.json",
+    "scripts/backtest_crypto_usdt_walkforward.py",
+    "tests/test_p61_fib_condprob_kline_and_docs.py"
+  ]
+}

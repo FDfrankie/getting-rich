@@ -75,7 +75,17 @@ class CryptoTradingBot:
             import os as _os
             _prof = _os.getenv("CRYPTO_STRATEGY_PROFILE", "condprob_3m").strip().lower()
             _resolved_strat = None
-            if _prof in ("institutional_3m", "router_3m"):
+            if _prof in ("fib_condprob_3m", "fib_condprob_5m", "fib_condprob_15m", "fib_3m", "elite_fib_3m"):
+                try:
+                    from crypto_trading.strategies.fib_condprob_kline_strategy import FibCondProbKLineStrategy
+                    _tf_map = {
+                        "fib_condprob_3m": "3m", "fib_3m": "3m", "elite_fib_3m": "3m",
+                        "fib_condprob_5m": "5m", "fib_condprob_15m": "15m",
+                    }
+                    _resolved_strat = FibCondProbKLineStrategy(timeframe=_tf_map.get(_prof, "3m"), maker_mode=True)
+                except Exception:
+                    _resolved_strat = None
+            elif _prof in ("institutional_3m", "router_3m"):
                 try:
                     from crypto_trading.strategies.institutional_alpha_router import InstitutionalAlphaRouter
                     _resolved_strat = InstitutionalAlphaRouter(timeframe="3m", maker_mode=True)
