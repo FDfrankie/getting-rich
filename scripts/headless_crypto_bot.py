@@ -51,6 +51,32 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
                 pass
 
 
+
+def evaluate_microstructure_entry_guard(
+    *,
+    expected_edge_bps: float,
+    round_trip_fee_bps: float = 4.0,
+    min_edge_to_fee_ratio: float = 3.0,
+    funding_rate_8h: float = 0.0,
+    proposed_side: str = "LONG",
+    max_adverse_funding_8h: float = 0.0005,
+    seconds_since_last_close: float = 9999.0,
+    min_cooldown_sec: float = 180.0,
+) -> tuple[bool, str]:
+    """P60 (V107-V108 A69/A77/A84): Block fee-bleeding churn and adverse funding-carry entries."""
+    if seconds_since_last_close < min_cooldown_sec:
+        return False, f"COOLDOWN_ACTIVE:{seconds_since_last_close:.0f}s<{min_cooldown_sec:.0f}s"
+    min_req_bps = max(0.0, float(round_trip_fee_bps) * float(min_edge_to_fee_ratio))
+    if float(expected_edge_bps) < min_req_bps:
+        return False, f"EDGE_BELOW_FEE_FLOOR:{expected_edge_bps:.1f}bps<{min_req_bps:.1f}bps"
+    side_u = str(proposed_side or "").upper()
+    if side_u == "LONG" and float(funding_rate_8h) > float(max_adverse_funding_8h):
+        return False, f"ADVERSE_LONG_FUNDING:{funding_rate_8h:.5f}"
+    if side_u == "SHORT" and float(funding_rate_8h) < -float(max_adverse_funding_8h):
+        return False, f"ADVERSE_SHORT_FUNDING:{funding_rate_8h:.5f}"
+    return True, "OK"
+
+
 def build_pnl_snapshot(
     manager: MultiSymbolBotManager,
     *,
@@ -104,10 +130,13 @@ def run_headless_crypto(
     status_path: str | Path | None = None,
     manager: MultiSymbolBotManager | None = None,
 ) -> dict[str, Any]:
+    # P60: Enforce walk-forward gate-passing 3m Maker profile (CondProb_MTF_KLine_3m_Maker: Sharpe 2.965, WR 77.59%)
+    os.environ.setdefault("CRYPTO_STRATEGY_PROFILE", "condprob_3m")
+    exec_tf = os.getenv("CRYPTO_EXEC_TIMEFRAME", "3m").strip() or "3m"
     settings = get_settings()
     mode_str = str(getattr(settings, "trading_mode", "PAPER"))
     syms = symbols or parse_configured_symbols()
-    mgr = manager or MultiSymbolBotManager(symbols=syms)
+    mgr = manager or MultiSymbolBotManager(symbols=syms, exec_timeframe=exec_tf)
     # P59: Write cycle heartbeat to dedicated file so it never clobbers crypto_pnl_status.json
     out_path = Path(status_path) if status_path else (BASE_DIR / "data_persistence" / "crypto_bot_heartbeat.json")
 

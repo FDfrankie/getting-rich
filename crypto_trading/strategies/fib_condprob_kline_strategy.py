@@ -235,6 +235,8 @@ class FibCondProbKLineStrategy(BaseStrategy):
         self.enable_pyramiding = bool(enable_pyramiding)
         self.pyramid_add_fraction = float(pyramid_add_fraction)
         self.enable_ambush_limits = bool(enable_ambush_limits)
+        self.hold_until_sl_tp = True
+        self.max_hold_bars = int({"1m": 120, "3m": 80, "5m": 60, "15m": 40, "1h": 24}.get(self.timeframe, 80))
 
     def generate_signals(self, df: pd.DataFrame, *, btc_df: pd.DataFrame | None = None) -> pd.DataFrame:
         """Strictly causal bar-by-bar signal + resting Fibonacci ambush limit + vol-targeted leverage generator."""
@@ -331,14 +333,16 @@ class FibCondProbKLineStrategy(BaseStrategy):
             cur_reg = int(htf_regime[i])
             atr_bps = float(atr_pct[i]) * 10000.0
 
-            # 2. Elite Mechanic #1: Resting Maker Limit Ambush at Fibonacci 0.618 / 0.382 when HTF trend is clean
-            if self.enable_ambush_limits and cur_reg != 0 and atr_bps >= fee_bps * 2.5:
-                if cur_reg == 1 and 0.0 < fib_618_px[i] < close[i] and (close[i] - fib_618_px[i]) <= 2.2 * atr[i]:
+            # 2. P62 Elite Mechanic #1: Selective Resting Maker Limit Ambush at Fib 0.618 / 0.382
+            # Only arm when HTF trend separation >= 0.22%, ATR >= 3.5x fee, and OFI is not opposing
+            trend_sep = abs(ema_fast[i] - ema_slow[i]) / max(close[i], 1e-9)
+            if self.enable_ambush_limits and cur_reg != 0 and trend_sep >= 0.0022 and atr_bps >= fee_bps * 3.5:
+                if cur_reg == 1 and ofi_ema[i] >= -0.10 and 0.0 < fib_618_px[i] < close[i] and (close[i] - fib_618_px[i]) <= 1.6 * atr[i]:
                     rs_mult = compute_relative_strength_multiplier(close, btc_close, 1, i)
                     ambush_px[i] = float(fib_618_px[i])
                     ambush_dir[i] = 1
                     ambush_size[i] = float(np.clip(vol_lev[i] * 0.85 * rs_mult, self.min_leverage_scale, self.max_leverage_scale))
-                elif cur_reg == -1 and fib_382_px[i] > close[i] and (fib_382_px[i] - close[i]) <= 2.2 * atr[i]:
+                elif cur_reg == -1 and ofi_ema[i] <= 0.10 and fib_382_px[i] > close[i] and (fib_382_px[i] - close[i]) <= 1.6 * atr[i]:
                     rs_mult = compute_relative_strength_multiplier(close, btc_close, -1, i)
                     ambush_px[i] = float(fib_382_px[i])
                     ambush_dir[i] = -1

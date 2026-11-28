@@ -1,0 +1,18 @@
+{
+  "bundle": "p62_all_in_one_p60_plus_p61_ambush_fix_bundle.zip",
+  "built_at_taipei": "2026-11-28 21:09:20+08:00",
+  "summary": "All-in-one bundle applying P60 (BRAIN 3-slot semaphore/SSL/clone/metadata + Crypto 3m Maker bot/watchdog) + P62 fix for FibCondProb 1-bar ambush flash-exit bug.",
+  "files": [
+    "crypto_trading/strategies/fib_condprob_kline_strategy.py",
+    "docs/references/P62_ALL_IN_ONE_MANIFEST.json",
+    "scripts/backtest_crypto_usdt_walkforward.py",
+    "scripts/headless_brain_miner.py",
+    "scripts/headless_crypto_bot.py",
+    "scripts/watchdog_check.ps1",
+    "tests/test_p60_alpha_quality_and_crypto_upgrade.py",
+    "tests/test_p62_ambush_hold_and_all_in_one.py",
+    "worldquant_brain/alpha_miner.py",
+    "worldquant_brain/brain_client.py",
+    "worldquant_brain/multi_sim_client.py"
+  ]
+}

@@ -592,7 +592,7 @@ def fetch_dataset_fields(
                 if not isinstance(row, Mapping):
                     continue
                 fid = str(row.get("id") or "").strip()
-                if not fid:
+                if not fid or is_non_numeric_metadata_field(fid):
                     continue
                 ftype = str(row.get("type") or "MATRIX").upper()
                 if matrix_only and ftype != "MATRIX":
@@ -620,6 +620,52 @@ def fetch_dataset_fields(
 
 
 _UNAVAILABLE_NEUT_RE = re.compile(r"Neutralization\s+([A-Z0-9_]+)\s+is\s+not\s+available", re.IGNORECASE)
+
+# P60: Blacklist non-numeric / categorical metadata fields (e.g. actuals_value_currency_code)
+_NON_NUMERIC_FIELD_RE = re.compile(
+    r"(?:currency_code|_currency$|_code$|_id$|_flag$|_name$|_date$|_type$|_status$|_country$|_ticker$|_cusip$|_isin$|_sedol$|_cik$)",
+    re.IGNORECASE,
+)
+
+
+def is_non_numeric_metadata_field(field_id: str) -> bool:
+    """Return True if a BRAIN field ID is a categorical/metadata code rather than a numeric signal."""
+    fid = str(field_id or "").strip()
+    if fid.startswith("VEC:"):
+        fid = fid[4:]
+    return bool(fid and _NON_NUMERIC_FIELD_RE.search(fid))
+
+
+# P60: Process-wide concurrency semaphore + inter-POST pacing lock so nested workers NEVER exceed Bronze 3-slot limit
+_GLOBAL_SIM_LOCK = threading.Lock()
+_GLOBAL_SIM_SEM_CAP: int = 0
+_GLOBAL_SIM_SEM: threading.BoundedSemaphore | None = None
+_GLOBAL_POST_PACE_LOCK = threading.Lock()
+_GLOBAL_LAST_POST_TS: float = 0.0
+
+
+def _get_global_sim_semaphore() -> threading.BoundedSemaphore:
+    global _GLOBAL_SIM_SEM, _GLOBAL_SIM_SEM_CAP
+    cap = bronze_max_concurrent_sims()
+    with _GLOBAL_SIM_LOCK:
+        if _GLOBAL_SIM_SEM is None or _GLOBAL_SIM_SEM_CAP != cap:
+            _GLOBAL_SIM_SEM = threading.BoundedSemaphore(cap)
+            _GLOBAL_SIM_SEM_CAP = cap
+        return _GLOBAL_SIM_SEM
+
+
+def _pace_global_sim_post(min_spacing: float | None = None) -> None:
+    global _GLOBAL_LAST_POST_TS
+    spacing = api_min_spacing_seconds() if min_spacing is None else max(0.0, float(min_spacing))
+    if spacing <= 0.0:
+        return
+    with _GLOBAL_POST_PACE_LOCK:
+        now = time.monotonic()
+        wait = (_GLOBAL_LAST_POST_TS + spacing) - now
+        if wait > 0.0:
+            time.sleep(wait)
+        _GLOBAL_LAST_POST_TS = time.monotonic()
+
 
 
 def _simulate_single_fallback(
@@ -688,12 +734,16 @@ def _simulate_single_fallback(
             time.sleep(min(item_delay_seconds * (idx % max_workers), 2.5))
 
         try:
-            res = client.simulate_alpha(
-                expr,
-                settings=sett,
-                max_wait_seconds=max_wait_seconds,
-                poll_interval=poll_interval,
-            )
+            _sem = _get_global_sim_semaphore()
+            with _sem:
+                if item_delay_seconds > 0:
+                    _pace_global_sim_post(min(api_min_spacing_seconds(), max(item_delay_seconds, 2.0)))
+                res = client.simulate_alpha(
+                    expr,
+                    settings=sett,
+                    max_wait_seconds=max_wait_seconds,
+                    poll_interval=poll_interval,
+                )
             out = dict(res) if isinstance(res, Mapping) else {"success": False, "status": "FAILED", "error": str(res)}
             out.setdefault("expression", expr)
             out.setdefault("settings", sett)
@@ -790,8 +840,9 @@ def simulate_multi_alpha(
             for it in items
         ]
 
-    # Bypass Multi-Sim batch POST when explicitly disabled via env or circuit-broken by HTTP 403
-    if (os.getenv("BRAIN_DISABLE_MULTI_SIM", "false").lower() == "true" or getattr(client, "_multi_sim_forbidden", False)) and len(items) > 1:
+    # P60: Auto-bypass Multi-Sim batch POST on Bronze accounts (avoids guaranteed HTTP 403 probe) unless BRAIN_FORCE_MULTI_SIM=true
+    _bronze_bypass = (not is_consultant_mode()) and (os.getenv("BRAIN_FORCE_MULTI_SIM", "false").lower() != "true")
+    if (_bronze_bypass or os.getenv("BRAIN_DISABLE_MULTI_SIM", "false").lower() == "true" or getattr(client, "_multi_sim_forbidden", False)) and len(items) > 1:
         return _simulate_single_fallback(
             client,
             items,

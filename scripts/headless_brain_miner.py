@@ -563,6 +563,17 @@ def run_headless_miner(
                 _maybe_sync_to_drive(force=True)
         except Exception as _sw_exc:
             print(f"[CONSULTANT_RESERVE_SWEEP_WARN] {_sw_exc}")
+    # P60: Immediately sweep nested ts_decay_linear clones & metadata-field junk from PENDING on startup
+    if hasattr(client, "sweep_duplicate_pending_clones"):
+        try:
+            _dup_res = client.sweep_duplicate_pending_clones() or {}
+            _n_dup = int(_dup_res.get("dedup_skipped", 0) or 0)
+            _n_inv = int(_dup_res.get("invalid_removed", 0) or 0)
+            if _n_dup > 0 or _n_inv > 0:
+                print(f"[PENDING_DEDUP_STARTUP_SWEEP] Cleaned {_n_dup} structural clone(s) & {_n_inv} invalid metadata alpha(s)")
+                _maybe_sync_to_drive(force=True)
+        except Exception as _dup_exc:
+            print(f"[PENDING_DEDUP_SWEEP_WARN] {_dup_exc}")
     # P34: Run immediate auto-submit flush on startup if past flush_hour (or submit_immediately=true)
     _flush_pending_if_due()
     with ThreadPoolExecutor(max_workers=eff_workers, thread_name_prefix="brain-multisim") as pool:

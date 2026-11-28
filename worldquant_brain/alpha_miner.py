@@ -56,6 +56,46 @@ def extract_expression_skeleton(expression: str) -> str:
 
     return parse_fastexpr(expression).structural_expression
 
+
+# P60: V107-V108 Hardcore Quant Research High-Fitness Seed Library (100% Bronze-unlocked, zero nested decay)
+V108_RESEARCH_HIGH_FITNESS_SEEDS: tuple[dict[str, str], ...] = (
+    {
+        "name": "V108_B84_CashOperatingProfitability",
+        "domain": "fundamental6",
+        "expression": "group_neutralize(rank(cashflow_op / (abs(assets) + 0.001)) - 0.5 * rank((net_income - cashflow_op) / (abs(assets) + 0.001)), subindustry)",
+    },
+    {
+        "name": "V108_B84_IntangibleOrgCapitalValue",
+        "domain": "fundamental6",
+        "expression": "group_neutralize(rank((book_value + ts_decay_linear(0.3 * sga_expense, 60)) / (cap + 0.001)), industry)",
+    },
+    {
+        "name": "V108_B84_IntraIndustryOperatingLeverage",
+        "domain": "fundamental6",
+        "expression": "group_rank((cogs + sga_expense) / (abs(assets) + 0.001), industry)",
+    },
+    {
+        "name": "V108_B80_InelasticSqrtImpactReversal",
+        "domain": "pv1",
+        "expression": "-group_neutralize(rank(ts_sum(sign(returns) * sqrt(volume / (adv20 + 1.0)), 10) * ts_std_dev(returns, 20)), subindustry)",
+    },
+    {
+        "name": "V108_B84_TaxExpenseMomentum",
+        "domain": "fundamental6",
+        "expression": "group_neutralize(rank(ts_delta(income_tax / (abs(assets) + 0.001), 63)), industry)",
+    },
+    {
+        "name": "V108_B85_CrowdingDampenedMomentum",
+        "domain": "pv1",
+        "expression": "group_neutralize(rank(ts_sum(returns, 252) - ts_sum(returns, 21)) * rank(1 / (ts_std_dev(min(returns, 0), 60) + 0.001)), sector)",
+    },
+    {
+        "name": "V108_B67_DiagnosticRevisionResidual",
+        "domain": "analyst4",
+        "expression": "group_neutralize(rank(ts_delta(ts_backfill(est_eps, 5), 20) / (abs(close) + 0.001)) - 0.5 * rank(ts_sum(returns, 20)), subindustry)",
+    },
+)
+
 KNOWN_INVALID_BRAIN_FIELDS: frozenset[str] = frozenset({
     "opt6_slopeavg1m",
     "opt6_fcstr2imp",
@@ -92,6 +132,16 @@ def validate_candidate_expression(expression: str, extra_invalid_fields: set[str
     for m in re.finditer(r"ts_(?:std_dev|zscore|regression)\([^()]*,\s*(\d+)\s*(?:,|\))", low):
         if int(m.group(1)) < 3:
             return False, f"DEGENERATE_STAT_WINDOW:{m.group(1)}"
+
+    # P60: Reject nested ts_decay_linear(ts_decay_linear(...)) degenerate clones
+    if re.search(r"ts_decay_linear\s*\(\s*ts_decay_linear\s*\(", low):
+        return False, "NESTED_DECAY_CLONE"
+
+    # P60: Reject categorical/metadata fields (e.g. actuals_value_currency_code)
+    _meta_re = re.compile(r"(?:currency_code|_currency$|_code$|_id$|_flag$|_name$|_date$|_type$|_status$|_country$|_ticker$|_cusip$|_isin$|_sedol$|_cik$)")
+    for tok in sorted(tokens):
+        if _meta_re.search(tok) and tok not in {"subindustry", "industry", "sector", "market", "country"}:
+            return False, f"METADATA_FIELD:{tok}"
 
     try:
         from worldquant_brain.multi_sim_client import find_locked_bronze_operators
@@ -788,7 +838,7 @@ class ContinuousAlphaMiner:
             s2 = dict(base_settings)
             s2["decay"] = min(12, max(6, base_decay + 4))
             s2["truncation"] = min(float(base_settings.get("truncation", 0.08) or 0.08), 0.05)
-            refined_expr = expr if expr.startswith("ts_decay_linear(") else f"ts_decay_linear({expr}, 8)"
+            refined_expr = expr if ("ts_decay_linear(" in expr.lower()) else f"ts_decay_linear({expr}, 8)"
             candidates.append({
                 "name": "NearMiss_DecayTurnover",
                 "expression": refined_expr,

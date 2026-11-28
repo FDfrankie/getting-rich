@@ -166,6 +166,9 @@ def simulate_walkforward_oos(
     max_lev_cap = float(getattr(strategy, "max_leverage_scale", 1.35))
     pyramided = False
     breakeven_locked = False
+    hold_until_sl_tp = bool(getattr(strategy, "hold_until_sl_tp", False))
+    max_hold_bars = int(getattr(strategy, "max_hold_bars", 80))
+    bars_held = 0
 
     n = len(sig_df)
     start_i = min(max(100, warmup_bars), max(1, n - 50))
@@ -301,8 +304,12 @@ def simulate_walkforward_oos(
         if post_exit_cooldown > 0:
             post_exit_cooldown -= 1
 
-        # 2. Rebalance / Open / Close according to causal signal at bar i close
-        if pos != 0.0 and (target == 0.0 or (target * pos < 0)):
+        # 2. P62 Fix: Rebalance / Close on opposite signal or timeout (never 1-bar flash-close hold_until_sl_tp positions on target==0)
+        _should_signal_close = (
+            (target * pos < 0)
+            or (bars_held >= max_hold_bars if hold_until_sl_tp else (target == 0.0))
+        )
+        if pos != 0.0 and _should_signal_close:
             raw_r = pos * ((close[i] - entry_price) / entry_price)
             fee_cost = abs(pos) * (fee_one_way + slippage_one_way)
             net_r = raw_r - fee_cost
@@ -317,6 +324,9 @@ def simulate_walkforward_oos(
         if pos == 0.0:
             pyramided = False
             breakeven_locked = False
+            bars_held = 0
+        else:
+            bars_held += 1
         # P61 Elite Mechanic #1: Resting Maker Limit Ambush Fill on bar i+1 (0 slippage, Maker fee only)
         if pos == 0.0 and post_exit_cooldown == 0 and ambush_dir[i] != 0 and ambush_px[i] > 0.0 and target == 0.0:
             a_dir = int(ambush_dir[i])
@@ -340,6 +350,7 @@ def simulate_walkforward_oos(
                 equity *= (1.0 - fee_in)
                 total_fees += fee_in
                 locked_dir_until_reset = 0.0
+                bars_held = 0
         if pos == 0.0 and abs(target) >= 0.15 and can_open_fresh:
             pos = target
             entry_price = close[i]

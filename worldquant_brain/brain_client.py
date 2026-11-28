@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
 from worldquant_brain.sqlite_resilience import ensure_schema_from_ddl
 
 logger = logging.getLogger("BrainClient")
@@ -123,6 +124,12 @@ class BrainClient:
         gen = getattr(self._thread_local, "auth_generation", -1)
         if sess is None:
             sess = requests.Session()
+            try:
+                adapter = HTTPAdapter(pool_connections=4, pool_maxsize=4)
+                sess.mount("https://", adapter)
+                sess.mount("http://", adapter)
+            except Exception:
+                pass
             self._thread_local.session = sess
             gen = -1
         if gen != self._auth_generation:
@@ -137,6 +144,19 @@ class BrainClient:
     @session.setter
     def session(self, value: requests.Session | None) -> None:
         self._fixed_session = value
+
+    def _reset_thread_session(self) -> None:
+        """P60: Close and recreate thread-local requests.Session after SSL/EOF socket errors."""
+        if self._fixed_session is not None:
+            return
+        old_sess = getattr(self._thread_local, "session", None)
+        if old_sess is not None:
+            try:
+                old_sess.close()
+            except Exception:
+                pass
+        self._thread_local.session = None
+        self._thread_local.auth_generation = -1
 
     @property
     def offline_mode(self) -> bool:
@@ -286,6 +306,8 @@ class BrainClient:
                 )
                 if attempt >= max_retries:
                     raise
+                if isinstance(e, (requests.exceptions.SSLError, requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError)):
+                    self._reset_thread_session()
                 time.sleep(2**attempt)
                 continue
 
@@ -1459,6 +1481,70 @@ class BrainClient:
                     _aid, _sh, _fit,
                 )
         return moved
+
+    @staticmethod
+    def _strip_outer_decay_wrappers(expression: str) -> str:
+        """P60: Strip repeated outer ts_decay_linear(...) wrappers to expose clone base signals."""
+        import re as _re
+        s = str(expression or "").strip()
+        for _ in range(12):
+            m = _re.match(r"^ts_decay_linear\((.+),\s*\d+(?:\.\d+)?\s*\)$", s, flags=_re.IGNORECASE | _re.DOTALL)
+            if not m:
+                break
+            s = m.group(1).strip()
+        return _re.sub(r"\s+", " ", s.lower())
+
+    def sweep_duplicate_pending_clones(self) -> dict[str, int]:
+        """P60: Collapse nested ts_decay_linear clones & metadata-field junk in PENDING before submission."""
+        import sqlite3
+        from worldquant_brain.alpha_miner import validate_candidate_expression
+
+        db_p = self._quota_db()
+        if not os.path.exists(db_p):
+            return {"dedup_skipped": 0, "invalid_removed": 0}
+        conn = sqlite3.connect(db_p, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        dedup_skipped = 0
+        invalid_removed = 0
+        try:
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if "brain_candidate_pool" not in tables:
+                return {"dedup_skipped": 0, "invalid_removed": 0}
+            submitted_bases = {
+                self._strip_outer_decay_wrappers(str(r["expression"] or ""))
+                for r in conn.execute(
+                    "SELECT expression FROM brain_candidate_pool WHERE UPPER(status) IN ('SUBMITTED', 'CONSULTANT_RESERVE')"
+                ).fetchall()
+                if r["expression"]
+            }
+            pending_rows = conn.execute(
+                "SELECT alpha_id, expression, sharpe, fitness FROM brain_candidate_pool "
+                "WHERE status = 'PENDING' ORDER BY fitness ASC, sharpe ASC"
+            ).fetchall()
+            seen_bases: set[str] = set(submitted_bases)
+            for row in pending_rows:
+                aid = str(row["alpha_id"])
+                expr = str(row["expression"] or "")
+                ok, reason = validate_candidate_expression(expr)
+                if not ok and ("NESTED_DECAY" in reason or "METADATA_FIELD" in reason or "INVALID_FIELD" in reason):
+                    new_st = "DEDUP_SKIPPED" if "NESTED_DECAY" in reason else "FAILED_CHECKS"
+                    conn.execute("UPDATE brain_candidate_pool SET status = ? WHERE alpha_id = ?", (new_st, aid))
+                    if new_st == "DEDUP_SKIPPED":
+                        dedup_skipped += 1
+                    else:
+                        invalid_removed += 1
+                    continue
+                base = self._strip_outer_decay_wrappers(expr)
+                if base and base in seen_bases:
+                    conn.execute("UPDATE brain_candidate_pool SET status = 'DEDUP_SKIPPED' WHERE alpha_id = ?", (aid,))
+                    dedup_skipped += 1
+                    continue
+                if base:
+                    seen_bases.add(base)
+            conn.commit()
+        finally:
+            conn.close()
+        return {"dedup_skipped": dedup_skipped, "invalid_removed": invalid_removed}
 
     def flush_daily_candidates(self, day_str: str | None = None, max_daily_submissions: int | None = None) -> list[dict[str, Any]]:
         """Submit pending candidates up to the remaining daily quota.
